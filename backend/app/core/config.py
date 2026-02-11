@@ -1,7 +1,6 @@
 """应用配置 - 从环境变量加载"""
 
 from pydantic_settings import BaseSettings
-from typing import Optional
 
 
 class Settings(BaseSettings):
@@ -17,10 +16,6 @@ class Settings(BaseSettings):
     # External Services
     RSSHUB_URL: str = "http://rsshub:1200"
     BROWSERLESS_URL: str = "http://browserless:3000"
-    
-    # Proxy
-    HTTP_PROXY: Optional[str] = None
-    HTTPS_PROXY: Optional[str] = None
     
     # Application
     APP_PORT: int = 8000

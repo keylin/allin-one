@@ -68,3 +68,4 @@ pnpm-debug.log*
 
 # Allin-One Specific
 backend/data/reports/
+.cache/

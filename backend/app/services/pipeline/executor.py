@@ -122,6 +122,7 @@ class PipelineExecutor:
 
             if next_index >= execution.total_steps:
                 execution.status = PipelineStatus.COMPLETED.value
+                execution.current_step = execution.total_steps
                 execution.completed_at = datetime.now(timezone.utc)
 
                 # 更新内容状态为已分析
@@ -137,5 +138,6 @@ class PipelineExecutor:
             execution.current_step = next_index
             db.commit()
 
+            logger.info(f"Pipeline {execution_id} advancing to step {next_index}")
             from app.tasks.pipeline_tasks import execute_pipeline_step
             execute_pipeline_step(execution_id, next_index)

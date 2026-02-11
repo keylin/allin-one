@@ -1,70 +1,100 @@
-version: "3.8"
+version: '3.8'
 
 services:
+  # RSS Hub - RSS 聚合服务
   rsshub:
     image: diygod/rsshub:latest
-    environment:
-      - PUPPETEER_WS_ENDPOINT=ws://browserless:3000
-      - NODE_ENV=production
-    depends_on:
-      - browserless
-    networks:
-      - allin-net
+    container_name: allin-rsshub
     restart: unless-stopped
+    ports:
+      - "1200:1200"
+    environment:
+      NODE_ENV: production
+      CACHE_TYPE: memory
+      # 根据需要添加 RSS Hub 配置
+      # ALLOW_USER_HOTLINK_TEMPLATE: 'true'
+    networks:
+      - allin-network
 
+  # Browserless - 无头浏览器服务（用于 L2 内容抓取）
   browserless:
     image: browserless/chrome:latest
-    environment:
-      - MAX_CONCURRENT_SESSIONS=5
-      - CONNECTION_TIMEOUT=60000
-      - MAX_QUEUE_LENGTH=10
-    networks:
-      - allin-net
+    container_name: allin-browserless
     restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      MAX_CONCURRENT_SESSIONS: 5
+      CONNECTION_TIMEOUT: 60000
+      MAX_QUEUE_LENGTH: 10
+      PREBOOT_CHROME: 'true'
+    networks:
+      - allin-network
 
+  # Main Application - FastAPI + Frontend
   allin-one:
     build:
       context: .
-      dockerfile: docker/Dockerfile
+      dockerfile: Dockerfile
+    container_name: allin-one
+    restart: unless-stopped
     ports:
-      - "${APP_PORT:-8000}:8000"
+      - "8000:8000"
     volumes:
-      - ./data:/app/data
-      - ./data/reports:/app/reports
+      - ./backend/data:/app/data
+      - ./backend/.env:/app/.env:ro
     environment:
-      - DATABASE_URL=sqlite:///data/db/allin.db
-      - RSSHUB_URL=http://rsshub:1200
-      - BROWSERLESS_URL=http://browserless:3000
-    env_file:
-      - .env
+      DATABASE_URL: sqlite:///data/db/allin.db
+      RSSHUB_URL: http://rsshub:1200
+      BROWSERLESS_URL: http://browserless:3000
+      SCHEDULER_ENABLED: 'true'
+      LOG_LEVEL: INFO
+      # 代理设置（httpx / OpenAI SDK 自动识别）
+      # HTTP_PROXY: http://host.docker.internal:7890
+      # HTTPS_PROXY: http://host.docker.internal:7890
+      # NO_PROXY: localhost,rsshub,browserless
     depends_on:
       - rsshub
       - browserless
     networks:
-      - allin-net
-    restart: unless-stopped
+      - allin-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
+  # Huey Worker - 异步任务队列
   allin-worker:
     build:
       context: .
-      dockerfile: docker/Dockerfile
-    command: ["python", "-m", "huey.bin.huey_consumer", "app.tasks.huey_instance.huey", "-w", "4", "-k", "thread"]
+      dockerfile: Dockerfile
+    container_name: allin-worker
+    restart: unless-stopped
+    command: ["huey_consumer", "app.tasks.huey_instance.huey", "-w", "4", "-k", "thread"]
     volumes:
-      - ./data:/app/data
-      - ./data/reports:/app/reports
+      - ./backend/data:/app/data
+      - ./backend/.env:/app/.env:ro
     environment:
-      - DATABASE_URL=sqlite:///data/db/allin.db
-      - RSSHUB_URL=http://rsshub:1200
-      - BROWSERLESS_URL=http://browserless:3000
-    env_file:
-      - .env
+      DATABASE_URL: sqlite:///data/db/allin.db
+      RSSHUB_URL: http://rsshub:1200
+      BROWSERLESS_URL: http://browserless:3000
+      LOG_LEVEL: INFO
+      # 代理设置（httpx / OpenAI SDK 自动识别）
+      # HTTP_PROXY: http://host.docker.internal:7890
+      # HTTPS_PROXY: http://host.docker.internal:7890
+      # NO_PROXY: localhost,rsshub,browserless
     depends_on:
       - rsshub
       - browserless
     networks:
-      - allin-net
-    restart: unless-stopped
+      - allin-network
 
 networks:
-  allin-net:
+  allin-network:
     driver: bridge
+
+volumes:
+  data:
+    driver: local

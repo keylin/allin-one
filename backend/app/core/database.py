@@ -1,8 +1,11 @@
 """数据库连接与会话管理"""
 
+import logging
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, declarative_base
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 # 启用 WAL 模式以支持并发读写
 engine = create_engine(
@@ -27,12 +30,21 @@ Base = declarative_base()
 
 
 def init_db():
-    """初始化数据库表 (包含 CollectionRecord 等新增表)"""
+    """初始化数据库表
+
+    注意：数据库迁移现已通过 Alembic 管理。
+    在生产环境中，请使用 `alembic upgrade head` 来创建和更新表。
+    此函数保留仅用于快速开发/测试场景。
+    """
     import app.models.content  # noqa: F401 (SourceConfig, ContentItem, CollectionRecord)
     import app.models.pipeline  # noqa: F401 (PipelineTemplate, PipelineExecution, PipelineStep)
     import app.models.prompt_template  # noqa: F401
     import app.models.system_setting  # noqa: F401
+
+    # 开发环境下的快速初始化（不推荐生产使用）
+    # 生产环境应使用: alembic upgrade head
     Base.metadata.create_all(bind=engine)
+    logger.info(f"Database initialized: {settings.DATABASE_URL}")
 
 
 def get_db():

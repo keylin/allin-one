@@ -8,6 +8,7 @@
 """
 
 import json
+import logging
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
@@ -17,6 +18,8 @@ from app.models.pipeline import (
     PipelineTemplate, PipelineExecution, PipelineStep,
     PipelineStatus, TriggerSource,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class PipelineOrchestrator:
@@ -91,6 +94,10 @@ class PipelineOrchestrator:
             self.db.add(step)
 
         self.db.commit()
+        logger.info(
+            f"Pipeline created: {execution.id} "
+            f"(template={template.name}, steps={len(steps_config)}, content={content.id})"
+        )
         return execution
 
     def start_execution(self, execution_id: str) -> None:
@@ -104,6 +111,7 @@ class PipelineOrchestrator:
         execution.current_step = 0
         self.db.commit()
 
+        logger.info(f"Pipeline started: {execution_id}")
         from app.tasks.pipeline_tasks import execute_pipeline_step
         execute_pipeline_step(execution_id, 0)
 
@@ -112,6 +120,7 @@ def seed_builtin_templates(db: Session) -> None:
     """将内置模版写入数据库 (首次启动时调用)"""
     from app.services.pipeline.registry import BUILTIN_TEMPLATES
 
+    created = 0
     for tmpl_data in BUILTIN_TEMPLATES:
         existing = (
             db.query(PipelineTemplate)
@@ -127,5 +136,8 @@ def seed_builtin_templates(db: Session) -> None:
                 is_active=True,
             )
             db.add(template)
+            created += 1
 
     db.commit()
+    if created:
+        logger.info(f"Seeded {created} builtin pipeline templates")

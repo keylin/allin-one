@@ -45,6 +45,11 @@ class LLMAnalyzer:
             )
 
             result_text = response.choices[0].message.content
+            usage = response.usage
+            if usage:
+                logger.info(
+                    f"LLM usage: prompt={usage.prompt_tokens} completion={usage.completion_tokens} total={usage.total_tokens}"
+                )
 
             # 根据格式处理返回结果
             if output_format == OutputFormat.JSON.value:

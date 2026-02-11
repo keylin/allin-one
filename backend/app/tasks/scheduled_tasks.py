@@ -33,6 +33,8 @@ async def check_and_collect_sources():
             SourceConfig.schedule_enabled == True,
         ).all()
 
+        logger.info(f"Collection check: {len(sources)} active sources")
+
         for source in sources:
             # 退避策略: 连续失败次数越多, 间隔越长
             if source.last_collected_at:
@@ -44,9 +46,8 @@ async def check_and_collect_sources():
 
             try:
                 # ---- 第一阶段: Collector 抓取, 产出 ContentItem ----
-                # TODO: CollectionService.collect(source) 实现
-                # new_items = await collection_service.collect(source)
-                new_items = []  # placeholder
+                from app.services.collectors import collect_source
+                new_items = await collect_source(source, db)
 
                 source.last_collected_at = now
                 source.consecutive_failures = 0
