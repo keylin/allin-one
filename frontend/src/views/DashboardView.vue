@@ -125,7 +125,8 @@ onUnmounted(() => {
         <p class="text-sm text-slate-400">暂无活动记录</p>
       </div>
 
-      <table v-else class="w-full">
+      <!-- Desktop Table -->
+      <table v-else class="hidden md:table w-full">
         <thead>
           <tr class="border-b border-slate-100">
             <th class="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">内容</th>
@@ -164,6 +165,35 @@ onUnmounted(() => {
           </tr>
         </tbody>
       </table>
+
+      <!-- Mobile Activity Cards -->
+      <div v-if="!loading && activities.length > 0" class="md:hidden divide-y divide-slate-100">
+        <div v-for="a in activities" :key="a.id" class="p-4">
+          <div class="flex items-start justify-between gap-2 mb-2">
+            <div class="flex-1 min-w-0">
+              <div class="text-sm font-medium text-slate-700 line-clamp-1">{{ a.content_title || '-' }}</div>
+              <div class="text-xs text-slate-400 mt-0.5">{{ a.template_name || '-' }}</div>
+            </div>
+            <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-lg shrink-0" :class="statusStyles[a.status] || 'bg-slate-100 text-slate-500'">
+              {{ statusLabels[a.status] || a.status }}
+            </span>
+          </div>
+          <div class="flex items-center gap-3 mb-2">
+            <div class="flex-1 bg-slate-100 rounded-full h-1.5 overflow-hidden">
+              <div
+                class="h-1.5 rounded-full transition-all duration-500"
+                :class="a.status === 'failed' ? 'bg-rose-400' : a.status === 'completed' ? 'bg-emerald-400' : 'bg-indigo-400'"
+                :style="{ width: a.total_steps > 0 ? `${(a.current_step / a.total_steps) * 100}%` : '0%' }"
+              ></div>
+            </div>
+            <span class="text-xs text-slate-400 shrink-0">{{ a.current_step }}/{{ a.total_steps }}</span>
+          </div>
+          <div class="flex items-center gap-3 text-xs text-slate-400">
+            <span>{{ triggerLabels[a.trigger_source] || a.trigger_source }}</span>
+            <span>{{ formatTime(a.created_at) }}</span>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </template>

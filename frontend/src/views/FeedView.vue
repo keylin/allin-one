@@ -92,25 +92,29 @@ async function handleFavorite(id) {
   }
 }
 
-// 无限滚动
-function handleScroll() {
-  const scrollHeight = document.documentElement.scrollHeight
-  const scrollTop = document.documentElement.scrollTop
-  const clientHeight = document.documentElement.clientHeight
-
-  // 距离底部 200px 时触发加载
-  if (scrollHeight - scrollTop - clientHeight < 200) {
+// 无限滚动 - 监听 main 容器的滚动（因为 App.vue 使用 overflow-auto 在 main 上）
+function handleScroll(e) {
+  const el = e.target
+  if (el.scrollHeight - el.scrollTop - el.clientHeight < 200) {
     loadMore()
   }
 }
 
+function getScrollContainer() {
+  // main 容器是最近的 overflow-auto 祖先
+  const main = document.querySelector('main')
+  return main || window
+}
+
 onMounted(() => {
   fetchItems(true)
-  window.addEventListener('scroll', handleScroll)
+  const container = getScrollContainer()
+  container.addEventListener('scroll', handleScroll)
 })
 
 onUnmounted(() => {
-  window.removeEventListener('scroll', handleScroll)
+  const container = getScrollContainer()
+  container.removeEventListener('scroll', handleScroll)
 })
 </script>
 

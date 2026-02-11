@@ -1,9 +1,12 @@
 <script setup>
-import { RouterView, RouterLink, useRoute } from 'vue-router'
-import { computed } from 'vue'
+import { RouterView, RouterLink, useRoute, useRouter } from 'vue-router'
+import { ref, watch, computed } from 'vue'
 import ToastNotification from '@/components/toast-notification.vue'
 
 const route = useRoute()
+const router = useRouter()
+
+const sidebarOpen = ref(false)
 
 const navItems = [
   { path: '/dashboard', label: '仪表盘', icon: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6' },
@@ -17,6 +20,11 @@ const navItems = [
 ]
 
 const isActive = (path) => route.path === path
+
+// 路由切换时自动关闭侧边栏
+watch(() => route.path, () => {
+  sidebarOpen.value = false
+})
 </script>
 
 <template>
@@ -24,11 +32,54 @@ const isActive = (path) => route.path === path
     <!-- Global Toast Notifications -->
     <ToastNotification />
 
+    <!-- Mobile Header -->
+    <div class="fixed top-0 left-0 right-0 z-40 md:hidden bg-white/80 backdrop-blur-md border-b border-slate-200/60">
+      <div class="flex items-center justify-between px-4 h-14">
+        <button
+          class="p-2 -ml-2 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+          @click="sidebarOpen = true"
+        >
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
+          </svg>
+        </button>
+        <h1 class="text-sm font-bold tracking-tight text-slate-900">Allin-One</h1>
+        <div class="w-10"></div>
+      </div>
+    </div>
+
+    <!-- Mobile Sidebar Overlay -->
+    <Transition
+      enter-active-class="transition-opacity duration-300"
+      enter-from-class="opacity-0"
+      leave-active-class="transition-opacity duration-200"
+      leave-to-class="opacity-0"
+    >
+      <div
+        v-if="sidebarOpen"
+        class="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm md:hidden"
+        @click="sidebarOpen = false"
+      ></div>
+    </Transition>
+
     <!-- Sidebar -->
-    <aside class="w-60 bg-white border-r border-slate-200/60 flex flex-col shadow-sm">
-      <div class="p-5 border-b border-slate-100">
-        <h1 class="text-lg font-bold tracking-tight text-slate-900">Allin-One</h1>
-        <p class="text-xs text-slate-400 mt-0.5">信息聚合与智能分析</p>
+    <aside
+      class="fixed md:static inset-y-0 left-0 z-50 w-60 bg-white border-r border-slate-200/60 flex flex-col shadow-sm transform transition-transform duration-300 ease-in-out md:translate-x-0"
+      :class="sidebarOpen ? 'translate-x-0' : '-translate-x-full'"
+    >
+      <div class="p-5 border-b border-slate-100 flex items-center justify-between">
+        <div>
+          <h1 class="text-lg font-bold tracking-tight text-slate-900">Allin-One</h1>
+          <p class="text-xs text-slate-400 mt-0.5">信息聚合与智能分析</p>
+        </div>
+        <button
+          class="md:hidden p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-lg transition-colors"
+          @click="sidebarOpen = false"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
       </div>
       <nav class="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
         <RouterLink
@@ -56,7 +107,7 @@ const isActive = (path) => route.path === path
     </aside>
 
     <!-- Main Content -->
-    <main class="flex-1 overflow-auto">
+    <main class="flex-1 overflow-auto pt-14 md:pt-0">
       <RouterView />
     </main>
   </div>

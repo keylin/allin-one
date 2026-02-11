@@ -192,75 +192,132 @@ const selectClass = 'px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl t
       <p class="text-sm text-slate-400">暂无内容</p>
     </div>
 
-    <!-- Table -->
-    <div v-else class="bg-white rounded-xl border border-slate-200/60 shadow-sm overflow-hidden">
-      <table class="w-full">
-        <thead class="bg-slate-50/80">
-          <tr>
-            <th class="px-6 py-3.5 text-left w-8">
-              <input type="checkbox" class="h-4 w-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500" :checked="selectedIds.length === store.items.length && store.items.length > 0" @change="toggleSelectAll" />
-            </th>
-            <th class="px-6 py-3.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">标题</th>
-            <th class="px-6 py-3.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">来源</th>
-            <th class="px-6 py-3.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">状态</th>
-            <th class="px-6 py-3.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">类型</th>
-            <th class="px-6 py-3.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">采集时间</th>
-            <th class="px-6 py-3.5 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">操作</th>
-          </tr>
-        </thead>
-        <tbody class="divide-y divide-slate-100">
-          <tr v-for="item in store.items" :key="item.id" class="hover:bg-slate-50/50 transition-colors duration-150">
-            <td class="px-6 py-3.5">
-              <input type="checkbox" class="h-4 w-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500" :checked="selectedIds.includes(item.id)" @change="toggleSelect(item.id)" />
-            </td>
-            <td class="px-6 py-3.5">
-              <div class="flex items-center gap-2">
-                <svg v-if="item.is_favorited" class="w-4 h-4 text-amber-400 shrink-0" fill="currentColor" viewBox="0 0 24 24">
+    <!-- Table (Desktop) -->
+    <div v-else>
+      <div class="hidden md:block bg-white rounded-xl border border-slate-200/60 shadow-sm overflow-hidden">
+        <table class="w-full">
+          <thead class="bg-slate-50/80">
+            <tr>
+              <th class="px-6 py-3.5 text-left w-8">
+                <input type="checkbox" class="h-4 w-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500" :checked="selectedIds.length === store.items.length && store.items.length > 0" @change="toggleSelectAll" />
+              </th>
+              <th class="px-6 py-3.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">标题</th>
+              <th class="px-6 py-3.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">来源</th>
+              <th class="px-6 py-3.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">状态</th>
+              <th class="px-6 py-3.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">类型</th>
+              <th class="px-6 py-3.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">采集时间</th>
+              <th class="px-6 py-3.5 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">操作</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            <tr v-for="item in store.items" :key="item.id" class="hover:bg-slate-50/50 transition-colors duration-150">
+              <td class="px-6 py-3.5">
+                <input type="checkbox" class="h-4 w-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500" :checked="selectedIds.includes(item.id)" @change="toggleSelect(item.id)" />
+              </td>
+              <td class="px-6 py-3.5">
+                <div class="flex items-center gap-2">
+                  <svg v-if="item.is_favorited" class="w-4 h-4 text-amber-400 shrink-0" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
+                  </svg>
+                  <button class="text-sm font-medium text-slate-800 hover:text-indigo-600 text-left truncate max-w-[300px] transition-colors duration-200" @click="openDetail(item)">
+                    {{ item.title }}
+                  </button>
+                </div>
+              </td>
+              <td class="px-6 py-3.5 text-sm text-slate-500">{{ item.source_name || '-' }}</td>
+              <td class="px-6 py-3.5">
+                <span class="inline-flex px-2.5 py-1 text-xs font-medium rounded-lg" :class="statusStyles[item.status] || 'bg-slate-100 text-slate-600'">
+                  {{ statusLabels[item.status] || item.status }}
+                </span>
+              </td>
+              <td class="px-6 py-3.5 text-sm text-slate-500">{{ mediaLabels[item.media_type] || item.media_type }}</td>
+              <td class="px-6 py-3.5 text-sm text-slate-400">{{ formatTime(item.collected_at) }}</td>
+              <td class="px-6 py-3.5 text-right">
+                <button
+                  class="px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200"
+                  :class="item.is_favorited ? 'text-amber-600 hover:bg-amber-50' : 'text-slate-500 hover:bg-slate-100'"
+                  @click="handleFavorite(item.id)"
+                >
+                  {{ item.is_favorited ? '取消收藏' : '收藏' }}
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div v-if="store.total > store.pageSize" class="flex items-center justify-between px-6 py-3.5 border-t border-slate-100 bg-slate-50/50">
+          <span class="text-sm text-slate-400">共 {{ store.total }} 条，第 {{ store.currentPage }}/{{ totalPages }} 页</span>
+          <div class="flex items-center gap-2">
+            <button
+              class="px-3.5 py-1.5 text-sm font-medium border border-slate-200 rounded-lg hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200"
+              :disabled="store.currentPage <= 1"
+              @click="goToPage(store.currentPage - 1)"
+            >
+              上一页
+            </button>
+            <button
+              class="px-3.5 py-1.5 text-sm font-medium border border-slate-200 rounded-lg hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200"
+              :disabled="store.currentPage >= totalPages"
+              @click="goToPage(store.currentPage + 1)"
+            >
+              下一页
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Mobile Cards -->
+      <div class="md:hidden space-y-3">
+        <div v-for="item in store.items" :key="item.id" class="bg-white rounded-xl border border-slate-200/60 shadow-sm p-4" @click="openDetail(item)">
+          <div class="flex items-start gap-3 mb-2">
+            <input type="checkbox" class="h-4 w-4 mt-0.5 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500 shrink-0" :checked="selectedIds.includes(item.id)" @change.stop="toggleSelect(item.id)" @click.stop />
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-1.5 mb-1">
+                <svg v-if="item.is_favorited" class="w-3.5 h-3.5 text-amber-400 shrink-0" fill="currentColor" viewBox="0 0 24 24">
                   <path d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
                 </svg>
-                <button class="text-sm font-medium text-slate-800 hover:text-indigo-600 text-left truncate max-w-[300px] transition-colors duration-200" @click="openDetail(item)">
-                  {{ item.title }}
+                <span class="text-sm font-semibold text-slate-800 line-clamp-2">{{ item.title }}</span>
+              </div>
+              <div class="flex flex-wrap items-center gap-2 text-xs">
+                <span class="text-slate-500">{{ item.source_name || '-' }}</span>
+                <span class="inline-flex px-2 py-0.5 font-medium rounded-md" :class="statusStyles[item.status] || 'bg-slate-100 text-slate-600'">
+                  {{ statusLabels[item.status] || item.status }}
+                </span>
+                <span class="text-slate-400">{{ mediaLabels[item.media_type] || item.media_type }}</span>
+              </div>
+              <div class="flex items-center justify-between mt-2">
+                <span class="text-xs text-slate-400">{{ formatTime(item.collected_at) }}</span>
+                <button
+                  class="px-2.5 py-1 text-xs font-medium rounded-lg transition-all duration-200"
+                  :class="item.is_favorited ? 'text-amber-600 hover:bg-amber-50' : 'text-slate-500 hover:bg-slate-100'"
+                  @click.stop="handleFavorite(item.id)"
+                >
+                  {{ item.is_favorited ? '取消收藏' : '收藏' }}
                 </button>
               </div>
-            </td>
-            <td class="px-6 py-3.5 text-sm text-slate-500">{{ item.source_name || '-' }}</td>
-            <td class="px-6 py-3.5">
-              <span class="inline-flex px-2.5 py-1 text-xs font-medium rounded-lg" :class="statusStyles[item.status] || 'bg-slate-100 text-slate-600'">
-                {{ statusLabels[item.status] || item.status }}
-              </span>
-            </td>
-            <td class="px-6 py-3.5 text-sm text-slate-500">{{ mediaLabels[item.media_type] || item.media_type }}</td>
-            <td class="px-6 py-3.5 text-sm text-slate-400">{{ formatTime(item.collected_at) }}</td>
-            <td class="px-6 py-3.5 text-right">
-              <button
-                class="px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200"
-                :class="item.is_favorited ? 'text-amber-600 hover:bg-amber-50' : 'text-slate-500 hover:bg-slate-100'"
-                @click="handleFavorite(item.id)"
-              >
-                {{ item.is_favorited ? '取消收藏' : '收藏' }}
-              </button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+            </div>
+          </div>
+        </div>
 
-      <div v-if="store.total > store.pageSize" class="flex items-center justify-between px-6 py-3.5 border-t border-slate-100 bg-slate-50/50">
-        <span class="text-sm text-slate-400">共 {{ store.total }} 条，第 {{ store.currentPage }}/{{ totalPages }} 页</span>
-        <div class="flex items-center gap-2">
-          <button
-            class="px-3.5 py-1.5 text-sm font-medium border border-slate-200 rounded-lg hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200"
-            :disabled="store.currentPage <= 1"
-            @click="goToPage(store.currentPage - 1)"
-          >
-            上一页
-          </button>
-          <button
-            class="px-3.5 py-1.5 text-sm font-medium border border-slate-200 rounded-lg hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200"
-            :disabled="store.currentPage >= totalPages"
-            @click="goToPage(store.currentPage + 1)"
-          >
-            下一页
-          </button>
+        <!-- Mobile Pagination -->
+        <div v-if="store.total > store.pageSize" class="flex items-center justify-between pt-2">
+          <span class="text-sm text-slate-400">{{ store.currentPage }}/{{ totalPages }}</span>
+          <div class="flex items-center gap-2">
+            <button
+              class="px-3.5 py-1.5 text-sm font-medium border border-slate-200 rounded-lg hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200"
+              :disabled="store.currentPage <= 1"
+              @click="goToPage(store.currentPage - 1)"
+            >
+              上一页
+            </button>
+            <button
+              class="px-3.5 py-1.5 text-sm font-medium border border-slate-200 rounded-lg hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-200"
+              :disabled="store.currentPage >= totalPages"
+              @click="goToPage(store.currentPage + 1)"
+            >
+              下一页
+            </button>
+          </div>
         </div>
       </div>
     </div>

@@ -217,7 +217,7 @@ const labelClass = 'block text-sm font-medium text-slate-700 mb-1.5'
                 v-if="Object.keys(getConfigProperties(step.step_type)).length > 0"
                 class="mt-3 pt-3 border-t border-slate-200/60"
               >
-                <div class="grid grid-cols-2 gap-3">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div
                     v-for="(prop, propKey) in getConfigProperties(step.step_type)"
                     :key="propKey"

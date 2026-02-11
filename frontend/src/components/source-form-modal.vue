@@ -93,7 +93,7 @@ const labelClass = 'block text-sm font-medium text-slate-700 mb-1.5'
           <input v-model="form.name" type="text" required :class="inputClass" placeholder="例: 少数派 RSS" />
         </div>
 
-        <div class="grid grid-cols-2 gap-4">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label :class="labelClass">数据源类型 *</label>
             <select v-model="form.source_type" :class="selectClass">
@@ -126,7 +126,7 @@ const labelClass = 'block text-sm font-medium text-slate-700 mb-1.5'
           </select>
         </div>
 
-        <div class="grid grid-cols-2 gap-4">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div class="flex items-center gap-3 pt-6">
             <input
               v-model="form.schedule_enabled"
