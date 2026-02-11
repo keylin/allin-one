@@ -13,6 +13,12 @@ Pydantic Schema   SQLAlchemy ORM      Huey Tasks
 - **Models** (`app/models/`): SQLAlchemy ORM，所有表用 UUID 字符串主键 (`uuid.uuid4().hex`)
 - **Tasks** (`app/tasks/`): Huey 异步任务，`pipeline_tasks.py` 分发步骤处理器
 
+## ORM 模型注册
+
+`app/models/__init__.py` 统一导入所有 ORM 模型类。
+Huey worker 等非 FastAPI 入口必须在使用 ORM 前执行 `import app.models`，
+确保 SQLAlchemy 的 relationship() 字符串引用能正确解析。
+
 ## 数据库约定
 
 - 主键: `Column(String, primary_key=True, default=lambda: uuid.uuid4().hex)`

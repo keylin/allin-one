@@ -1,5 +1,30 @@
 # 前端开发规范
 
+## UI 设计规范（强制）
+
+所有前端代码必须遵守以下设计原则，等同于 `design-expert` skill 的要求：
+
+### 核心理念
+- **拒绝平庸**: 不使用默认浏览器样式或过时的 Bootstrap 风格
+- **极简主义**: 注重留白，让内容呼吸
+- **移动优先**: 始终从小屏幕写起，用响应式扩展到大屏（`class="p-4 md:p-8"`）
+- **排版层级**: 用不同大小、字重、颜色建立视觉层级（`text-gray-500` vs `text-gray-900`）
+- **细腻质感**: 柔和阴影 (`shadow-sm`, `shadow-lg`)、圆角 (`rounded-xl`, `rounded-2xl`)、微妙边框 (`border-gray-100`)
+
+### Tailwind 默认写法
+- **背景**: `bg-gray-50/50` 或 `bg-white` 搭配大面积留白
+- **标题**: `font-bold tracking-tight text-gray-900`
+- **正文**: `text-gray-600 leading-relaxed`
+- **交互**: 按钮必须有 hover/active 态，使用 `transition-all duration-200`
+- **容器**: `max-w-7xl mx-auto px-4 sm:px-6 lg:px-8`
+- **图标**: 使用 `lucide-vue-next`（现代线条风格）
+
+### 设计流程
+编写任何页面/组件前，先完成设计思考：
+1. **分析**: 理解页面目的和用户行为
+2. **视觉定义**: 确定色调（推荐 Indigo/Violet/Emerald/Rose）、布局方式（Grid/Flex）、整体氛围
+3. **编码**: 产出高质量 Vue 组件
+
 ## 组件约定
 
 必须使用 `<script setup>` Composition API:
@@ -55,9 +80,9 @@ const res = await api.get('/content', {
 | /feed             | FeedView.vue         | 卡片式信息流      |
 | /sources          | SourcesView.vue      | 数据源 CRUD      |
 | /content          | ContentView.vue      | 内容表格管理      |
+| /prompt-templates | TemplatesView.vue    | 提示词模板配置    |
 | /pipelines        | PipelinesView.vue    | 流水线监控        |
 | /video-download   | VideoView.vue        | 视频下载/播放     |
-| /prompt-templates | TemplatesView.vue    | 提示词模板配置    |
 | /settings         | SettingsView.vue     | 系统设置          |
 
 ## 命名规范
@@ -67,6 +92,14 @@ const res = await api.get('/content', {
 - 变量/函数: camelCase (`sourceList`, `handleDelete`)
 - 样式: TailwindCSS 工具类为主，尽量不写自定义 CSS
 - Store: camelCase 文件名，`useXxxStore` 导出
+
+## Modal 组件模式
+
+全屏 Modal 组件遵循此结构（参考 `source-form-modal.vue`、`pipeline-template-form-modal.vue`）：
+- Props: `visible: Boolean`, 资源对象（null=创建，object=编辑）
+- Emits: `submit(data)`, `cancel`
+- 布局: 固定遮罩 (`fixed inset-0`) + backdrop-blur + sticky header + 可滚动内容 + sticky footer
+- 宽度: `max-w-2xl`（常规）或 `max-w-3xl`（复杂表单）
 
 ## Pinia Store 模式
 

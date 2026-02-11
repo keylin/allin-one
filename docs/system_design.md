@@ -1,6 +1,6 @@
 # Allin-One 系统方案
 
-> 版本: v1.0 | 更新日期: 2026-02-10
+> 版本: v1.0 | 更新日期: 2026-02-12
 
 ---
 
@@ -564,6 +564,7 @@ GET    /api/pipeline-templates         → list[PipelineTemplate]
 POST   /api/pipeline-templates         → PipelineTemplate
 PUT    /api/pipeline-templates/{id}    → PipelineTemplate
 DELETE /api/pipeline-templates/{id}    → null
+GET    /api/pipeline-templates/step-definitions → dict[str, StepDefinition]
 
 GET    /api/prompt-templates           → list[PromptTemplate]
 POST   /api/prompt-templates           → PromptTemplate
@@ -585,6 +586,7 @@ POST   /api/video/download             → { task_id } (提交下载任务)
        body: { url: string, quality?: string }
 GET    /api/video/downloads             → list[DownloadTask]
 GET    /api/video/{id}/stream           → video stream
+GET    /api/video/{id}/thumbnail        → image file (封面图)
 ```
 
 ---

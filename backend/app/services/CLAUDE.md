@@ -93,6 +93,15 @@ def _handle_xxx(context: dict) -> dict:
 
 在 `pipeline_tasks.py` 底部的 `STEP_HANDLERS` 字典中注册处理器。
 
+### download_video 步骤输出
+
+`download_video` 处理器的 `output_data` 包含以下字段：
+- `file_path`: 视频文件绝对路径
+- `title`: 视频标题
+- `duration`: 时长（秒）
+- `platform`: 平台标识 (bilibili/youtube)
+- `thumbnail_path`: 封面图绝对路径（yt-dlp 下载优先，ffmpeg 截取回退）
+
 ## 关键步骤 vs 非关键步骤
 
 - `is_critical: True` → 失败则整条流水线停止 (status=failed)
