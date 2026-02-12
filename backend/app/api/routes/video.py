@@ -310,10 +310,16 @@ async def stream_video(
     range_header = request.headers.get("range")
 
     if range_header:
-        # 解析 Range 头 (例如: "bytes=0-1023")
+        # 解析 Range 头 (例如: "bytes=0-1023", "bytes=-500")
         range_match = range_header.replace("bytes=", "").split("-")
-        start = int(range_match[0]) if range_match[0] else 0
-        end = int(range_match[1]) if len(range_match) > 1 and range_match[1] else file_size - 1
+        if not range_match[0]:
+            # 后缀范围: "bytes=-500" 表示最后 500 字节
+            suffix_len = int(range_match[1]) if len(range_match) > 1 and range_match[1] else 0
+            start = max(0, file_size - suffix_len)
+            end = file_size - 1
+        else:
+            start = int(range_match[0])
+            end = int(range_match[1]) if len(range_match) > 1 and range_match[1] else file_size - 1
 
         # 确保范围有效
         start = max(0, start)

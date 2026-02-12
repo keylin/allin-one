@@ -57,8 +57,12 @@ def get_llm_config() -> LLMConfig:
         base_url = db.get(SystemSetting, "llm_base_url")
         model = db.get(SystemSetting, "llm_model")
 
+    key = api_key.value if api_key and api_key.value else ""
+    if not key:
+        raise ValueError("LLM API Key 未配置，请在系统设置中填写")
+
     return LLMConfig(
-        api_key=api_key.value if api_key and api_key.value else "",
+        api_key=key,
         base_url=base_url.value if base_url and base_url.value else "https://api.deepseek.com/v1",
         model=model.value if model and model.value else "deepseek-chat",
     )

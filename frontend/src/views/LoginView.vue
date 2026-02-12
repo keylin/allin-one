@@ -39,13 +39,13 @@ async function handleLogin() {
       localStorage.setItem('api_key', apiKey.value.trim())
       router.push('/dashboard')
     } else {
-      error.value = '验证失败，请检查 API Key'
+      error.value = res.message || '验证失败'
     }
   } catch (e) {
     if (e.response?.status === 401) {
       error.value = 'API Key 无效'
     } else {
-      error.value = '连接失败，请检查服务是否正常'
+      error.value = '连接失败，请检查服务是否正常运行'
     }
   } finally {
     loading.value = false

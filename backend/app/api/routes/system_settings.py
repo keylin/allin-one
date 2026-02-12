@@ -1,6 +1,7 @@
 """Settings API - 系统设置"""
 
 import logging
+import re
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -47,8 +48,8 @@ async def get_settings(db: Session = Depends(get_db)):
 async def update_settings(body: SettingsUpdate, db: Session = Depends(get_db)):
     """批量 upsert 设置"""
     for key, value in body.settings.items():
-        # 跳过掩码值，避免覆盖真实密钥
-        if value and value.startswith("***"):
+        # 跳过掩码值，避免覆盖真实密钥（掩码格式: *** 或 ***xxxx）
+        if value and re.match(r'^\*{3}\w{0,4}$', value):
             continue
         existing = db.get(SystemSetting, key)
         if existing:

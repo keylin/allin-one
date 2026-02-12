@@ -164,7 +164,7 @@ class ContentItem(Base):
 
     # Relationships
     source = relationship("SourceConfig", back_populates="content_items")
-    pipeline_executions = relationship("PipelineExecution", back_populates="content")
+    pipeline_executions = relationship("PipelineExecution", back_populates="content", cascade="all, delete-orphan")
 
     __table_args__ = (
         UniqueConstraint("source_id", "external_id", name="uq_source_external"),

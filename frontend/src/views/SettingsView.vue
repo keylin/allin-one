@@ -153,11 +153,16 @@ async function handleSave() {
 }
 
 async function handleTestLLM() {
+  const key = form.value.llm_api_key
+  if (!key || key.startsWith('***')) {
+    testResult.value = { success: false, message: '请先输入真实的 API Key（当前显示为掩码值）' }
+    return
+  }
   testing.value = true
   testResult.value = null
   try {
     const res = await testLLMConnection({
-      api_key: form.value.llm_api_key,
+      api_key: key,
       base_url: form.value.llm_base_url,
       model: form.value.llm_model,
     })
