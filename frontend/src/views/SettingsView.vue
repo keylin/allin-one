@@ -19,12 +19,24 @@ const groups = [
     ],
   },
   {
-    title: '通知设置',
+    title: '邮件推送 (SMTP)',
+    icon: 'M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75',
+    color: 'text-blue-500 bg-blue-50',
+    keys: [
+      { key: 'smtp_host', label: 'SMTP 服务器', type: 'text', description: '如 smtp.qq.com' },
+      { key: 'smtp_port', label: 'SMTP 端口', type: 'text', description: 'SSL: 465, TLS: 587' },
+      { key: 'smtp_user', label: 'SMTP 用户名', type: 'text', description: '登录邮箱账号' },
+      { key: 'smtp_password', label: 'SMTP 密码', type: 'password', description: '邮箱授权码或密码' },
+      { key: 'notify_email', label: '收件人邮箱', type: 'email', description: '多个用逗号分隔' },
+    ],
+  },
+  {
+    title: '通知渠道',
     icon: 'M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0',
     color: 'text-rose-500 bg-rose-50',
     keys: [
-      { key: 'notify_email', label: '通知邮箱', type: 'email', description: '系统通知邮箱地址' },
       { key: 'notify_webhook', label: 'Webhook URL', type: 'text', description: '通知 Webhook 地址' },
+      { key: 'notify_dingtalk_webhook', label: '钉钉机器人 Webhook', type: 'text', description: '钉钉群机器人 Webhook URL' },
     ],
   },
 ]

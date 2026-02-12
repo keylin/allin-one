@@ -606,6 +606,80 @@ def _handle_publish_content(context: dict) -> dict:
         result = asyncio.run(publish_webhook(payload, webhook_url))
         return result
 
+    if channel == "email":
+        from app.core.database import SessionLocal
+        from app.models.content import ContentItem, SourceConfig
+        from app.models.system_setting import SystemSetting
+        from app.services.publishers.email import publish_email, format_content_email
+
+        with SessionLocal() as db:
+            content = db.get(ContentItem, content_id)
+            if not content:
+                raise ValueError(f"Content not found: {content_id}")
+
+            source = db.get(SourceConfig, content.source_id)
+
+            # 读取 SMTP 配置
+            smtp_host = db.get(SystemSetting, "smtp_host")
+            smtp_port = db.get(SystemSetting, "smtp_port")
+            smtp_user = db.get(SystemSetting, "smtp_user")
+            smtp_password = db.get(SystemSetting, "smtp_password")
+            notify_email = db.get(SystemSetting, "notify_email")
+
+        if not all([smtp_host, smtp_user, smtp_password, notify_email]):
+            return {"status": "skipped", "reason": "SMTP not configured"}
+
+        email_content = format_content_email({
+            "title": content.title,
+            "url": content.url,
+            "author": content.author,
+            "processed_content": content.processed_content,
+            "analysis_result": json.loads(content.analysis_result) if content.analysis_result else None,
+        })
+
+        to_emails = [e.strip() for e in notify_email.value.split(",") if e.strip()]
+        result = asyncio.run(publish_email(
+            content=email_content,
+            smtp_host=smtp_host.value,
+            smtp_port=int(smtp_port.value) if smtp_port else 465,
+            smtp_user=smtp_user.value,
+            smtp_password=smtp_password.value,
+            to_emails=to_emails,
+        ))
+        return result
+
+    if channel == "dingtalk":
+        from app.core.database import SessionLocal
+        from app.models.content import ContentItem, SourceConfig
+        from app.models.system_setting import SystemSetting
+        from app.services.publishers.dingtalk import publish_dingtalk, format_content_dingtalk
+
+        with SessionLocal() as db:
+            content = db.get(ContentItem, content_id)
+            if not content:
+                raise ValueError(f"Content not found: {content_id}")
+
+            source = db.get(SourceConfig, content.source_id)
+            setting = db.get(SystemSetting, "notify_dingtalk_webhook")
+            dingtalk_url = setting.value if setting else None
+
+        if not dingtalk_url:
+            return {"status": "skipped", "reason": "DingTalk webhook not configured"}
+
+        dingtalk_content = format_content_dingtalk({
+            "title": content.title,
+            "url": content.url,
+            "author": content.author,
+            "processed_content": content.processed_content,
+            "analysis_result": json.loads(content.analysis_result) if content.analysis_result else None,
+        })
+
+        result = asyncio.run(publish_dingtalk(
+            content=dingtalk_content,
+            webhook_url=dingtalk_url,
+        ))
+        return result
+
     logger.warning(f"[publish_content] Channel '{channel}' not implemented")
     return {"status": "skipped", "reason": f"channel '{channel}' not implemented"}
 

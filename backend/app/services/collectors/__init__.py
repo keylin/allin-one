@@ -8,21 +8,31 @@ from sqlalchemy.orm import Session
 from app.models.content import SourceConfig, ContentItem, CollectionRecord
 from app.services.collectors.rss import RSSCollector
 from app.services.collectors.web_scraper import ScraperCollector
+from app.services.collectors.akshare import AkShareCollector
+from app.services.collectors.file_upload import FileUploadCollector
+from app.services.collectors.bilibili import BilibiliCollector
+from app.services.collectors.generic_account import GenericAccountCollector
 
 logger = logging.getLogger(__name__)
 
 _rss_collector = RSSCollector()
 _scraper_collector = ScraperCollector()
+_akshare_collector = AkShareCollector()
+_file_upload_collector = FileUploadCollector()
+_bilibili_collector = BilibiliCollector()
+_generic_account_collector = GenericAccountCollector()
 
 COLLECTOR_MAP = {
     "rss.hub": _rss_collector,
     "rss.standard": _rss_collector,
     "web.scraper": _scraper_collector,
+    "api.akshare": _akshare_collector,
+    "file.upload": _file_upload_collector,
+    "account.bilibili": _bilibili_collector,
+    "account.generic": _generic_account_collector,
 }
 
 _UNIMPLEMENTED_TYPES = {
-    "api.akshare", "file.upload",
-    "account.bilibili", "account.generic",
     "user.note", "system.notification",
 }
 
