@@ -53,6 +53,9 @@ services:
       BROWSERLESS_URL: http://browserless:3000
       SCHEDULER_ENABLED: 'true'
       LOG_LEVEL: INFO
+      # 安全设置（强烈建议在生产环境配置）
+      # API_KEY: your-secret-key-here
+      # CORS_ORIGINS: https://your-domain.com
       # 代理设置（httpx / OpenAI SDK 自动识别）
       # HTTP_PROXY: http://host.docker.internal:7890
       # HTTPS_PROXY: http://host.docker.internal:7890

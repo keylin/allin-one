@@ -47,6 +47,9 @@ async def get_settings(db: Session = Depends(get_db)):
 async def update_settings(body: SettingsUpdate, db: Session = Depends(get_db)):
     """批量 upsert 设置"""
     for key, value in body.settings.items():
+        # 跳过掩码值，避免覆盖真实密钥
+        if value and value.startswith("***"):
+            continue
         existing = db.get(SystemSetting, key)
         if existing:
             existing.value = value

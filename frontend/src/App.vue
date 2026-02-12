@@ -21,6 +21,12 @@ const navItems = [
 
 const isActive = (path) => route.path === path
 const isLoginPage = computed(() => route.path === '/login')
+const hasApiKey = computed(() => !!localStorage.getItem('api_key'))
+
+function handleLogout() {
+  localStorage.removeItem('api_key')
+  router.push('/login')
+}
 
 // 路由切换时自动关闭侧边栏
 watch(() => route.path, () => {
@@ -110,8 +116,18 @@ watch(() => route.path, () => {
           <span>{{ item.label }}</span>
         </RouterLink>
       </nav>
-      <div class="p-4 border-t border-slate-100">
+      <div class="p-4 border-t border-slate-100 flex items-center justify-between">
         <div class="text-xs text-slate-300">v1.0.0</div>
+        <button
+          v-if="hasApiKey"
+          @click="handleLogout"
+          class="text-xs text-slate-400 hover:text-slate-600 transition-colors"
+          title="退出登录"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3 0l3-3m0 0l-3-3m3 3H9" />
+          </svg>
+        </button>
       </div>
     </aside>
 
