@@ -1,18 +1,34 @@
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useRouter } from 'vue-router'
 import dayjs from 'dayjs'
-import { getDashboardStats, getRecentActivity } from '@/api/dashboard'
+import {
+  getDashboardStats,
+  getRecentActivity,
+  getCollectionTrend,
+  getSourceHealth,
+  getRecentContent,
+} from '@/api/dashboard'
 
-const stats = ref({ sources_count: 0, contents_today: 0, pipelines_running: 0, pipelines_failed: 0 })
+const router = useRouter()
+
+const stats = ref({
+  sources_count: 0, contents_today: 0, contents_total: 0,
+  pipelines_running: 0, pipelines_failed: 0, pipelines_pending: 0,
+})
 const activities = ref([])
+const trend = ref([])
+const sourceHealthList = ref([])
+const recentContentList = ref([])
 const loading = ref(true)
 let timer = null
 
+// --- 统计卡片 ---
 const statCards = [
-  { key: 'sources_count', label: '数据源', subtitle: '已配置', accent: 'indigo', icon: 'M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1' },
-  { key: 'contents_today', label: '今日内容', subtitle: '新采集', accent: 'emerald', icon: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z' },
-  { key: 'pipelines_running', label: '运行中', subtitle: '流水线', accent: 'amber', icon: 'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15' },
-  { key: 'pipelines_failed', label: '失败', subtitle: '需关注', accent: 'rose', icon: 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z' },
+  { key: 'sources_count', label: '数据源', subtitle: '已配置', accent: 'indigo', link: '/sources', icon: 'M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1' },
+  { key: 'contents_today', label: '今日采集', subtitle: '新内容', accent: 'emerald', link: '/content', icon: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z' },
+  { key: 'pipelines_running', label: '运行中', subtitle: '流水线', accent: 'amber', link: '/pipelines', icon: 'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15' },
+  { key: 'pipelines_failed', label: '失败', subtitle: '需关注', accent: 'rose', link: '/pipelines', icon: 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z' },
 ]
 
 const accentClasses = {
@@ -22,6 +38,17 @@ const accentClasses = {
   rose: { bg: 'bg-rose-50', icon: 'text-rose-600', number: 'text-rose-700' },
 }
 
+// --- 采集趋势 ---
+const trendMax = computed(() => Math.max(...trend.value.map(t => t.count), 1))
+
+// --- 数据源健康统计 ---
+const healthSummary = computed(() => {
+  const h = { healthy: 0, warning: 0, error: 0, disabled: 0 }
+  sourceHealthList.value.forEach(s => h[s.health]++)
+  return h
+})
+
+// --- 活动表格 ---
 const statusStyles = {
   pending: 'bg-slate-100 text-slate-600',
   running: 'bg-indigo-50 text-indigo-700',
@@ -29,27 +56,46 @@ const statusStyles = {
   failed: 'bg-rose-50 text-rose-700',
   cancelled: 'bg-slate-100 text-slate-400',
 }
-
 const statusLabels = {
-  pending: '等待中',
-  running: '运行中',
-  completed: '已完成',
-  failed: '失败',
-  cancelled: '已取消',
+  pending: '等待中', running: '运行中', completed: '已完成',
+  failed: '失败', cancelled: '已取消',
+}
+const triggerLabels = {
+  scheduled: '定时', manual: '手动', api: 'API', webhook: 'Webhook',
 }
 
-const triggerLabels = {
-  scheduled: '定时',
-  manual: '手动',
-  api: 'API',
-  webhook: 'Webhook',
+const mediaTypeLabels = {
+  text: '文本', video: '视频', audio: '音频', image: '图片', mixed: '混合',
+}
+
+const contentStatusStyles = {
+  pending: 'bg-slate-100 text-slate-500',
+  processing: 'bg-indigo-50 text-indigo-600',
+  analyzed: 'bg-emerald-50 text-emerald-600',
+  failed: 'bg-rose-50 text-rose-600',
+}
+
+const healthStyles = {
+  healthy: { dot: 'bg-emerald-400', text: 'text-emerald-600', label: '正常' },
+  warning: { dot: 'bg-amber-400', text: 'text-amber-600', label: '告警' },
+  error: { dot: 'bg-rose-400', text: 'text-rose-600', label: '异常' },
+  disabled: { dot: 'bg-slate-300', text: 'text-slate-400', label: '已禁用' },
 }
 
 async function fetchData() {
   try {
-    const [statsRes, actRes] = await Promise.all([getDashboardStats(), getRecentActivity()])
+    const [statsRes, actRes, trendRes, healthRes, contentRes] = await Promise.all([
+      getDashboardStats(),
+      getRecentActivity(),
+      getCollectionTrend(7),
+      getSourceHealth(),
+      getRecentContent(6),
+    ])
     if (statsRes.code === 0) stats.value = statsRes.data
     if (actRes.code === 0) activities.value = actRes.data
+    if (trendRes.code === 0) trend.value = trendRes.data
+    if (healthRes.code === 0) sourceHealthList.value = healthRes.data
+    if (contentRes.code === 0) recentContentList.value = contentRes.data
   } finally {
     loading.value = false
   }
@@ -57,6 +103,19 @@ async function fetchData() {
 
 function formatTime(t) {
   return t ? dayjs(t).format('MM-DD HH:mm') : '-'
+}
+
+function formatDay(dateStr) {
+  return dayjs(dateStr).format('MM/DD')
+}
+
+function formatDayLabel(dateStr) {
+  const d = dayjs(dateStr)
+  const today = dayjs().format('YYYY-MM-DD')
+  const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD')
+  if (dateStr === today) return '今天'
+  if (dateStr === yesterday) return '昨天'
+  return d.format('MM/DD')
 }
 
 onMounted(() => {
@@ -71,17 +130,41 @@ onUnmounted(() => {
 
 <template>
   <div class="p-4 md:p-8 max-w-7xl mx-auto">
-    <div class="mb-8">
-      <h2 class="text-2xl font-bold tracking-tight text-slate-900">仪表盘</h2>
-      <p class="text-sm text-slate-400 mt-1">系统概览与最近活动</p>
+    <!-- 页头 + 快捷操作 -->
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
+      <div>
+        <h2 class="text-2xl font-bold tracking-tight text-slate-900">仪表盘</h2>
+        <p class="text-sm text-slate-400 mt-1">系统概览与数据监控</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <button
+          class="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-indigo-600 bg-indigo-50 rounded-lg hover:bg-indigo-100 transition-colors"
+          @click="router.push('/videos')"
+        >
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+          </svg>
+          下载视频
+        </button>
+        <button
+          class="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-slate-600 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors"
+          @click="router.push('/sources')"
+        >
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+          </svg>
+          管理数据源
+        </button>
+      </div>
     </div>
 
-    <!-- Stat Cards -->
-    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+    <!-- 统计卡片 -->
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
       <div
         v-for="card in statCards"
         :key="card.key"
-        class="bg-white rounded-xl border border-slate-200/60 p-5 shadow-sm hover:shadow-md transition-shadow duration-300"
+        class="bg-white rounded-xl border border-slate-200/60 p-5 shadow-sm hover:shadow-md hover:border-slate-300 transition-all duration-300 cursor-pointer"
+        @click="router.push(card.link)"
       >
         <div class="flex items-center justify-between mb-3">
           <div
@@ -92,6 +175,9 @@ onUnmounted(() => {
               <path stroke-linecap="round" stroke-linejoin="round" :d="card.icon" />
             </svg>
           </div>
+          <svg class="w-4 h-4 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+          </svg>
         </div>
         <div
           class="text-3xl font-bold tracking-tight"
@@ -104,93 +190,254 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- Recent Activity -->
-    <div class="bg-white rounded-xl border border-slate-200/60 shadow-sm overflow-hidden">
-      <div class="px-6 py-4 border-b border-slate-100">
-        <h3 class="text-sm font-semibold text-slate-700 tracking-tight">最近流水线活动</h3>
-      </div>
+    <!-- 采集趋势 + 数据源健康 -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+      <!-- 采集趋势 -->
+      <div class="lg:col-span-2 bg-white rounded-xl border border-slate-200/60 shadow-sm p-5">
+        <div class="flex items-center justify-between mb-5">
+          <h3 class="text-sm font-semibold text-slate-700">近 7 天采集趋势</h3>
+          <span class="text-xs text-slate-400">
+            总计 {{ trend.reduce((s, t) => s + t.count, 0) }} 条
+          </span>
+        </div>
 
-      <div v-if="loading" class="py-16 text-center text-slate-300">
-        <svg class="w-8 h-8 mx-auto mb-3 animate-spin text-slate-200" fill="none" viewBox="0 0 24 24">
-          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-        </svg>
-        <span class="text-sm">加载中...</span>
-      </div>
+        <div v-if="loading" class="flex items-center justify-center h-40">
+          <svg class="w-6 h-6 animate-spin text-slate-200" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+          </svg>
+        </div>
 
-      <div v-else-if="activities.length === 0" class="py-16 text-center">
-        <svg class="w-12 h-12 mx-auto mb-3 text-slate-200" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
-        </svg>
-        <p class="text-sm text-slate-400">暂无活动记录</p>
-      </div>
-
-      <!-- Desktop Table -->
-      <table v-else class="hidden md:table w-full">
-        <thead>
-          <tr class="border-b border-slate-100">
-            <th class="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">内容</th>
-            <th class="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">模板</th>
-            <th class="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">状态</th>
-            <th class="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">进度</th>
-            <th class="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">触发</th>
-            <th class="px-6 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">时间</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="a in activities" :key="a.id" class="border-b border-slate-50 hover:bg-slate-50/50 transition-colors duration-150">
-            <td class="px-6 py-4 text-sm text-slate-700 font-medium max-w-[200px] truncate">{{ a.content_title || '-' }}</td>
-            <td class="px-6 py-4 text-sm text-slate-500">{{ a.template_name || '-' }}</td>
-            <td class="px-6 py-4">
-              <span class="inline-flex px-2.5 py-1 text-xs font-medium rounded-lg" :class="statusStyles[a.status] || 'bg-slate-100 text-slate-500'">
-                {{ statusLabels[a.status] || a.status }}
-              </span>
-            </td>
-            <td class="px-6 py-4">
-              <div class="flex items-center gap-2">
-                <div class="w-16 bg-slate-100 rounded-full h-1.5">
-                  <div
-                    class="h-1.5 rounded-full transition-all duration-500"
-                    :class="a.status === 'failed' ? 'bg-rose-400' : a.status === 'completed' ? 'bg-emerald-400' : 'bg-indigo-400'"
-                    :style="{ width: a.total_steps > 0 ? `${(a.current_step / a.total_steps) * 100}%` : '0%' }"
-                  ></div>
-                </div>
-                <span class="text-xs text-slate-400">{{ a.current_step }}/{{ a.total_steps }}</span>
-              </div>
-            </td>
-            <td class="px-6 py-4">
-              <span class="text-xs text-slate-400">{{ triggerLabels[a.trigger_source] || a.trigger_source }}</span>
-            </td>
-            <td class="px-6 py-4 text-sm text-slate-400">{{ formatTime(a.created_at) }}</td>
-          </tr>
-        </tbody>
-      </table>
-
-      <!-- Mobile Activity Cards -->
-      <div v-if="!loading && activities.length > 0" class="md:hidden divide-y divide-slate-100">
-        <div v-for="a in activities" :key="a.id" class="p-4">
-          <div class="flex items-start justify-between gap-2 mb-2">
-            <div class="flex-1 min-w-0">
-              <div class="text-sm font-medium text-slate-700 line-clamp-1">{{ a.content_title || '-' }}</div>
-              <div class="text-xs text-slate-400 mt-0.5">{{ a.template_name || '-' }}</div>
-            </div>
-            <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-lg shrink-0" :class="statusStyles[a.status] || 'bg-slate-100 text-slate-500'">
-              {{ statusLabels[a.status] || a.status }}
-            </span>
-          </div>
-          <div class="flex items-center gap-3 mb-2">
-            <div class="flex-1 bg-slate-100 rounded-full h-1.5 overflow-hidden">
+        <div v-else-if="trend.length > 0" class="flex items-end gap-2 h-40">
+          <div
+            v-for="day in trend"
+            :key="day.date"
+            class="flex-1 flex flex-col items-center gap-1.5"
+          >
+            <!-- 数量标签 -->
+            <span class="text-[10px] font-medium text-slate-500">{{ day.count || '' }}</span>
+            <!-- 柱子 -->
+            <div class="w-full flex justify-center">
               <div
-                class="h-1.5 rounded-full transition-all duration-500"
-                :class="a.status === 'failed' ? 'bg-rose-400' : a.status === 'completed' ? 'bg-emerald-400' : 'bg-indigo-400'"
-                :style="{ width: a.total_steps > 0 ? `${(a.current_step / a.total_steps) * 100}%` : '0%' }"
+                class="w-full max-w-[36px] rounded-t-md transition-all duration-500"
+                :class="day.count > 0 ? 'bg-indigo-400 hover:bg-indigo-500' : 'bg-slate-100'"
+                :style="{ height: `${Math.max(day.count / trendMax * 100, 4)}px` }"
+                :title="`${day.date}: ${day.count} 条`"
               ></div>
             </div>
-            <span class="text-xs text-slate-400 shrink-0">{{ a.current_step }}/{{ a.total_steps }}</span>
+            <!-- 日期 -->
+            <span class="text-[10px] text-slate-400">{{ formatDayLabel(day.date) }}</span>
           </div>
-          <div class="flex items-center gap-3 text-xs text-slate-400">
-            <span>{{ triggerLabels[a.trigger_source] || a.trigger_source }}</span>
-            <span>{{ formatTime(a.created_at) }}</span>
+        </div>
+      </div>
+
+      <!-- 数据源健康 -->
+      <div class="bg-white rounded-xl border border-slate-200/60 shadow-sm p-5">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-sm font-semibold text-slate-700">数据源健康</h3>
+          <button
+            class="text-xs text-indigo-500 hover:text-indigo-700 transition-colors"
+            @click="router.push('/sources')"
+          >
+            查看全部
+          </button>
+        </div>
+
+        <div v-if="loading" class="flex items-center justify-center h-32">
+          <svg class="w-6 h-6 animate-spin text-slate-200" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+          </svg>
+        </div>
+
+        <template v-else>
+          <!-- 健康摘要 -->
+          <div class="flex items-center gap-4 mb-4 pb-4 border-b border-slate-100">
+            <div v-for="(style, key) in healthStyles" :key="key" class="flex items-center gap-1.5" :class="!healthSummary[key] ? 'opacity-40' : ''">
+              <div class="w-2 h-2 rounded-full" :class="style.dot"></div>
+              <span class="text-xs" :class="style.text">{{ healthSummary[key] }}</span>
+            </div>
+          </div>
+
+          <!-- 异常源列表（只展示有问题的） -->
+          <div v-if="sourceHealthList.filter(s => s.health !== 'healthy').length > 0" class="space-y-2.5 max-h-[160px] overflow-y-auto">
+            <div
+              v-for="s in sourceHealthList.filter(s => s.health !== 'healthy')"
+              :key="s.id"
+              class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg bg-slate-50/50"
+            >
+              <div class="w-2 h-2 rounded-full shrink-0" :class="healthStyles[s.health].dot"></div>
+              <div class="flex-1 min-w-0">
+                <div class="text-xs font-medium text-slate-700 truncate">{{ s.name }}</div>
+                <div class="text-[10px] text-slate-400">
+                  <span v-if="s.health === 'error'">连续失败 {{ s.consecutive_failures }} 次</span>
+                  <span v-else-if="s.health === 'warning'">失败 {{ s.consecutive_failures }} 次</span>
+                  <span v-else>已禁用</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div v-else class="flex flex-col items-center justify-center py-6">
+            <div class="w-10 h-10 bg-emerald-50 rounded-full flex items-center justify-center mb-2">
+              <svg class="w-5 h-5 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
+            <span class="text-xs text-slate-400">全部数据源运行正常</span>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- 最新内容 + 活动表格 -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <!-- 最新采集内容 -->
+      <div class="bg-white rounded-xl border border-slate-200/60 shadow-sm overflow-hidden">
+        <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+          <h3 class="text-sm font-semibold text-slate-700">最新内容</h3>
+          <button
+            class="text-xs text-indigo-500 hover:text-indigo-700 transition-colors"
+            @click="router.push('/content')"
+          >
+            查看全部
+          </button>
+        </div>
+
+        <div v-if="loading" class="py-12 text-center">
+          <svg class="w-6 h-6 mx-auto animate-spin text-slate-200" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+          </svg>
+        </div>
+
+        <div v-else-if="recentContentList.length === 0" class="py-12 text-center">
+          <p class="text-sm text-slate-400">暂无内容</p>
+        </div>
+
+        <div v-else class="divide-y divide-slate-50">
+          <div
+            v-for="item in recentContentList"
+            :key="item.id"
+            class="px-5 py-3.5 hover:bg-slate-50/50 transition-colors cursor-pointer"
+            @click="router.push('/content')"
+          >
+            <div class="flex items-start gap-2.5">
+              <div class="flex-1 min-w-0">
+                <div class="text-xs font-medium text-slate-700 line-clamp-1">{{ item.title }}</div>
+                <div class="flex items-center gap-2 mt-1.5">
+                  <span
+                    class="inline-flex px-1.5 py-0.5 text-[10px] font-medium rounded"
+                    :class="contentStatusStyles[item.status] || 'bg-slate-100 text-slate-500'"
+                  >
+                    {{ statusLabels[item.status] || item.status }}
+                  </span>
+                  <span v-if="item.media_type" class="text-[10px] text-slate-400">
+                    {{ mediaTypeLabels[item.media_type] || item.media_type }}
+                  </span>
+                  <span v-if="item.source_name" class="text-[10px] text-slate-300 truncate max-w-[100px]">
+                    {{ item.source_name }}
+                  </span>
+                </div>
+              </div>
+              <span class="text-[10px] text-slate-300 shrink-0 pt-0.5">{{ formatTime(item.collected_at) }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 流水线活动 -->
+      <div class="lg:col-span-2 bg-white rounded-xl border border-slate-200/60 shadow-sm overflow-hidden">
+        <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+          <h3 class="text-sm font-semibold text-slate-700">流水线活动</h3>
+          <button
+            class="text-xs text-indigo-500 hover:text-indigo-700 transition-colors"
+            @click="router.push('/pipelines')"
+          >
+            查看全部
+          </button>
+        </div>
+
+        <div v-if="loading" class="py-16 text-center">
+          <svg class="w-6 h-6 mx-auto animate-spin text-slate-200" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+          </svg>
+        </div>
+
+        <div v-else-if="activities.length === 0" class="py-16 text-center">
+          <svg class="w-12 h-12 mx-auto mb-3 text-slate-200" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
+          </svg>
+          <p class="text-sm text-slate-400">暂无活动记录</p>
+        </div>
+
+        <!-- Desktop Table -->
+        <table v-else class="hidden md:table w-full">
+          <thead>
+            <tr class="border-b border-slate-100">
+              <th class="px-5 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">内容</th>
+              <th class="px-5 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">模板</th>
+              <th class="px-5 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">状态</th>
+              <th class="px-5 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">进度</th>
+              <th class="px-5 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">触发</th>
+              <th class="px-5 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">时间</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="a in activities" :key="a.id" class="border-b border-slate-50 hover:bg-slate-50/50 transition-colors duration-150">
+              <td class="px-5 py-3.5 text-xs text-slate-700 font-medium max-w-[180px] truncate">{{ a.content_title || '-' }}</td>
+              <td class="px-5 py-3.5 text-xs text-slate-500">{{ a.template_name || '-' }}</td>
+              <td class="px-5 py-3.5">
+                <span class="inline-flex px-2 py-0.5 text-[10px] font-medium rounded-md" :class="statusStyles[a.status] || 'bg-slate-100 text-slate-500'">
+                  {{ statusLabels[a.status] || a.status }}
+                </span>
+              </td>
+              <td class="px-5 py-3.5">
+                <div class="flex items-center gap-2">
+                  <div class="w-14 bg-slate-100 rounded-full h-1.5">
+                    <div
+                      class="h-1.5 rounded-full transition-all duration-500"
+                      :class="a.status === 'failed' ? 'bg-rose-400' : a.status === 'completed' ? 'bg-emerald-400' : 'bg-indigo-400'"
+                      :style="{ width: a.total_steps > 0 ? `${(a.current_step / a.total_steps) * 100}%` : '0%' }"
+                    ></div>
+                  </div>
+                  <span class="text-[10px] text-slate-400">{{ a.current_step }}/{{ a.total_steps }}</span>
+                </div>
+              </td>
+              <td class="px-5 py-3.5">
+                <span class="text-[10px] text-slate-400">{{ triggerLabels[a.trigger_source] || a.trigger_source }}</span>
+              </td>
+              <td class="px-5 py-3.5 text-xs text-slate-400">{{ formatTime(a.created_at) }}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- Mobile Activity Cards -->
+        <div v-if="!loading && activities.length > 0" class="md:hidden divide-y divide-slate-100">
+          <div v-for="a in activities" :key="a.id" class="p-4">
+            <div class="flex items-start justify-between gap-2 mb-2">
+              <div class="flex-1 min-w-0">
+                <div class="text-sm font-medium text-slate-700 line-clamp-1">{{ a.content_title || '-' }}</div>
+                <div class="text-xs text-slate-400 mt-0.5">{{ a.template_name || '-' }}</div>
+              </div>
+              <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-lg shrink-0" :class="statusStyles[a.status] || 'bg-slate-100 text-slate-500'">
+                {{ statusLabels[a.status] || a.status }}
+              </span>
+            </div>
+            <div class="flex items-center gap-3 mb-2">
+              <div class="flex-1 bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                <div
+                  class="h-1.5 rounded-full transition-all duration-500"
+                  :class="a.status === 'failed' ? 'bg-rose-400' : a.status === 'completed' ? 'bg-emerald-400' : 'bg-indigo-400'"
+                  :style="{ width: a.total_steps > 0 ? `${(a.current_step / a.total_steps) * 100}%` : '0%' }"
+                ></div>
+              </div>
+              <span class="text-xs text-slate-400 shrink-0">{{ a.current_step }}/{{ a.total_steps }}</span>
+            </div>
+            <div class="flex items-center gap-3 text-xs text-slate-400">
+              <span>{{ triggerLabels[a.trigger_source] || a.trigger_source }}</span>
+              <span>{{ formatTime(a.created_at) }}</span>
+            </div>
           </div>
         </div>
       </div>

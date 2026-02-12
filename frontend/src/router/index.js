@@ -8,7 +8,8 @@ const routes = [
   { path: '/content', component: () => import('@/views/ContentView.vue') },
   { path: '/prompt-templates', component: () => import('@/views/TemplatesView.vue') },
   { path: '/pipelines', component: () => import('@/views/PipelinesView.vue') },
-  { path: '/video-download', component: () => import('@/views/VideoView.vue') },
+  { path: '/videos', component: () => import('@/views/VideoView.vue') },
+  { path: '/video-download', redirect: '/videos' },
   { path: '/settings', component: () => import('@/views/SettingsView.vue') },
 ]
 

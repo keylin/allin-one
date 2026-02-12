@@ -2,6 +2,7 @@
 name: review-design
 description: 审查代码是否符合项目设计文档和架构规范
 argument-hint: [文件或目录] (可选，默认审查最近的 git 变更)
+model: sonnet
 allowed-tools: Read, Grep, Glob, Bash
 ---
 

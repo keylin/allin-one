@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str = "sqlite:///data/db/allin.db"
     
-    # LLM
+    # LLM (支持 OpenAI 兼容接口: deepseek / qwen / openai / siliconflow 等)
     LLM_PROVIDER: str = "deepseek"
     LLM_API_KEY: str = ""
     LLM_BASE_URL: str = "https://api.deepseek.com/v1"

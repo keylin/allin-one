@@ -6,16 +6,46 @@ const loading = ref(true)
 const saving = ref(false)
 const saveMessage = ref('')
 
+// LLM Provider 预设
+const providerPresets = {
+  deepseek: { label: 'DeepSeek', base_url: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
+  qwen: { label: '通义千问 (Qwen)', base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
+  openai: { label: 'OpenAI', base_url: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
+  siliconflow: { label: 'SiliconFlow', base_url: 'https://api.siliconflow.cn/v1', model: 'Qwen/Qwen2.5-7B-Instruct' },
+  custom: { label: '自定义', base_url: '', model: '' },
+}
+
+const selectedProvider = ref('custom')
+
+function onProviderChange(provider) {
+  selectedProvider.value = provider
+  if (provider !== 'custom') {
+    const preset = providerPresets[provider]
+    form.value.llm_base_url = preset.base_url
+    form.value.llm_model = preset.model
+  }
+}
+
+function detectProvider(baseUrl) {
+  if (!baseUrl) return 'custom'
+  if (baseUrl.includes('deepseek')) return 'deepseek'
+  if (baseUrl.includes('dashscope.aliyuncs.com')) return 'qwen'
+  if (baseUrl.includes('api.openai.com')) return 'openai'
+  if (baseUrl.includes('siliconflow')) return 'siliconflow'
+  return 'custom'
+}
+
 // 设置分组定义
 const groups = [
   {
     title: 'LLM 配置',
     icon: 'M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z',
     color: 'text-indigo-500 bg-indigo-50',
+    hasProviderSelect: true,
     keys: [
       { key: 'llm_api_key', label: 'API Key', type: 'password', description: 'LLM 服务的 API Key' },
-      { key: 'llm_base_url', label: 'Base URL', type: 'text', description: 'LLM API 地址' },
-      { key: 'llm_model', label: '模型', type: 'text', description: '默认使用的模型名称' },
+      { key: 'llm_base_url', label: 'Base URL', type: 'text', description: 'LLM API 地址（OpenAI 兼容）' },
+      { key: 'llm_model', label: '模型', type: 'text', description: '模型名称，如 deepseek-chat、qwen-plus、gpt-4o-mini' },
     ],
   },
   {
@@ -53,6 +83,8 @@ onMounted(async () => {
         flat[k] = v.value || ''
       }
       form.value = flat
+      // 根据已保存的 base_url 自动识别 provider
+      selectedProvider.value = detectProvider(flat.llm_base_url)
     }
   } finally {
     loading.value = false
@@ -138,6 +170,24 @@ async function handleSave() {
           <h3 class="text-sm font-semibold text-slate-800">{{ group.title }}</h3>
         </div>
         <div class="p-6 space-y-5">
+          <!-- Provider 快速选择 -->
+          <div v-if="group.hasProviderSelect">
+            <label class="block text-sm font-medium text-slate-700 mb-1.5">服务商</label>
+            <div class="flex flex-wrap gap-2">
+              <button
+                v-for="(preset, key) in providerPresets"
+                :key="key"
+                class="px-3 py-1.5 text-sm rounded-lg border transition-all duration-200"
+                :class="selectedProvider === key
+                  ? 'bg-indigo-50 border-indigo-300 text-indigo-700 font-medium shadow-sm'
+                  : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300 hover:bg-slate-50'"
+                @click="onProviderChange(key)"
+              >
+                {{ preset.label }}
+              </button>
+            </div>
+            <p class="mt-1.5 text-xs text-slate-400">选择服务商自动填充 Base URL 和模型，也可选「自定义」手动输入</p>
+          </div>
           <div v-for="item in group.keys" :key="item.key">
             <label class="block text-sm font-medium text-slate-700 mb-1.5">{{ item.label }}</label>
             <input

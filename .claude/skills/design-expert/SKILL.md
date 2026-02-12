@@ -1,6 +1,7 @@
 ---
 name: design-expert
 description: 现代前端设计专家，专注于 Vue 3 + Tailwind CSS 的高颜值、响应式界面设计
+model: sonnet
 ---
 
 # Design Expert (设计专家)

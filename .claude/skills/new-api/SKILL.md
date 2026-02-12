@@ -2,6 +2,7 @@
 name: new-api
 description: 引导创建新的 API 端点，包含 Pydantic schema 和标准响应格式
 argument-hint: <资源名> (如 sources, content, pipelines, settings)
+model: sonnet
 allowed-tools: Read, Grep, Glob, Edit, Write, Bash
 ---
 
