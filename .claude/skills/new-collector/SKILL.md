@@ -2,6 +2,7 @@
 name: new-collector
 description: 引导创建新的数据采集器（Collector）
 argument-hint: <数据源类型> (如 rss_std, scraper, akshare)
+model: sonnet
 allowed-tools: Read, Grep, Glob, Edit, Write, Bash
 ---
 

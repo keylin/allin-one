@@ -2,6 +2,7 @@
 name: glossary
 description: 查询业务术语、枚举值、流水线模板、数据源组合等项目概念
 argument-hint: <术语> (如 SourceType, StepType, ContentStatus, 流水线模板)
+model: haiku
 allowed-tools: Read, Grep, Glob
 ---
 

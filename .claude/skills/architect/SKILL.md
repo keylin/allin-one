@@ -2,6 +2,7 @@
 name: architect
 description: 系统架构师 — 技术方案设计、架构评审、数据建模、API 设计
 argument-hint: <技术问题或设计任务> (如 "设计标签系统", "评审数据流架构")
+model: opus
 allowed-tools: Read, Grep, Glob, Bash
 ---
 

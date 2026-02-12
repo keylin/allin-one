@@ -2,6 +2,7 @@
 name: new-step-handler
 description: 引导创建新的流水线步骤处理器（原子操作）
 argument-hint: <步骤类型> (如 summarize_content, extract_keywords)
+model: sonnet
 allowed-tools: Read, Grep, Glob, Edit, Write, Bash
 ---
 

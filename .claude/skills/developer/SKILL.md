@@ -2,6 +2,7 @@
 name: developer
 description: 全栈开发者 — 功能实现、代码编写、Bug 修复、重构优化
 argument-hint: <开发任务> (如 "实现标签 CRUD", "修复分页 bug", "重构采集器")
+model: sonnet
 allowed-tools: Read, Grep, Glob, Edit, Write, Bash
 ---
 

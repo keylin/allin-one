@@ -2,6 +2,7 @@
 name: product-manager
 description: 产品经理视角 — 需求分析、功能规划、PRD 编写、用户体验评审
 argument-hint: <需求描述或功能名> (如 "添加标签系统", "优化信息流体验")
+model: opus
 allowed-tools: Read, Grep, Glob, WebSearch, WebFetch
 ---
 

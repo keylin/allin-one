@@ -2,6 +2,7 @@
 name: new-vue-page
 description: 引导实现 Vue 页面组件，包含 API 对接和 TailwindCSS 样式
 argument-hint: <页面名> (如 FeedView, SourcesView, DashboardView)
+model: sonnet
 allowed-tools: Read, Grep, Glob, Edit, Write, Bash
 ---
 

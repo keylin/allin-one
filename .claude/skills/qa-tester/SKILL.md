@@ -2,6 +2,7 @@
 name: qa-tester
 description: 质量测试工程师 — 功能验证、回归测试、边界测试、缺陷报告
 argument-hint: <测试范围> (如 "测试采集器", "回归测试 API", "验证流水线流程")
+model: sonnet
 allowed-tools: Read, Grep, Glob, Bash
 ---
 
