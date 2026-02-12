@@ -76,6 +76,8 @@ async def check_and_collect_sources():
 
 def start_scheduler():
     from apscheduler.triggers.interval import IntervalTrigger
+    from apscheduler.triggers.cron import CronTrigger
+    from app.tasks.report_tasks import generate_daily_report, generate_weekly_report
 
     scheduler.add_job(
         check_and_collect_sources,
@@ -83,8 +85,25 @@ def start_scheduler():
         id="main_collection_loop",
         replace_existing=True,
     )
+
+    # 日报 — 每天 22:00
+    scheduler.add_job(
+        generate_daily_report,
+        CronTrigger(hour=22, minute=0),
+        id="daily_report",
+        replace_existing=True,
+    )
+
+    # 周报 — 每周一 09:00
+    scheduler.add_job(
+        generate_weekly_report,
+        CronTrigger(day_of_week="mon", hour=9, minute=0),
+        id="weekly_report",
+        replace_existing=True,
+    )
+
     scheduler.start()
-    logger.info("Scheduler started: collection loop every 5 min")
+    logger.info("Scheduler started: collection loop + daily/weekly reports")
 
 
 def stop_scheduler():

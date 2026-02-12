@@ -219,12 +219,12 @@ function goToHistoryPage(page) {
 <template>
   <div class="p-4 md:p-8 max-w-7xl mx-auto">
     <!-- Header -->
-    <div class="flex items-center justify-between mb-8">
+    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
       <div>
         <h2 class="text-2xl font-bold tracking-tight text-slate-900">数据源管理</h2>
         <p class="text-sm text-slate-400 mt-1">配置信息采集来源与调度</p>
       </div>
-      <div class="flex items-center gap-2">
+      <div class="flex items-center gap-2 flex-wrap">
         <!-- OPML 导入 -->
         <input
           ref="fileInputRef"
@@ -240,7 +240,8 @@ function goToHistoryPage(page) {
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
           </svg>
-          导入 OPML
+          <span class="hidden sm:inline">导入 OPML</span>
+          <span class="sm:hidden">导入</span>
         </button>
 
         <!-- OPML 导出 -->
@@ -251,7 +252,8 @@ function goToHistoryPage(page) {
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
           </svg>
-          导出 OPML
+          <span class="hidden sm:inline">导出 OPML</span>
+          <span class="sm:hidden">导出</span>
         </button>
 
         <!-- 添加数据源 -->
@@ -268,8 +270,8 @@ function goToHistoryPage(page) {
     </div>
 
     <!-- Search + Filter -->
-    <div class="flex items-center gap-3 mb-6">
-      <div class="relative flex-1 max-w-sm">
+    <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 mb-6">
+      <div class="relative flex-1">
         <input
           v-model="searchQuery"
           type="text"
@@ -281,20 +283,22 @@ function goToHistoryPage(page) {
           <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
         </svg>
       </div>
-      <select
-        v-model="filterType"
-        class="px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm text-slate-600 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 outline-none transition-all duration-200 appearance-none cursor-pointer"
-        @change="handleFilterChange"
-      >
-        <option value="">全部类型</option>
-        <option v-for="(label, value) in typeLabels" :key="value" :value="value">{{ label }}</option>
-      </select>
-      <button
-        class="px-4 py-2.5 text-sm font-medium text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-all duration-200"
-        @click="handleSearch"
-      >
-        搜索
-      </button>
+      <div class="flex items-center gap-3">
+        <select
+          v-model="filterType"
+          class="flex-1 sm:flex-none px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm text-slate-600 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 outline-none transition-all duration-200 appearance-none cursor-pointer"
+          @change="handleFilterChange"
+        >
+          <option value="">全部类型</option>
+          <option v-for="(label, value) in typeLabels" :key="value" :value="value">{{ label }}</option>
+        </select>
+        <button
+          class="px-4 py-2.5 text-sm font-medium text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-all duration-200"
+          @click="handleSearch"
+        >
+          搜索
+        </button>
+      </div>
     </div>
 
     <!-- Loading -->
@@ -320,113 +324,196 @@ function goToHistoryPage(page) {
       </button>
     </div>
 
-    <!-- Table -->
-    <div v-else class="bg-white rounded-xl border border-slate-200/60 shadow-sm overflow-hidden">
-      <table class="w-full">
-        <thead>
-          <tr class="border-b border-slate-100">
-            <th class="px-6 py-3.5 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">名称</th>
-            <th class="px-6 py-3.5 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">类型</th>
-            <th class="px-6 py-3.5 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">URL</th>
-            <th class="px-6 py-3.5 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">流水线</th>
-            <th class="px-6 py-3.5 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">调度</th>
-            <th class="px-6 py-3.5 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">最近采集</th>
-            <th class="px-6 py-3.5 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">状态</th>
-            <th class="px-6 py-3.5 text-right text-xs font-medium text-slate-400 uppercase tracking-wider">操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="source in store.sources" :key="source.id" class="border-b border-slate-50 last:border-0 hover:bg-slate-50/50 transition-colors duration-150">
-            <td class="px-6 py-4">
-              <div class="text-sm font-medium text-slate-800">{{ source.name }}</div>
-              <div v-if="source.description" class="text-xs text-slate-400 truncate max-w-[200px] mt-0.5">{{ source.description }}</div>
-            </td>
-            <td class="px-6 py-4">
-              <span class="inline-flex px-2.5 py-1 text-xs font-medium rounded-lg" :class="typeStyles[source.source_type] || 'bg-slate-100 text-slate-600'">
-                {{ typeLabels[source.source_type] || source.source_type }}
-              </span>
-            </td>
-            <td class="px-6 py-4 text-sm text-slate-400 max-w-[180px] truncate" :title="source.url">
-              {{ source.url || '-' }}
-            </td>
-            <td class="px-6 py-4 text-sm text-slate-500">
-              {{ source.pipeline_template_name || '-' }}
-            </td>
-            <td class="px-6 py-4 text-sm text-slate-500">
-              <template v-if="source.schedule_enabled">
-                {{ formatInterval(source.schedule_interval) }}
-              </template>
-              <span v-else class="text-slate-300">已禁用</span>
-            </td>
-            <td class="px-6 py-4 text-sm text-slate-400">
-              {{ formatTime(source.last_collected_at) }}
-            </td>
-            <td class="px-6 py-4">
-              <span
-                class="inline-flex px-2.5 py-1 text-xs font-medium rounded-lg"
-                :class="source.is_active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-400'"
-              >
-                {{ source.is_active ? '活跃' : '停用' }}
-              </span>
-            </td>
-            <td class="px-6 py-4 text-right">
-              <div class="flex items-center justify-end gap-1">
-                <button
-                  class="px-2.5 py-1.5 text-xs font-medium text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors duration-150 disabled:opacity-50"
-                  :disabled="collectingId === source.id"
-                  @click="handleCollect(source)"
+    <!-- Table (Desktop) -->
+    <div v-else>
+      <div class="hidden md:block bg-white rounded-xl border border-slate-200/60 shadow-sm overflow-hidden">
+        <table class="w-full">
+          <thead>
+            <tr class="border-b border-slate-100">
+              <th class="px-6 py-3.5 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">名称</th>
+              <th class="px-6 py-3.5 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">类型</th>
+              <th class="px-6 py-3.5 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">URL</th>
+              <th class="px-6 py-3.5 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">流水线</th>
+              <th class="px-6 py-3.5 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">调度</th>
+              <th class="px-6 py-3.5 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">最近采集</th>
+              <th class="px-6 py-3.5 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">状态</th>
+              <th class="px-6 py-3.5 text-right text-xs font-medium text-slate-400 uppercase tracking-wider">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="source in store.sources" :key="source.id" class="border-b border-slate-50 last:border-0 hover:bg-slate-50/50 transition-colors duration-150">
+              <td class="px-6 py-4">
+                <div class="text-sm font-medium text-slate-800">{{ source.name }}</div>
+                <div v-if="source.description" class="text-xs text-slate-400 truncate max-w-[200px] mt-0.5">{{ source.description }}</div>
+              </td>
+              <td class="px-6 py-4">
+                <span class="inline-flex px-2.5 py-1 text-xs font-medium rounded-lg" :class="typeStyles[source.source_type] || 'bg-slate-100 text-slate-600'">
+                  {{ typeLabels[source.source_type] || source.source_type }}
+                </span>
+              </td>
+              <td class="px-6 py-4 text-sm text-slate-400 max-w-[180px] truncate" :title="source.url">
+                {{ source.url || '-' }}
+              </td>
+              <td class="px-6 py-4 text-sm text-slate-500">
+                {{ source.pipeline_template_name || '-' }}
+              </td>
+              <td class="px-6 py-4 text-sm text-slate-500">
+                <template v-if="source.schedule_enabled">
+                  {{ formatInterval(source.schedule_interval) }}
+                </template>
+                <span v-else class="text-slate-300">已禁用</span>
+              </td>
+              <td class="px-6 py-4 text-sm text-slate-400">
+                {{ formatTime(source.last_collected_at) }}
+              </td>
+              <td class="px-6 py-4">
+                <span
+                  class="inline-flex px-2.5 py-1 text-xs font-medium rounded-lg"
+                  :class="source.is_active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-400'"
                 >
-                  <span v-if="collectingId === source.id" class="flex items-center gap-1">
-                    <svg class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-                    采集中
-                  </span>
-                  <span v-else>采集</span>
-                </button>
-                <button
-                  class="px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-100 rounded-lg transition-colors duration-150"
-                  @click="openHistory(source)"
-                  title="查看采集历史"
-                >
-                  历史
-                </button>
-                <button
-                  class="px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-100 rounded-lg transition-colors duration-150"
-                  @click="openEdit(source)"
-                >
-                  编辑
-                </button>
-                <button
-                  class="px-2.5 py-1.5 text-xs font-medium text-rose-500 hover:bg-rose-50 rounded-lg transition-colors duration-150"
-                  @click="openDelete(source)"
-                >
-                  删除
-                </button>
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+                  {{ source.is_active ? '活跃' : '停用' }}
+                </span>
+              </td>
+              <td class="px-6 py-4 text-right">
+                <div class="flex items-center justify-end gap-1">
+                  <button
+                    class="px-2.5 py-1.5 text-xs font-medium text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors duration-150 disabled:opacity-50"
+                    :disabled="collectingId === source.id"
+                    @click="handleCollect(source)"
+                  >
+                    <span v-if="collectingId === source.id" class="flex items-center gap-1">
+                      <svg class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                      采集中
+                    </span>
+                    <span v-else>采集</span>
+                  </button>
+                  <button
+                    class="px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-100 rounded-lg transition-colors duration-150"
+                    @click="openHistory(source)"
+                    title="查看采集历史"
+                  >
+                    历史
+                  </button>
+                  <button
+                    class="px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-100 rounded-lg transition-colors duration-150"
+                    @click="openEdit(source)"
+                  >
+                    编辑
+                  </button>
+                  <button
+                    class="px-2.5 py-1.5 text-xs font-medium text-rose-500 hover:bg-rose-50 rounded-lg transition-colors duration-150"
+                    @click="openDelete(source)"
+                  >
+                    删除
+                  </button>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
 
-      <!-- Pagination -->
-      <div v-if="store.total > store.pageSize" class="flex items-center justify-between px-6 py-4 border-t border-slate-100">
-        <span class="text-sm text-slate-400">
-          共 {{ store.total }} 条，第 {{ store.currentPage }}/{{ totalPages }} 页
-        </span>
-        <div class="flex items-center gap-1">
-          <button
-            class="px-3 py-1.5 text-sm text-slate-500 border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-150"
-            :disabled="store.currentPage <= 1"
-            @click="goToPage(store.currentPage - 1)"
-          >
-            上一页
-          </button>
-          <button
-            class="px-3 py-1.5 text-sm text-slate-500 border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-150"
-            :disabled="store.currentPage >= totalPages"
-            @click="goToPage(store.currentPage + 1)"
-          >
-            下一页
-          </button>
+        <!-- Pagination -->
+        <div v-if="store.total > store.pageSize" class="flex items-center justify-between px-6 py-4 border-t border-slate-100">
+          <span class="text-sm text-slate-400">
+            共 {{ store.total }} 条，第 {{ store.currentPage }}/{{ totalPages }} 页
+          </span>
+          <div class="flex items-center gap-1">
+            <button
+              class="px-3 py-1.5 text-sm text-slate-500 border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-150"
+              :disabled="store.currentPage <= 1"
+              @click="goToPage(store.currentPage - 1)"
+            >
+              上一页
+            </button>
+            <button
+              class="px-3 py-1.5 text-sm text-slate-500 border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-150"
+              :disabled="store.currentPage >= totalPages"
+              @click="goToPage(store.currentPage + 1)"
+            >
+              下一页
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Mobile Cards -->
+      <div class="md:hidden space-y-3">
+        <div v-for="source in store.sources" :key="source.id" class="bg-white rounded-xl border border-slate-200/60 shadow-sm p-4">
+          <div class="flex items-start justify-between gap-3 mb-3">
+            <div class="flex-1 min-w-0">
+              <div class="text-sm font-semibold text-slate-800">{{ source.name }}</div>
+              <div v-if="source.description" class="text-xs text-slate-400 truncate mt-0.5">{{ source.description }}</div>
+            </div>
+            <span
+              class="inline-flex px-2 py-0.5 text-xs font-medium rounded-lg shrink-0"
+              :class="source.is_active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-400'"
+            >
+              {{ source.is_active ? '活跃' : '停用' }}
+            </span>
+          </div>
+          <div class="flex flex-wrap items-center gap-2 mb-3">
+            <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-lg" :class="typeStyles[source.source_type] || 'bg-slate-100 text-slate-600'">
+              {{ typeLabels[source.source_type] || source.source_type }}
+            </span>
+            <span v-if="source.schedule_enabled" class="text-xs text-slate-400">
+              {{ formatInterval(source.schedule_interval) }}
+            </span>
+            <span v-else class="text-xs text-slate-300">调度已禁用</span>
+          </div>
+          <div v-if="source.url" class="text-xs text-slate-400 truncate mb-3" :title="source.url">{{ source.url }}</div>
+          <div class="text-xs text-slate-400 mb-3">
+            最近采集: {{ formatTime(source.last_collected_at) }}
+          </div>
+          <div class="flex items-center gap-1.5 pt-3 border-t border-slate-100">
+            <button
+              class="flex-1 px-3 py-2 text-xs font-medium text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors disabled:opacity-50"
+              :disabled="collectingId === source.id"
+              @click="handleCollect(source)"
+            >
+              {{ collectingId === source.id ? '采集中...' : '采集' }}
+            </button>
+            <button
+              class="px-3 py-2 text-xs font-medium text-slate-500 hover:bg-slate-100 rounded-lg transition-colors"
+              @click="openHistory(source)"
+            >
+              历史
+            </button>
+            <button
+              class="px-3 py-2 text-xs font-medium text-slate-500 hover:bg-slate-100 rounded-lg transition-colors"
+              @click="openEdit(source)"
+            >
+              编辑
+            </button>
+            <button
+              class="px-3 py-2 text-xs font-medium text-rose-500 hover:bg-rose-50 rounded-lg transition-colors"
+              @click="openDelete(source)"
+            >
+              删除
+            </button>
+          </div>
+        </div>
+
+        <!-- Mobile Pagination -->
+        <div v-if="store.total > store.pageSize" class="flex items-center justify-between pt-2">
+          <span class="text-sm text-slate-400">
+            {{ store.currentPage }}/{{ totalPages }}
+          </span>
+          <div class="flex items-center gap-1">
+            <button
+              class="px-3 py-1.5 text-sm text-slate-500 border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-150"
+              :disabled="store.currentPage <= 1"
+              @click="goToPage(store.currentPage - 1)"
+            >
+              上一页
+            </button>
+            <button
+              class="px-3 py-1.5 text-sm text-slate-500 border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-150"
+              :disabled="store.currentPage >= totalPages"
+              @click="goToPage(store.currentPage + 1)"
+            >
+              下一页
+            </button>
+          </div>
         </div>
       </div>
     </div>

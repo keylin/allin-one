@@ -305,42 +305,65 @@ onMounted(() => {
         <p class="text-sm text-slate-400">暂无模板</p>
       </div>
 
-      <!-- Table -->
-      <div v-else class="bg-white rounded-xl border border-slate-200/60 shadow-sm overflow-hidden">
-        <table class="w-full">
-          <thead class="bg-slate-50/80">
-            <tr>
-              <th class="px-6 py-3.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">名称</th>
-              <th class="px-6 py-3.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">类型</th>
-              <th class="px-6 py-3.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">输出格式</th>
-              <th class="px-6 py-3.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">默认</th>
-              <th class="px-6 py-3.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">更新时间</th>
-              <th class="px-6 py-3.5 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">操作</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-slate-100">
-            <tr v-for="tpl in promptTemplates" :key="tpl.id" class="hover:bg-slate-50/50 transition-colors duration-150">
-              <td class="px-6 py-3.5 text-sm font-medium text-slate-900">{{ tpl.name }}</td>
-              <td class="px-6 py-3.5">
-                <span class="inline-flex px-2.5 py-1 text-xs font-medium rounded-lg" :class="typeStyles[tpl.template_type] || 'bg-slate-100 text-slate-600'">
-                  {{ typeLabels[tpl.template_type] || tpl.template_type }}
-                </span>
-              </td>
-              <td class="px-6 py-3.5 text-sm text-slate-500">{{ tpl.output_format }}</td>
-              <td class="px-6 py-3.5">
-                <span v-if="tpl.is_default" class="inline-flex px-2 py-0.5 text-xs font-medium rounded-md bg-emerald-50 text-emerald-600">是</span>
-                <span v-else class="text-sm text-slate-300">-</span>
-              </td>
-              <td class="px-6 py-3.5 text-sm text-slate-400">{{ formatTime(tpl.updated_at) }}</td>
-              <td class="px-6 py-3.5 text-right">
-                <div class="flex items-center justify-end gap-1.5">
-                  <button class="px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-all duration-200" @click="openEditPrompt(tpl)">编辑</button>
-                  <button class="px-3 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50 rounded-lg transition-all duration-200" @click="openDeletePrompt(tpl.id)">删除</button>
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+      <!-- Table (Desktop) -->
+      <div v-else>
+        <div class="hidden md:block bg-white rounded-xl border border-slate-200/60 shadow-sm overflow-hidden">
+          <table class="w-full">
+            <thead class="bg-slate-50/80">
+              <tr>
+                <th class="px-6 py-3.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">名称</th>
+                <th class="px-6 py-3.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">类型</th>
+                <th class="px-6 py-3.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">输出格式</th>
+                <th class="px-6 py-3.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">默认</th>
+                <th class="px-6 py-3.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">更新时间</th>
+                <th class="px-6 py-3.5 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">操作</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              <tr v-for="tpl in promptTemplates" :key="tpl.id" class="hover:bg-slate-50/50 transition-colors duration-150">
+                <td class="px-6 py-3.5 text-sm font-medium text-slate-900">{{ tpl.name }}</td>
+                <td class="px-6 py-3.5">
+                  <span class="inline-flex px-2.5 py-1 text-xs font-medium rounded-lg" :class="typeStyles[tpl.template_type] || 'bg-slate-100 text-slate-600'">
+                    {{ typeLabels[tpl.template_type] || tpl.template_type }}
+                  </span>
+                </td>
+                <td class="px-6 py-3.5 text-sm text-slate-500">{{ tpl.output_format }}</td>
+                <td class="px-6 py-3.5">
+                  <span v-if="tpl.is_default" class="inline-flex px-2 py-0.5 text-xs font-medium rounded-md bg-emerald-50 text-emerald-600">是</span>
+                  <span v-else class="text-sm text-slate-300">-</span>
+                </td>
+                <td class="px-6 py-3.5 text-sm text-slate-400">{{ formatTime(tpl.updated_at) }}</td>
+                <td class="px-6 py-3.5 text-right">
+                  <div class="flex items-center justify-end gap-1.5">
+                    <button class="px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-all duration-200" @click="openEditPrompt(tpl)">编辑</button>
+                    <button class="px-3 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50 rounded-lg transition-all duration-200" @click="openDeletePrompt(tpl.id)">删除</button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Mobile Cards -->
+        <div class="md:hidden space-y-3">
+          <div v-for="tpl in promptTemplates" :key="tpl.id" class="bg-white rounded-xl border border-slate-200/60 shadow-sm p-4">
+            <div class="flex items-start justify-between gap-2 mb-2">
+              <div class="text-sm font-semibold text-slate-900">{{ tpl.name }}</div>
+              <span v-if="tpl.is_default" class="inline-flex px-2 py-0.5 text-xs font-medium rounded-md bg-emerald-50 text-emerald-600 shrink-0">默认</span>
+            </div>
+            <div class="flex flex-wrap items-center gap-2 mb-3 text-xs">
+              <span class="inline-flex px-2 py-0.5 font-medium rounded-lg" :class="typeStyles[tpl.template_type] || 'bg-slate-100 text-slate-600'">
+                {{ typeLabels[tpl.template_type] || tpl.template_type }}
+              </span>
+              <span class="text-slate-400">{{ tpl.output_format }}</span>
+              <span class="text-slate-400">{{ formatTime(tpl.updated_at) }}</span>
+            </div>
+            <div class="flex items-center gap-1.5 pt-3 border-t border-slate-100">
+              <button class="flex-1 px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-all duration-200" @click="openEditPrompt(tpl)">编辑</button>
+              <button class="flex-1 px-3 py-2 text-xs font-medium text-rose-600 hover:bg-rose-50 rounded-lg transition-all duration-200" @click="openDeletePrompt(tpl.id)">删除</button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 

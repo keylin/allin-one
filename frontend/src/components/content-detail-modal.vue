@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
-import { getContent } from '@/api/content'
+import { getContent, analyzeContent, toggleFavorite } from '@/api/content'
 import MarkdownIt from 'markdown-it'
 import dayjs from 'dayjs'
 
@@ -9,10 +9,11 @@ const props = defineProps({
   contentId: String,
 })
 
-const emit = defineEmits(['close'])
+const emit = defineEmits(['close', 'favorite', 'note'])
 
 const content = ref(null)
 const loading = ref(false)
+const analyzing = ref(false)
 
 // 初始化 Markdown 解析器
 const md = new MarkdownIt({
@@ -96,6 +97,25 @@ const renderedContent = computed(() => {
   // 否则按纯文本处理，保留换行
   return `<pre class="whitespace-pre-wrap">${text}</pre>`
 })
+
+async function handleAnalyze() {
+  if (!props.contentId || analyzing.value) return
+  analyzing.value = true
+  try {
+    await analyzeContent(props.contentId)
+    await loadContent()
+    emit('favorite', props.contentId) // trigger parent refresh
+  } finally {
+    analyzing.value = false
+  }
+}
+
+async function handleFavorite() {
+  if (!props.contentId) return
+  await toggleFavorite(props.contentId)
+  if (content.value) content.value.is_favorited = !content.value.is_favorited
+  emit('favorite', props.contentId)
+}
 
 function formatTime(t) {
   return t ? dayjs(t).format('YYYY-MM-DD HH:mm:ss') : '-'
@@ -206,7 +226,25 @@ const statusStyles = {
         </div>
 
         <!-- Footer -->
-        <div class="flex items-center justify-end gap-3 p-6 border-t border-slate-100">
+        <div class="flex items-center justify-between p-6 border-t border-slate-100">
+          <div class="flex items-center gap-2">
+            <button
+              v-if="content"
+              class="px-4 py-2 text-sm font-medium text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors disabled:opacity-40"
+              :disabled="analyzing"
+              @click="handleAnalyze"
+            >
+              {{ analyzing ? '分析中...' : '重新分析' }}
+            </button>
+            <button
+              v-if="content"
+              class="px-4 py-2 text-sm font-medium rounded-lg transition-colors"
+              :class="content.is_favorited ? 'text-amber-600 hover:bg-amber-50' : 'text-slate-500 hover:bg-slate-100'"
+              @click="handleFavorite"
+            >
+              {{ content.is_favorited ? '取消收藏' : '收藏' }}
+            </button>
+          </div>
           <button
             @click="emit('close')"
             class="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 rounded-lg transition-colors"

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { listTemplates } from '@/api/pipeline-templates'
 
 const props = defineProps({
@@ -71,6 +71,20 @@ function handleSubmit() {
   emit('submit', data)
 }
 
+const configHints = {
+  'rss.hub': '{"rsshub_route": "/bilibili/user/video/12345"}',
+  'rss.standard': '{"feed_format": "atom"}',
+  'api.akshare': '{"indicator": "macro_china_cpi", "params": {}, "title_field": "date", "id_fields": ["date"]}',
+  'web.scraper': '{"item_selector": ".article-item", "title_selector": "h2", "link_selector": "a"}',
+  'file.upload': '{"upload_dir": "data/uploads/my-source", "extensions": [".txt", ".md"], "read_text": true}',
+  'account.bilibili': '{"cookie": "SESSDATA=xxx; bili_jct=xxx", "type": "dynamic", "max_items": 20}',
+  'account.generic': '{"api_url": "https://api.example.com/posts", "items_path": "data.items", "title_field": "title", "id_field": "id"}',
+  'user.note': '{}',
+  'system.notification': '{}',
+}
+
+const configPlaceholder = computed(() => configHints[form.value.source_type] || '{}')
+
 const inputClass = 'w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-sm text-slate-700 placeholder-slate-300 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 outline-none transition-all duration-200'
 const selectClass = 'w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-sm text-slate-700 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 outline-none transition-all duration-200 appearance-none cursor-pointer'
 const labelClass = 'block text-sm font-medium text-slate-700 mb-1.5'
@@ -93,7 +107,7 @@ const labelClass = 'block text-sm font-medium text-slate-700 mb-1.5'
           <input v-model="form.name" type="text" required :class="inputClass" placeholder="例: 少数派 RSS" />
         </div>
 
-        <div class="grid grid-cols-2 gap-4">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label :class="labelClass">数据源类型 *</label>
             <select v-model="form.source_type" :class="selectClass">
@@ -126,7 +140,7 @@ const labelClass = 'block text-sm font-medium text-slate-700 mb-1.5'
           </select>
         </div>
 
-        <div class="grid grid-cols-2 gap-4">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div class="flex items-center gap-3 pt-6">
             <input
               v-model="form.schedule_enabled"
@@ -144,7 +158,7 @@ const labelClass = 'block text-sm font-medium text-slate-700 mb-1.5'
 
         <div>
           <label :class="labelClass">扩展配置 (JSON)</label>
-          <textarea v-model="form.config_json" rows="3" :class="[inputClass, 'font-mono resize-none']" placeholder='{"rsshub_route": "/bilibili/user/video/12345"}'></textarea>
+          <textarea v-model="form.config_json" rows="3" :class="[inputClass, 'font-mono resize-none']" :placeholder="configPlaceholder"></textarea>
         </div>
 
         <div class="flex justify-end gap-3 pt-5 border-t border-slate-100">
