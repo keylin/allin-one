@@ -95,22 +95,26 @@ async def download_video(body: VideoDownloadRequest, db: Session = Depends(get_d
 async def list_downloads(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    status_filter: Optional[str] = Query(None, alias="status", description="筛选状态: pending/running/completed/failed"),
+    platform: Optional[str] = Query(None, description="筛选平台: bilibili/youtube 等"),
+    search: Optional[str] = Query(None, description="搜索标题关键词"),
+    sort_by: str = Query("created_at", description="排序字段: created_at/title/duration"),
+    sort_order: str = Query("desc", description="排序方向: asc/desc"),
     db: Session = Depends(get_db),
 ):
-    """获取视频下载记录"""
+    """获取视频下载记录（支持筛选、搜索、排序）"""
     query = db.query(PipelineStep).filter(PipelineStep.step_type == "download_video")
 
-    total = query.count()
-    steps = (
-        query.order_by(PipelineStep.created_at.desc())
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-        .all()
-    )
+    # 状态筛选（在 DB 层过滤）
+    if status_filter:
+        query = query.filter(PipelineStep.status == status_filter)
 
+    steps = query.all()
+
+    # 构建完整数据列表，解析 output_data 后做进一步筛选
     data = []
+    platforms_set = set()
     for step in steps:
-        # 从 output_data (JSON 字符串) 中提取视频元信息
         video_info = {}
         if step.output_data:
             try:
@@ -125,10 +129,21 @@ async def list_downloads(
             except (json.JSONDecodeError, TypeError):
                 pass
 
-        # 通过 pipeline 关系获取 content_id
         execution = step.pipeline
         content_id = execution.content_id if execution else None
         content = db.get(ContentItem, content_id) if content_id else None
+
+        item_platform = video_info.get("platform", "")
+        if item_platform:
+            platforms_set.add(item_platform)
+
+        # 平台筛选
+        if platform and item_platform != platform:
+            continue
+
+        # 关键词搜索
+        if search and search.lower() not in (video_info.get("title") or "").lower():
+            continue
 
         data.append({
             "id": step.id,
@@ -144,12 +159,28 @@ async def list_downloads(
             "content_url": content.url if content else None,
         })
 
+    # 排序
+    def sort_key(item):
+        if sort_by == "title":
+            return (item.get("video_info") or {}).get("title") or ""
+        if sort_by == "duration":
+            return (item.get("video_info") or {}).get("duration") or 0
+        return item.get("created_at") or ""
+
+    data.sort(key=sort_key, reverse=(sort_order == "desc"))
+
+    # 分页
+    total = len(data)
+    start = (page - 1) * page_size
+    data = data[start:start + page_size]
+
     return {
         "code": 0,
         "data": data,
         "total": total,
         "page": page,
         "page_size": page_size,
+        "platforms": sorted(platforms_set),
         "message": "ok",
     }
 
