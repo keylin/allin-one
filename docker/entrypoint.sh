@@ -6,7 +6,7 @@ mkdir -p data/db data/media/videos data/media/images data/media/files data/repor
 
 # Run database migrations
 echo "Running database migrations..."
-alembic upgrade head 2>/dev/null || echo "Alembic not configured yet, using create_all"
+alembic upgrade head || echo "Alembic migration failed, falling back to create_all"
 
 # Execute the main command
 exec "$@"

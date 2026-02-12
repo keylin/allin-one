@@ -2,15 +2,47 @@ import { createRouter, createWebHistory } from 'vue-router'
 
 const routes = [
   { path: '/', redirect: '/dashboard' },
+  { path: '/login', component: () => import('@/views/LoginView.vue'), meta: { public: true } },
   { path: '/dashboard', component: () => import('@/views/DashboardView.vue') },
   { path: '/feed', component: () => import('@/views/FeedView.vue') },
   { path: '/sources', component: () => import('@/views/SourcesView.vue') },
   { path: '/content', component: () => import('@/views/ContentView.vue') },
-  { path: '/prompt-templates', component: () => import('@/views/TemplatesView.vue') },
+  { path: '/processing', component: () => import('@/views/ProcessingView.vue') },
+  { path: '/prompt-templates', redirect: '/processing' },
   { path: '/pipelines', component: () => import('@/views/PipelinesView.vue') },
   { path: '/videos', component: () => import('@/views/VideoView.vue') },
   { path: '/video-download', redirect: '/videos' },
   { path: '/settings', component: () => import('@/views/SettingsView.vue') },
+  { path: '/:pathMatch(.*)*', name: 'NotFound', component: () => import('@/views/NotFoundView.vue') },
 ]
 
-export default createRouter({ history: createWebHistory(), routes })
+const router = createRouter({ history: createWebHistory(), routes })
+
+// 认证守卫：检测后端是否启用了 API Key 认证
+let authRequired = null // null = 未检测, true/false = 已确认
+
+router.beforeEach(async (to) => {
+  if (to.meta.public) return true
+
+  // 已有 api_key 则放行
+  if (localStorage.getItem('api_key')) return true
+
+  // 首次访问时探测后端是否需要认证
+  if (authRequired === null) {
+    try {
+      const res = await fetch('/api/dashboard/stats')
+      authRequired = res.status === 401
+    } catch {
+      // 网络错误时不拦截，让页面自己处理
+      return true
+    }
+  }
+
+  if (authRequired) {
+    return '/login'
+  }
+
+  return true
+})
+
+export default router

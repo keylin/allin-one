@@ -9,8 +9,16 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
+from app.core.auth import APIKeyMiddleware
 from app.core.database import init_db
 from app.api.routes import dashboard, sources, content, pipelines, templates, video, system_settings, prompt_templates
+
+# 配置根 logger，使 app.* 的日志正确输出到控制台
+logging.basicConfig(
+    level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,11 +63,14 @@ app = FastAPI(
 # CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# API Key 认证
+app.add_middleware(APIKeyMiddleware)
 
 # ---- 全局异常处理器 ----
 
@@ -77,7 +88,7 @@ async def general_exception_handler(request: Request, exc: Exception):
     logger.exception(f"{request.method} {request.url.path} -> 500 {exc}")
     return JSONResponse(
         status_code=500,
-        content={"code": 500, "data": None, "message": f"Internal server error: {str(exc)}"},
+        content={"code": 500, "data": None, "message": "Internal server error"},
     )
 
 
