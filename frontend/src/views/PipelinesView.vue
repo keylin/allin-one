@@ -4,6 +4,7 @@ import dayjs from 'dayjs'
 import { listPipelines, cancelPipeline, retryPipeline } from '@/api/pipelines'
 import { useToast } from '@/composables/useToast'
 import PipelineDetailModal from '@/components/pipeline-detail-modal.vue'
+import StepTestModal from '@/components/step-test-modal.vue'
 
 const toast = useToast()
 
@@ -17,6 +18,9 @@ const filterStatus = ref('')
 // 详情弹窗
 const showDetail = ref(false)
 const detailPipelineId = ref(null)
+
+// 步骤测试弹窗
+const showStepTest = ref(false)
 
 const statusStyles = {
   pending: 'bg-slate-100 text-slate-600',
@@ -114,6 +118,17 @@ onMounted(() => fetchPipelines())
         <h2 class="text-xl font-bold text-slate-900 tracking-tight">流程监控</h2>
         <p class="text-sm text-slate-400 mt-0.5">查看流水线执行状态与进度</p>
       </div>
+      <button
+        class="px-4 py-2.5 text-sm font-medium text-indigo-600 bg-indigo-50 border border-indigo-200 rounded-xl hover:bg-indigo-100 active:bg-indigo-200 transition-all duration-200"
+        @click="showStepTest = true"
+      >
+        <span class="flex items-center gap-1.5">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M11.42 15.17l-5.1-5.1m0 0L12 4.37m-5.68 5.7h15.08M19.58 8.83l5.1 5.1m0 0L19 19.63m5.68-5.7H9.6" />
+          </svg>
+          步骤测试
+        </span>
+      </button>
     </div>
 
     <!-- 筛选 -->
@@ -310,6 +325,11 @@ onMounted(() => fetchPipelines())
       :visible="showDetail"
       :pipeline-id="detailPipelineId"
       @close="showDetail = false"
+    />
+
+    <StepTestModal
+      :visible="showStepTest"
+      @close="showStepTest = false"
     />
   </div>
 </template>
