@@ -33,8 +33,8 @@ router.beforeEach(async (to) => {
       const res = await fetch('/api/dashboard/stats')
       authRequired = res.status === 401
     } catch {
-      // 网络错误时不拦截，让页面自己处理
-      return true
+      // 网络错误时保守重定向到 login，不缓存结果以便下次重试
+      return '/login'
     }
   }
 

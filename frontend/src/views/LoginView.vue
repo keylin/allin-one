@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '@/api'
 
@@ -7,6 +7,19 @@ const router = useRouter()
 const apiKey = ref('')
 const error = ref('')
 const loading = ref(false)
+
+// 进入 login 页时重新探测后端是否需要认证
+onMounted(async () => {
+  try {
+    const res = await fetch('/api/dashboard/stats')
+    if (res.status !== 401) {
+      // 后端未启用认证，直接跳转
+      router.replace('/dashboard')
+    }
+  } catch {
+    error.value = '无法连接服务器，请检查后端是否正常运行'
+  }
+})
 
 async function handleLogin() {
   if (!apiKey.value.trim()) {
