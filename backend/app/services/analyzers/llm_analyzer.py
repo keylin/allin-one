@@ -38,11 +38,7 @@ class LLMAnalyzer:
 
         try:
             logger.info(f"Calling LLM ({self.model}) with format: {output_format}")
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                response_format=response_format
-            )
+            response = await self._call_llm(messages, response_format)
 
             result_text = response.choices[0].message.content
             usage = response.usage
@@ -68,3 +64,30 @@ class LLMAnalyzer:
         except Exception as e:
             logger.exception(f"LLM analysis failed: {e}")
             return {"error": str(e)}
+
+    async def _call_llm(self, messages: list, response_format: dict | None):
+        """
+        调用 LLM，若 response_format 不被支持则自动降级重试。
+        部分模型/服务商不支持 response_format 参数，降级时通过 prompt 引导输出 JSON。
+        """
+        try:
+            return await self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                response_format=response_format,
+            )
+        except Exception as e:
+            if response_format and "response_format" in str(e).lower():
+                logger.warning(f"Provider does not support response_format, retrying without it: {e}")
+                # 在 user message 末尾追加 JSON 输出提示
+                fallback_messages = [*messages]
+                last = fallback_messages[-1]
+                fallback_messages[-1] = {
+                    **last,
+                    "content": last["content"] + "\n\nPlease respond in valid JSON format.",
+                }
+                return await self.client.chat.completions.create(
+                    model=self.model,
+                    messages=fallback_messages,
+                )
+            raise
