@@ -3,6 +3,7 @@ import { ref, onMounted, computed } from 'vue'
 import dayjs from 'dayjs'
 import { useContentStore } from '@/stores/content'
 import { listSources } from '@/api/sources'
+import { analyzeContent } from '@/api/content'
 import ContentDetailModal from '@/components/content-detail-modal.vue'
 import ConfirmDialog from '@/components/confirm-dialog.vue'
 
@@ -81,6 +82,18 @@ function goToPage(page) {
 function openDetail(item) {
   detailContentId.value = item.id
   showDetail.value = true
+}
+
+const analyzingIds = ref(new Set())
+
+async function handleAnalyze(id) {
+  analyzingIds.value.add(id)
+  try {
+    await analyzeContent(id)
+    fetchWithFilters()
+  } finally {
+    analyzingIds.value.delete(id)
+  }
 }
 
 async function handleFavorite(id) {
@@ -232,7 +245,14 @@ const selectClass = 'px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl t
               </td>
               <td class="px-6 py-3.5 text-sm text-slate-500">{{ mediaLabels[item.media_type] || item.media_type }}</td>
               <td class="px-6 py-3.5 text-sm text-slate-400">{{ formatTime(item.collected_at) }}</td>
-              <td class="px-6 py-3.5 text-right">
+              <td class="px-6 py-3.5 text-right space-x-1">
+                <button
+                  class="px-3 py-1.5 text-xs font-medium text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all duration-200 disabled:opacity-40"
+                  :disabled="analyzingIds.has(item.id)"
+                  @click="handleAnalyze(item.id)"
+                >
+                  {{ analyzingIds.has(item.id) ? '分析中...' : '分析' }}
+                </button>
                 <button
                   class="px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200"
                   :class="item.is_favorited ? 'text-amber-600 hover:bg-amber-50' : 'text-slate-500 hover:bg-slate-100'"
@@ -287,13 +307,22 @@ const selectClass = 'px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl t
               </div>
               <div class="flex items-center justify-between mt-2">
                 <span class="text-xs text-slate-400">{{ formatTime(item.collected_at) }}</span>
-                <button
-                  class="px-2.5 py-1 text-xs font-medium rounded-lg transition-all duration-200"
-                  :class="item.is_favorited ? 'text-amber-600 hover:bg-amber-50' : 'text-slate-500 hover:bg-slate-100'"
-                  @click.stop="handleFavorite(item.id)"
-                >
-                  {{ item.is_favorited ? '取消收藏' : '收藏' }}
-                </button>
+                <div class="flex items-center gap-1">
+                  <button
+                    class="px-2.5 py-1 text-xs font-medium text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all duration-200 disabled:opacity-40"
+                    :disabled="analyzingIds.has(item.id)"
+                    @click.stop="handleAnalyze(item.id)"
+                  >
+                    {{ analyzingIds.has(item.id) ? '分析中...' : '分析' }}
+                  </button>
+                  <button
+                    class="px-2.5 py-1 text-xs font-medium rounded-lg transition-all duration-200"
+                    :class="item.is_favorited ? 'text-amber-600 hover:bg-amber-50' : 'text-slate-500 hover:bg-slate-100'"
+                    @click.stop="handleFavorite(item.id)"
+                  >
+                    {{ item.is_favorited ? '取消收藏' : '收藏' }}
+                  </button>
+                </div>
               </div>
             </div>
           </div>

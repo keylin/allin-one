@@ -15,3 +15,7 @@ export function cancelPipeline(id) {
 export function retryPipeline(id) {
   return api.post(`/pipelines/${id}/retry`)
 }
+
+export function manualPipeline(data) {
+  return api.post('/pipelines/manual', data)
+}
