@@ -213,6 +213,23 @@ def _handle_download_video(context: dict) -> dict:
 
     platform = "youtube" if "youtube" in url or "youtu.be" in url else "bilibili" if "bilibili" in url else "other"
 
+    # 回写 ContentItem 的标题和发布时间
+    upload_date = info.get("upload_date")  # yt-dlp 返回 "YYYYMMDD" 格式
+    from app.core.database import SessionLocal
+    from app.models.content import ContentItem
+    from datetime import datetime, timezone
+    with SessionLocal() as db:
+        content = db.get(ContentItem, context["content_id"])
+        if content:
+            if info.get("title"):
+                content.title = info["title"]
+            if upload_date:
+                try:
+                    content.published_at = datetime.strptime(upload_date, "%Y%m%d").replace(tzinfo=timezone.utc)
+                except ValueError:
+                    pass
+            db.commit()
+
     return {
         "status": "downloaded",
         "platform": platform,
@@ -221,6 +238,9 @@ def _handle_download_video(context: dict) -> dict:
         "thumbnail_path": thumbnail_path or "",
         "title": info.get("title", ""),
         "duration": info.get("duration"),
+        "width": info.get("width"),
+        "height": info.get("height"),
+        "upload_date": upload_date or "",
     }
 
 
@@ -381,7 +401,7 @@ def _transcribe_with_whisper(audio_path: str) -> str:
 
     支持 OpenAI Whisper API 或兼容端点
     """
-    from app.core.config import settings
+    from app.core.config import get_llm_config
     from openai import OpenAI
 
     logger.info(f"[whisper] Transcribing: {audio_path}")
@@ -395,9 +415,10 @@ def _transcribe_with_whisper(audio_path: str) -> str:
         raise Exception(f"Audio file too large: {file_size} bytes (max 25MB)")
 
     # 使用 OpenAI client（支持兼容端点）
+    cfg = get_llm_config()
     client = OpenAI(
-        api_key=settings.LLM_API_KEY,
-        base_url=settings.LLM_BASE_URL,
+        api_key=cfg.api_key,
+        base_url=cfg.base_url,
     )
 
     try:

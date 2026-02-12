@@ -47,13 +47,13 @@ class RSSCollector(BaseCollector):
                 media_type=source.media_type or MediaType.TEXT.value,
                 published_at=self._parse_published(entry),
             )
-            db.add(item)
             try:
-                db.flush()
+                with db.begin_nested():
+                    db.add(item)
+                    db.flush()
                 new_items.append(item)
             except IntegrityError:
-                db.rollback()
-                # 重复条目，跳过
+                pass  # SAVEPOINT 已自动回滚，外层事务不受影响
 
         if new_items:
             db.commit()

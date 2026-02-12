@@ -9,6 +9,7 @@ import {
   getSourceHealth,
   getRecentContent,
 } from '@/api/dashboard'
+import { collectSource } from '@/api/sources'
 
 const router = useRouter()
 
@@ -21,6 +22,7 @@ const trend = ref([])
 const sourceHealthList = ref([])
 const recentContentList = ref([])
 const loading = ref(true)
+const collectingId = ref(null)
 let timer = null
 
 // --- 统计卡片 ---
@@ -102,11 +104,21 @@ async function fetchData() {
 }
 
 function formatTime(t) {
-  return t ? dayjs(t).format('MM-DD HH:mm') : '-'
+  return t ? dayjs.utc(t).local().format('MM-DD HH:mm') : '-'
+}
+
+async function handleCollect(source) {
+  collectingId.value = source.id
+  try {
+    await collectSource(source.id)
+    fetchData()
+  } finally {
+    collectingId.value = null
+  }
 }
 
 function formatDay(dateStr) {
-  return dayjs(dateStr).format('MM/DD')
+  return dayjs.utc(dateStr).local().format('MM/DD')
 }
 
 function formatDayLabel(dateStr) {
@@ -275,6 +287,14 @@ onUnmounted(() => {
                   <span v-else>已禁用</span>
                 </div>
               </div>
+              <button
+                v-if="s.health === 'error' || s.health === 'warning'"
+                class="px-2 py-1 text-[10px] font-medium text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors shrink-0 disabled:opacity-40"
+                :disabled="collectingId === s.id"
+                @click="handleCollect(s)"
+              >
+                {{ collectingId === s.id ? '...' : '重试' }}
+              </button>
             </div>
           </div>
           <div v-else class="flex flex-col items-center justify-center py-6">

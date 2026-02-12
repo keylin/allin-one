@@ -41,7 +41,8 @@ async def check_and_collect_sources():
                 interval = source.schedule_interval
                 if source.consecutive_failures > 0:
                     interval = min(interval * (2 ** source.consecutive_failures), 7200)
-                if now < source.last_collected_at + timedelta(seconds=interval):
+                last = source.last_collected_at.replace(tzinfo=timezone.utc) if source.last_collected_at.tzinfo is None else source.last_collected_at
+                if now < last + timedelta(seconds=interval):
                     continue
 
             try:
@@ -55,23 +56,82 @@ async def check_and_collect_sources():
                 # ---- 第二阶段: 对每条新内容触发流水线 ----
                 orchestrator = PipelineOrchestrator(db)
                 for item in new_items:
+                    try:
+                        execution = orchestrator.trigger_for_content(
+                            content=item,
+                            trigger=TriggerSource.SCHEDULED,
+                        )
+                        if execution:
+                            orchestrator.start_execution(execution.id)
+                            logger.info(
+                                f"Pipeline triggered: {item.title} → {execution.template_name}"
+                            )
+                    except Exception as pe:
+                        db.rollback()
+                        logger.error(f"Pipeline trigger failed for {item.title[:50]}: {pe}")
+
+                db.commit()
+                logger.info(f"Collected {source.name}: {len(new_items)} new items")
+
+            except Exception as e:
+                db.rollback()
+                source.consecutive_failures += 1
+                db.commit()
+                import httpx
+                if isinstance(e, (httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException)):
+                    logger.warning(f"Collection transient error for {source.name}: {e}")
+                else:
+                    logger.error(f"Collection failed for {source.name}: {e}")
+
+        # ---- 补偿: 对 pending 且无 pipeline 的内容补触发 ----
+        from app.models.pipeline import PipelineExecution
+        from sqlalchemy import not_, exists
+
+        orphaned = db.query(ContentItem).filter(
+            ContentItem.status == ContentStatus.PENDING.value,
+            ~exists().where(PipelineExecution.content_id == ContentItem.id),
+        ).all()
+
+        if orphaned:
+            logger.info(f"Compensation: {len(orphaned)} pending items without pipeline")
+            orchestrator = PipelineOrchestrator(db)
+            for item in orphaned:
+                try:
                     execution = orchestrator.trigger_for_content(
                         content=item,
                         trigger=TriggerSource.SCHEDULED,
                     )
                     if execution:
                         orchestrator.start_execution(execution.id)
-                        logger.info(
-                            f"Pipeline triggered: {item.title} → {execution.template_name}"
-                        )
+                        logger.info(f"Compensation pipeline: {item.title[:50]} → {execution.template_name}")
+                except Exception as e:
+                    db.rollback()
+                    logger.error(f"Compensation trigger failed for {item.title[:50]}: {e}")
+            db.commit()
 
-                db.commit()
-                logger.info(f"Collected {source.name}: {len(new_items)} new items")
+        # ---- 恢复: 卡在 running 超时的步骤重新入队 ----
+        from app.models.pipeline import PipelineStep, StepStatus, PipelineStatus
 
-            except Exception as e:
-                source.consecutive_failures += 1
+        stale_timeout = timedelta(minutes=30)
+        stale_steps = db.query(PipelineStep).filter(
+            PipelineStep.status == StepStatus.RUNNING.value,
+            PipelineStep.started_at < now - stale_timeout,
+        ).all()
+
+        for step in stale_steps:
+            step.status = StepStatus.PENDING.value
+            step.started_at = None
+            step.error_message = None
+            execution = db.get(PipelineExecution, step.pipeline_id)
+            if execution and execution.status == PipelineStatus.RUNNING.value:
+                logger.info(f"Recovering stale step: {step.step_type} (pipeline={step.pipeline_id[:12]})")
                 db.commit()
-                logger.error(f"Collection failed for {source.name}: {e}")
+                # 重新入队，yt-dlp 会自动从 .part 文件断点续传
+                from app.tasks.pipeline_tasks import execute_pipeline_step
+                execute_pipeline_step(step.pipeline_id, step.step_index)
+
+        if stale_steps:
+            db.commit()
 
 
 def start_scheduler():

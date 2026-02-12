@@ -8,9 +8,16 @@ services:
     restart: unless-stopped
     ports:
       - "1200:1200"
+    env_file:
+      - ./backend/.env
     environment:
       NODE_ENV: production
       CACHE_TYPE: memory
+      CACHE_EXPIRE: 900
+      PUPPETEER_WS_ENDPOINT: ws://browserless:3000
+    depends_on:
+      browserless:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:1200/"]
       interval: 10s
@@ -57,7 +64,9 @@ services:
       # 覆盖 .env 中的地址，使用 Docker 内部网络
       RSSHUB_URL: http://rsshub:1200
       BROWSERLESS_URL: http://browserless:3000
-      SCHEDULER_ENABLED: "false"
+      SCHEDULER_ENABLED: "true"
+      # macOS Docker bind mount 不传递 inotify 事件，需要轮询
+      WATCHFILES_FORCE_POLLING: "true"
     depends_on:
       rsshub:
         condition: service_healthy
@@ -88,7 +97,7 @@ services:
       dockerfile: docker/Dockerfile.dev.backend
     container_name: allin-dev-worker
     restart: unless-stopped
-    command: ["huey_consumer", "app.tasks.huey_instance.huey", "-w", "4", "-k", "thread"]
+    command: ["python", "dev_worker.py"]
     volumes:
       - ./backend:/app
     env_file:
@@ -96,6 +105,8 @@ services:
     environment:
       RSSHUB_URL: http://rsshub:1200
       BROWSERLESS_URL: http://browserless:3000
+      # macOS Docker bind mount 不传递 inotify 事件，需要轮询
+      WATCHFILES_FORCE_POLLING: "true"
     depends_on:
       rsshub:
         condition: service_healthy

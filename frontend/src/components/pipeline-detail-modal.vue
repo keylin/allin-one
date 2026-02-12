@@ -3,6 +3,13 @@ import { ref, watch } from 'vue'
 import dayjs from 'dayjs'
 import { getPipeline } from '@/api/pipelines'
 
+const triggerLabels = {
+  manual: '手动',
+  scheduled: '定时',
+  api: 'API',
+  webhook: 'Webhook',
+}
+
 const props = defineProps({
   visible: Boolean,
   pipelineId: { type: String, default: null },
@@ -62,7 +69,19 @@ watch(() => props.visible, async (val) => {
 })
 
 function formatTime(t) {
-  return t ? dayjs(t).format('YYYY-MM-DD HH:mm:ss') : '-'
+  return t ? dayjs.utc(t).local().format('YYYY-MM-DD HH:mm:ss') : '-'
+}
+
+function formatDuration(startedAt, completedAt) {
+  if (!startedAt || !completedAt) return null
+  const start = dayjs.utc(startedAt)
+  const end = dayjs.utc(completedAt)
+  const seconds = end.diff(start, 'second')
+  if (seconds < 60) return `${seconds}秒`
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}分${seconds % 60}秒`
+  const h = Math.floor(seconds / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  return `${h}时${m}分`
 }
 
 function formatOutput(data) {
@@ -112,7 +131,7 @@ function formatOutput(data) {
           </div>
           <div class="bg-slate-50 rounded-xl p-4">
             <span class="text-xs text-slate-400 block mb-1">触发方式</span>
-            <span class="text-sm text-slate-700 font-medium">{{ detail.trigger_source }}</span>
+            <span class="text-sm text-slate-700 font-medium">{{ triggerLabels[detail.trigger_source] || detail.trigger_source }}</span>
           </div>
           <div class="bg-slate-50 rounded-xl p-4">
             <span class="text-xs text-slate-400 block mb-1">开始时间</span>
@@ -152,8 +171,11 @@ function formatOutput(data) {
                 </span>
                 <span v-if="step.is_critical" class="inline-flex px-2 py-0.5 text-xs font-medium rounded-md bg-rose-50 text-rose-600">关键</span>
               </div>
-              <div class="text-xs text-slate-400 mt-1.5">
-                {{ formatTime(step.started_at) }} ~ {{ formatTime(step.completed_at) }}
+              <div class="flex items-center gap-2 text-xs text-slate-400 mt-1.5">
+                <span>{{ formatTime(step.started_at) }} ~ {{ formatTime(step.completed_at) }}</span>
+                <span v-if="formatDuration(step.started_at, step.completed_at)" class="inline-flex px-1.5 py-0.5 bg-slate-100 text-slate-500 rounded font-medium">
+                  {{ formatDuration(step.started_at, step.completed_at) }}
+                </span>
               </div>
               <div v-if="step.error_message" class="text-xs text-rose-600 mt-1.5 bg-rose-50 rounded-lg px-2 py-1">{{ step.error_message }}</div>
               <details v-if="step.output_data" class="mt-2">

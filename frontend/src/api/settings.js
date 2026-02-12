@@ -7,3 +7,7 @@ export function getSettings() {
 export function updateSettings(settings) {
   return api.put('/settings', { settings })
 }
+
+export function testLLMConnection(params) {
+  return api.post('/settings/test-llm', params)
+}

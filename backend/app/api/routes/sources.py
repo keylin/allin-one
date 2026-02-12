@@ -7,6 +7,7 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 import xml.etree.ElementTree as ET
+import httpx
 
 from app.core.database import get_db
 from app.models.content import SourceConfig, ContentItem, CollectionRecord, SourceType
@@ -94,6 +95,79 @@ async def create_source(body: SourceCreate, db: Session = Depends(get_db)):
 
     logger.info(f"Source created: {source.id} ({source.name}, type={source.source_type})")
     return {"code": 0, "data": _source_to_response(source, db), "message": "ok"}
+
+
+@router.get("/options")
+async def list_source_options(db: Session = Depends(get_db)):
+    """轻量级来源列表，供下拉框使用"""
+    sources = db.query(SourceConfig.id, SourceConfig.name)\
+        .filter(SourceConfig.is_active == True)\
+        .order_by(SourceConfig.name).all()
+    return {"code": 0, "data": [{"id": s.id, "name": s.name} for s in sources], "message": "ok"}
+
+
+# ---- B站 QR 登录 ----
+
+@router.post("/bilibili/qrcode/generate")
+async def bilibili_qrcode_generate():
+    """生成B站登录二维码"""
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                "https://passport.bilibili.com/x/passport-login/web/qrcode/generate",
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            data = resp.json()
+        if data.get("code") != 0:
+            return {"code": 1, "data": None, "message": f"B站接口错误: {data.get('message', 'unknown')}"}
+        return {"code": 0, "data": data["data"], "message": "ok"}
+    except Exception as e:
+        logger.exception("Failed to generate bilibili qrcode")
+        return {"code": 1, "data": None, "message": f"生成二维码失败: {str(e)}"}
+
+
+@router.get("/bilibili/qrcode/poll")
+async def bilibili_qrcode_poll(qrcode_key: str = Query(...)):
+    """轮询B站二维码扫码状态"""
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                "https://passport.bilibili.com/x/passport-login/web/qrcode/poll",
+                params={"qrcode_key": qrcode_key},
+                headers={"User-Agent": "Mozilla/5.0"},
+                follow_redirects=False,
+            )
+            data = resp.json()
+
+        if data.get("code") != 0:
+            return {"code": 1, "data": None, "message": f"B站接口错误: {data.get('message', 'unknown')}"}
+
+        status_code = data["data"].get("code")
+        if status_code == 86101:
+            return {"code": 0, "data": {"status": "waiting"}, "message": "等待扫码"}
+        elif status_code == 86090:
+            return {"code": 0, "data": {"status": "scanned"}, "message": "已扫码，待确认"}
+        elif status_code == 86038:
+            return {"code": 0, "data": {"status": "expired"}, "message": "二维码已过期"}
+        elif status_code == 0:
+            # 成功 — 从响应 cookies 和 URL 参数中提取凭证
+            cookies = resp.cookies
+            sessdata = cookies.get("SESSDATA", "")
+            bili_jct = cookies.get("bili_jct", "")
+            # 某些情况 cookie 在 url 参数中返回
+            if not sessdata:
+                url_str = data["data"].get("url", "")
+                from urllib.parse import urlparse, parse_qs
+                qs = parse_qs(urlparse(url_str).query)
+                sessdata = qs.get("SESSDATA", [""])[0]
+                bili_jct = qs.get("bili_jct", [""])[0]
+            cookie_str = f"SESSDATA={sessdata}; bili_jct={bili_jct}"
+            return {"code": 0, "data": {"status": "success", "cookie": cookie_str}, "message": "登录成功"}
+        else:
+            return {"code": 0, "data": {"status": "unknown", "raw_code": status_code}, "message": "未知状态"}
+    except Exception as e:
+        logger.exception("Failed to poll bilibili qrcode")
+        return {"code": 1, "data": None, "message": f"轮询失败: {str(e)}"}
 
 
 # ---- OPML 导入导出 ----

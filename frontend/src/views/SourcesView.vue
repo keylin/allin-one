@@ -140,7 +140,7 @@ async function handleCollect(source) {
 }
 
 function formatTime(t) {
-  return t ? dayjs(t).format('YYYY-MM-DD HH:mm') : '-'
+  return t ? dayjs.utc(t).local().format('YYYY-MM-DD HH:mm') : '-'
 }
 
 function formatInterval(seconds) {

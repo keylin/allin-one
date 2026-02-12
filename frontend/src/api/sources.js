@@ -40,3 +40,11 @@ export function exportOPML() {
   // 返回下载 URL，需要在前端手动处理下载
   return '/api/sources/export'
 }
+
+export function generateBilibiliQrcode() {
+  return api.post('/sources/bilibili/qrcode/generate')
+}
+
+export function pollBilibiliQrcode(qrcodeKey) {
+  return api.get('/sources/bilibili/qrcode/poll', { params: { qrcode_key: qrcodeKey } })
+}

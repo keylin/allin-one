@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import mimetypes
+import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -15,10 +16,15 @@ from app.core.database import get_db
 from app.core.config import settings
 from app.models.pipeline import PipelineExecution, PipelineStep, PipelineTemplate, TriggerSource, StepStatus
 from app.models.content import ContentItem, ContentStatus, MediaType, SourceConfig
+from pydantic import BaseModel
 from app.schemas import VideoDownloadRequest, error_response
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+class PlaybackProgressBody(BaseModel):
+    position: int
 
 
 @router.post("/download")
@@ -95,10 +101,11 @@ async def download_video(body: VideoDownloadRequest, db: Session = Depends(get_d
 async def list_downloads(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    status_filter: Optional[str] = Query(None, alias="status", description="筛选状态: pending/running/completed/failed"),
+    status_filter: Optional[str] = Query("completed", alias="status", description="筛选状态: pending/running/completed/failed，空字符串=全部"),
     platform: Optional[str] = Query(None, description="筛选平台: bilibili/youtube 等"),
+    source_id: Optional[str] = Query(None, description="按来源筛选"),
     search: Optional[str] = Query(None, description="搜索标题关键词"),
-    sort_by: str = Query("created_at", description="排序字段: created_at/title/duration"),
+    sort_by: str = Query("created_at", description="排序字段: created_at/published_at/collected_at/title/duration"),
     sort_order: str = Query("desc", description="排序方向: asc/desc"),
     db: Session = Depends(get_db),
 ):
@@ -108,6 +115,15 @@ async def list_downloads(
     # 状态筛选（在 DB 层过滤）
     if status_filter:
         query = query.filter(PipelineStep.status == status_filter)
+
+    # 来源筛选（在 DB 层通过 join 过滤）
+    if source_id:
+        query = (
+            query
+            .join(PipelineExecution, PipelineStep.pipeline_id == PipelineExecution.id)
+            .join(ContentItem, PipelineExecution.content_id == ContentItem.id)
+            .filter(ContentItem.source_id == source_id)
+        )
 
     steps = query.all()
 
@@ -125,6 +141,8 @@ async def list_downloads(
                     "platform": output.get("platform", ""),
                     "file_path": output.get("file_path", ""),
                     "has_thumbnail": bool(output.get("thumbnail_path")),
+                    "width": output.get("width"),
+                    "height": output.get("height"),
                 }
             except (json.JSONDecodeError, TypeError):
                 pass
@@ -145,18 +163,25 @@ async def list_downloads(
         if search and search.lower() not in (video_info.get("title") or "").lower():
             continue
 
+        source = content.source if content else None
         data.append({
             "id": step.id,
             "pipeline_id": step.pipeline_id,
             "content_id": content_id,
+            "source_id": content.source_id if content else None,
+            "source_name": source.name if source else None,
             "status": step.status,
             "step_config": step.step_config,
             "error_message": step.error_message,
             "started_at": step.started_at.isoformat() if step.started_at else None,
             "completed_at": step.completed_at.isoformat() if step.completed_at else None,
             "created_at": step.created_at.isoformat() if step.created_at else None,
+            "published_at": content.published_at.isoformat() if content and content.published_at else None,
+            "collected_at": content.collected_at.isoformat() if content and content.collected_at else None,
             "video_info": video_info,
             "content_url": content.url if content else None,
+            "playback_position": content.playback_position if content else 0,
+            "last_played_at": content.last_played_at.isoformat() if content and content.last_played_at else None,
         })
 
     # 排序
@@ -165,6 +190,10 @@ async def list_downloads(
             return (item.get("video_info") or {}).get("title") or ""
         if sort_by == "duration":
             return (item.get("video_info") or {}).get("duration") or 0
+        if sort_by == "published_at":
+            return item.get("published_at") or ""
+        if sort_by == "collected_at":
+            return item.get("collected_at") or ""
         return item.get("created_at") or ""
 
     data.sort(key=sort_key, reverse=(sort_order == "desc"))
@@ -183,6 +212,63 @@ async def list_downloads(
         "platforms": sorted(platforms_set),
         "message": "ok",
     }
+
+
+@router.put("/{content_id}/progress")
+async def save_playback_progress(
+    content_id: str,
+    body: PlaybackProgressBody,
+    db: Session = Depends(get_db),
+):
+    """保存视频播放进度"""
+    from datetime import datetime, timezone
+
+    content = db.get(ContentItem, content_id)
+    if not content:
+        return error_response(404, "Content not found")
+
+    content.playback_position = max(0, body.position)
+    content.last_played_at = datetime.now(timezone.utc)
+    db.commit()
+
+    return {"code": 0, "data": {"playback_position": content.playback_position}, "message": "ok"}
+
+
+@router.delete("/{content_id}")
+async def delete_video(content_id: str, db: Session = Depends(get_db)):
+    """删除视频：级联删除 pipeline 记录 + 磁盘文件"""
+    content = db.get(ContentItem, content_id)
+    if not content:
+        return error_response(404, "视频不存在")
+
+    # 级联删除: steps → executions → content
+    execution_ids = [
+        eid for (eid,) in db.query(PipelineExecution.id)
+        .filter(PipelineExecution.content_id == content_id)
+        .all()
+    ]
+    if execution_ids:
+        db.query(PipelineStep).filter(
+            PipelineStep.pipeline_id.in_(execution_ids)
+        ).delete(synchronize_session=False)
+        db.query(PipelineExecution).filter(
+            PipelineExecution.id.in_(execution_ids)
+        ).delete(synchronize_session=False)
+
+    db.query(ContentItem).filter(ContentItem.id == content_id).delete(synchronize_session=False)
+    db.commit()
+
+    # 清理磁盘文件
+    media_dir = Path(settings.MEDIA_DIR) / content_id
+    if media_dir.is_dir():
+        shutil.rmtree(media_dir, ignore_errors=True)
+
+    audio_dir = Path(settings.MEDIA_DIR) / "audio" / content_id
+    if audio_dir.is_dir():
+        shutil.rmtree(audio_dir, ignore_errors=True)
+
+    logger.info(f"Deleted video content_id={content_id} ({len(execution_ids)} executions)")
+    return {"code": 0, "data": {"deleted": 1}, "message": "ok"}
 
 
 @router.get("/{content_id}/thumbnail")

@@ -1,19 +1,35 @@
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { getContent, analyzeContent, toggleFavorite } from '@/api/content'
 import MarkdownIt from 'markdown-it'
+import DOMPurify from 'dompurify'
 import dayjs from 'dayjs'
 
 const props = defineProps({
   visible: Boolean,
   contentId: String,
+  hasPrev: { type: Boolean, default: false },
+  hasNext: { type: Boolean, default: false },
+  currentIndex: { type: Number, default: -1 },
+  totalCount: { type: Number, default: 0 },
 })
 
-const emit = defineEmits(['close', 'favorite', 'note'])
+const emit = defineEmits(['close', 'favorite', 'note', 'prev', 'next'])
 
 const content = ref(null)
 const loading = ref(false)
 const analyzing = ref(false)
+const transitioning = ref(false)
+const videoRef = ref(null)
+const videoError = ref(false)
+
+// DOMPurify: 所有链接强制新窗口打开
+DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+  if (node.tagName === 'A') {
+    node.setAttribute('target', '_blank')
+    node.setAttribute('rel', 'noopener noreferrer')
+  }
+})
 
 // 初始化 Markdown 解析器
 const md = new MarkdownIt({
@@ -22,17 +38,52 @@ const md = new MarkdownIt({
   typographer: true,
 })
 
+// 键盘导航
+function onKeydown(e) {
+  if (e.key === 'ArrowLeft' && props.hasPrev) {
+    e.preventDefault()
+    emit('prev')
+  } else if (e.key === 'ArrowRight' && props.hasNext) {
+    e.preventDefault()
+    emit('next')
+  }
+}
+
+watch(() => props.visible, (val) => {
+  if (val) {
+    document.addEventListener('keydown', onKeydown)
+  } else {
+    document.removeEventListener('keydown', onKeydown)
+  }
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('keydown', onKeydown)
+})
+
 // 监听 contentId 变化，加载数据
 watch(() => props.contentId, async (newId) => {
   if (newId && props.visible) {
+    transitioning.value = true
     await loadContent()
+    transitioning.value = false
   }
 }, { immediate: true })
+
+// 弹窗打开时始终重新加载（修复切换 tab 后 contentId 未变的情况）
+watch(() => props.visible, async (val) => {
+  if (val && props.contentId) {
+    transitioning.value = true
+    await loadContent()
+    transitioning.value = false
+  }
+})
 
 async function loadContent() {
   if (!props.contentId) return
 
   loading.value = true
+  videoError.value = false
   try {
     const res = await getContent(props.contentId)
     if (res.code === 0) {
@@ -98,6 +149,50 @@ const renderedContent = computed(() => {
   return `<pre class="whitespace-pre-wrap">${text}</pre>`
 })
 
+// 从 raw_data 提取 RSS 原文 HTML 并 sanitize
+const renderedRawContent = computed(() => {
+  if (!content.value?.raw_data) return ''
+
+  try {
+    const raw = typeof content.value.raw_data === 'string'
+      ? JSON.parse(content.value.raw_data)
+      : content.value.raw_data
+    if (!raw || typeof raw !== 'object') return ''
+
+    // 优先 content[0].value（完整 HTML），其次 summary
+    let html = ''
+    if (Array.isArray(raw.content) && raw.content.length > 0) {
+      const first = raw.content[0]
+      html = typeof first === 'object' ? (first.value || '') : String(first)
+    }
+    if (!html) {
+      html = raw.summary || raw.description || ''
+    }
+
+    if (!html.trim()) return ''
+
+    // DOMPurify sanitize — 只允许安全标签
+    return DOMPurify.sanitize(html, {
+      ALLOWED_TAGS: [
+        'p', 'br', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+        'a', 'img', 'ul', 'ol', 'li', 'blockquote', 'pre', 'code',
+        'em', 'strong', 'b', 'i', 'u', 's', 'del', 'sub', 'sup', 'hr',
+        'table', 'thead', 'tbody', 'tr', 'td', 'th', 'caption',
+        'figure', 'figcaption', 'video', 'source', 'audio',
+        'div', 'span',
+      ],
+      ALLOWED_ATTR: ['href', 'src', 'alt', 'title', 'width', 'height', 'target', 'rel', 'class'],
+      ADD_ATTR: ['target'],
+      FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form', 'input', 'textarea', 'select'],
+    })
+  } catch {
+    return ''
+  }
+})
+
+// raw_data 中是否有可渲染的原文（用于控制显示逻辑）
+const hasRawContent = computed(() => renderedRawContent.value.length > 0)
+
 async function handleAnalyze() {
   if (!props.contentId || analyzing.value) return
   analyzing.value = true
@@ -118,7 +213,7 @@ async function handleFavorite() {
 }
 
 function formatTime(t) {
-  return t ? dayjs(t).format('YYYY-MM-DD HH:mm:ss') : '-'
+  return t ? dayjs.utc(t).local().format('YYYY-MM-DD HH:mm:ss') : '-'
 }
 
 const statusLabels = {
@@ -153,18 +248,46 @@ const statusStyles = {
       <div class="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col">
         <!-- Header -->
         <div class="flex items-start justify-between p-6 border-b border-slate-100">
-          <div class="flex-1 min-w-0 pr-4">
-            <h2 class="text-xl font-bold text-slate-900 mb-2">{{ content?.title || '内容详情' }}</h2>
-            <div class="flex items-center gap-3 text-sm text-slate-400">
-              <span v-if="content?.author">{{ content.author }}</span>
-              <span>{{ formatTime(content?.created_at) }}</span>
-              <span
-                v-if="content?.status"
-                class="inline-flex px-2 py-0.5 text-xs font-medium rounded-lg"
-                :class="statusStyles[content.status] || 'bg-slate-100 text-slate-600'"
+          <div class="flex items-start gap-3 flex-1 min-w-0">
+            <!-- 上下篇导航按钮 -->
+            <div class="flex items-center gap-1 flex-shrink-0 mt-0.5">
+              <button
+                :disabled="!hasPrev"
+                class="p-2 rounded-lg transition-colors"
+                :class="hasPrev ? 'text-slate-400 hover:text-slate-600 hover:bg-slate-50' : 'opacity-30 cursor-not-allowed pointer-events-none text-slate-300'"
+                title="上一篇 (←)"
+                @click="emit('prev')"
               >
-                {{ statusLabels[content.status] || content.status }}
-              </span>
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+                </svg>
+              </button>
+              <button
+                :disabled="!hasNext"
+                class="p-2 rounded-lg transition-colors"
+                :class="hasNext ? 'text-slate-400 hover:text-slate-600 hover:bg-slate-50' : 'opacity-30 cursor-not-allowed pointer-events-none text-slate-300'"
+                title="下一篇 (→)"
+                @click="emit('next')"
+              >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+                </svg>
+              </button>
+            </div>
+
+            <div class="flex-1 min-w-0 pr-4">
+              <h2 class="text-xl font-bold text-slate-900 mb-2">{{ content?.title || '内容详情' }}</h2>
+              <div class="flex items-center gap-3 text-sm text-slate-400">
+                <span v-if="content?.author">{{ content.author }}</span>
+                <span>{{ formatTime(content?.created_at) }}</span>
+                <span
+                  v-if="content?.status"
+                  class="inline-flex px-2 py-0.5 text-xs font-medium rounded-lg"
+                  :class="statusStyles[content.status] || 'bg-slate-100 text-slate-600'"
+                >
+                  {{ statusLabels[content.status] || content.status }}
+                </span>
+              </div>
             </div>
           </div>
           <button
@@ -186,13 +309,37 @@ const statusStyles = {
             </svg>
           </div>
 
-          <div v-else-if="content" class="space-y-6">
+          <div
+            v-else-if="content"
+            class="space-y-6 transition-opacity duration-150"
+            :class="transitioning ? 'opacity-0' : 'opacity-100'"
+          >
             <!-- 原始链接 -->
             <div v-if="content.url" class="text-sm">
               <span class="font-medium text-slate-600">原始链接: </span>
               <a :href="content.url" target="_blank" class="text-indigo-600 hover:underline">
                 {{ content.url }}
               </a>
+            </div>
+
+            <!-- 视频播放器 -->
+            <div v-if="content.media_type === 'video'" class="bg-black rounded-xl overflow-hidden">
+              <video
+                ref="videoRef"
+                controls
+                preload="metadata"
+                class="w-full max-h-[60vh]"
+                :poster="`/api/video/${content.id}/thumbnail`"
+                @error="videoError = true"
+              >
+                <source :src="`/api/video/${content.id}/stream`" type="video/mp4" />
+              </video>
+              <div v-if="videoError" class="flex items-center justify-center py-8 text-slate-400 text-sm bg-slate-900">
+                <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+                </svg>
+                视频文件未找到
+              </div>
             </div>
 
             <!-- AI 分析结果 -->
@@ -212,7 +359,43 @@ const statusStyles = {
               <div class="prose prose-sm max-w-none markdown-content text-slate-700" v-html="renderedContent"></div>
             </div>
 
-            <!-- 原始数据 -->
+            <!-- 原文内容（从 raw_data 提取的 RSS HTML） -->
+            <component
+              :is="content.analysis_result || content.processed_content ? 'details' : 'div'"
+              v-if="hasRawContent"
+              class="group"
+              :open="!content.analysis_result && !content.processed_content ? true : undefined"
+            >
+              <summary
+                v-if="content.analysis_result || content.processed_content"
+                class="cursor-pointer text-sm font-medium text-slate-600 hover:text-slate-900 select-none flex items-center gap-1.5"
+              >
+                <svg class="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+                </svg>
+                原文内容
+                <svg class="w-4 h-4 transition-transform group-open:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                </svg>
+              </summary>
+              <div
+                :class="content.analysis_result || content.processed_content ? 'mt-4' : ''"
+                class="bg-white rounded-xl border border-slate-200 p-6"
+              >
+                <h3
+                  v-if="!content.analysis_result && !content.processed_content"
+                  class="text-base font-semibold text-slate-900 mb-4 flex items-center gap-2"
+                >
+                  <svg class="w-5 h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+                  </svg>
+                  原文内容
+                </h3>
+                <div class="prose prose-sm max-w-none raw-content text-slate-700" v-html="renderedRawContent"></div>
+              </div>
+            </component>
+
+            <!-- 原始数据 (JSON) -->
             <details v-if="content.raw_data" class="group">
               <summary class="cursor-pointer text-sm font-medium text-slate-600 hover:text-slate-900 select-none">
                 查看原始数据
@@ -245,6 +428,12 @@ const statusStyles = {
               {{ content.is_favorited ? '取消收藏' : '收藏' }}
             </button>
           </div>
+
+          <!-- 位置指示器 -->
+          <span v-if="totalCount > 0" class="text-xs text-slate-400">
+            第 {{ currentIndex + 1 }} / {{ totalCount }} 篇
+          </span>
+
           <button
             @click="emit('close')"
             class="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 rounded-lg transition-colors"
@@ -333,5 +522,82 @@ const statusStyles = {
 .markdown-content :deep(strong) {
   font-weight: 600;
   color: #1e293b;
+}
+
+/* RSS 原文内容样式 */
+.raw-content :deep(p) {
+  margin-bottom: 1em;
+  line-height: 1.7;
+}
+
+.raw-content :deep(h1),
+.raw-content :deep(h2),
+.raw-content :deep(h3),
+.raw-content :deep(h4) {
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.raw-content :deep(a) {
+  color: #6366f1;
+  text-decoration: underline;
+}
+
+.raw-content :deep(a:hover) {
+  color: #4f46e5;
+}
+
+.raw-content :deep(img) {
+  max-width: 100%;
+  height: auto;
+  border-radius: 0.5em;
+  margin: 1em 0;
+}
+
+.raw-content :deep(ul),
+.raw-content :deep(ol) {
+  margin-bottom: 1em;
+  padding-left: 1.5em;
+}
+
+.raw-content :deep(li) {
+  margin-bottom: 0.5em;
+}
+
+.raw-content :deep(blockquote) {
+  border-left: 4px solid #e2e8f0;
+  padding-left: 1em;
+  margin-left: 0;
+  color: #64748b;
+  font-style: italic;
+}
+
+.raw-content :deep(pre) {
+  background: #1e293b;
+  color: #e2e8f0;
+  padding: 1em;
+  border-radius: 0.5em;
+  overflow-x: auto;
+  margin-bottom: 1em;
+}
+
+.raw-content :deep(table) {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 1em;
+}
+
+.raw-content :deep(th),
+.raw-content :deep(td) {
+  border: 1px solid #e2e8f0;
+  padding: 0.5em 0.75em;
+  text-align: left;
+}
+
+.raw-content :deep(th) {
+  background: #f8fafc;
+  font-weight: 600;
 }
 </style>

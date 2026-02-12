@@ -3,7 +3,7 @@ import { ref, onMounted, computed } from 'vue'
 import dayjs from 'dayjs'
 import { useContentStore } from '@/stores/content'
 import { listSources } from '@/api/sources'
-import { analyzeContent } from '@/api/content'
+import { analyzeContent, incrementView } from '@/api/content'
 import ContentDetailModal from '@/components/content-detail-modal.vue'
 import ConfirmDialog from '@/components/confirm-dialog.vue'
 
@@ -15,6 +15,10 @@ const filterStatus = ref('')
 const filterMediaType = ref('')
 const filterSourceId = ref('')
 const sources = ref([])
+
+// 排序
+const sortBy = ref('collected_at')
+const sortOrder = ref('desc')
 
 // 详情弹窗
 const showDetail = ref(false)
@@ -47,12 +51,26 @@ const mediaLabels = {
 const totalPages = computed(() => Math.max(1, Math.ceil(store.total / store.pageSize)))
 
 function fetchWithFilters() {
-  const params = {}
+  const params = {
+    sort_by: sortBy.value,
+    sort_order: sortOrder.value,
+  }
   if (searchQuery.value) params.q = searchQuery.value
   if (filterStatus.value) params.status = filterStatus.value
   if (filterMediaType.value) params.media_type = filterMediaType.value
   if (filterSourceId.value) params.source_id = filterSourceId.value
   store.fetchContent(params)
+}
+
+function toggleSort(field) {
+  if (sortBy.value === field) {
+    sortOrder.value = sortOrder.value === 'desc' ? 'asc' : 'desc'
+  } else {
+    sortBy.value = field
+    sortOrder.value = 'desc'
+  }
+  store.currentPage = 1
+  fetchWithFilters()
 }
 
 onMounted(async () => {
@@ -82,6 +100,7 @@ function goToPage(page) {
 function openDetail(item) {
   detailContentId.value = item.id
   showDetail.value = true
+  incrementView(item.id).catch(() => {})
 }
 
 const analyzingIds = ref(new Set())
@@ -118,6 +137,19 @@ function toggleSelectAll() {
   }
 }
 
+const batchAnalyzing = ref(false)
+
+async function handleBatchAnalyze() {
+  batchAnalyzing.value = true
+  try {
+    await Promise.all(selectedIds.value.map(id => analyzeContent(id)))
+    selectedIds.value = []
+    fetchWithFilters()
+  } finally {
+    batchAnalyzing.value = false
+  }
+}
+
 async function handleBatchDelete() {
   showBatchDeleteDialog.value = false
   await store.batchDelete(selectedIds.value)
@@ -125,7 +157,7 @@ async function handleBatchDelete() {
 }
 
 function formatTime(t) {
-  return t ? dayjs(t).format('YYYY-MM-DD HH:mm') : '-'
+  return t ? dayjs.utc(t).local().format('YYYY-MM-DD HH:mm') : '-'
 }
 
 const inputClass = 'px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-sm text-slate-700 placeholder-slate-300 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 outline-none transition-all duration-200'
@@ -139,18 +171,31 @@ const selectClass = 'px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl t
         <h2 class="text-xl font-bold text-slate-900 tracking-tight">内容库</h2>
         <p class="text-sm text-slate-400 mt-0.5">管理所有采集到的内容数据</p>
       </div>
-      <button
-        v-if="selectedIds.length > 0"
-        class="px-4 py-2.5 text-sm font-medium text-white bg-rose-600 rounded-xl hover:bg-rose-700 active:bg-rose-800 shadow-sm shadow-rose-200 transition-all duration-200"
-        @click="showBatchDeleteDialog = true"
-      >
-        <span class="flex items-center gap-1.5">
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
-          </svg>
-          删除选中 ({{ selectedIds.length }})
-        </span>
-      </button>
+      <div v-if="selectedIds.length > 0" class="flex items-center gap-2">
+        <button
+          class="px-4 py-2.5 text-sm font-medium text-white bg-indigo-600 rounded-xl hover:bg-indigo-700 active:bg-indigo-800 shadow-sm shadow-indigo-200 transition-all duration-200 disabled:opacity-50"
+          :disabled="batchAnalyzing"
+          @click="handleBatchAnalyze"
+        >
+          <span class="flex items-center gap-1.5">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456z" />
+            </svg>
+            {{ batchAnalyzing ? '分析中...' : `分析选中 (${selectedIds.length})` }}
+          </span>
+        </button>
+        <button
+          class="px-4 py-2.5 text-sm font-medium text-white bg-rose-600 rounded-xl hover:bg-rose-700 active:bg-rose-800 shadow-sm shadow-rose-200 transition-all duration-200"
+          @click="showBatchDeleteDialog = true"
+        >
+          <span class="flex items-center gap-1.5">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+            </svg>
+            删除选中 ({{ selectedIds.length }})
+          </span>
+        </button>
+      </div>
     </div>
 
     <!-- 筛选 -->
@@ -178,6 +223,24 @@ const selectClass = 'px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl t
       <select v-model="filterMediaType" :class="selectClass" @change="handleFilterChange">
         <option value="">全部类型</option>
         <option v-for="(label, value) in mediaLabels" :key="value" :value="value">{{ label }}</option>
+      </select>
+      <select
+        :value="`${sortBy}:${sortOrder}`"
+        :class="selectClass"
+        @change="e => { const [f, o] = e.target.value.split(':'); sortBy = f; sortOrder = o; store.currentPage = 1; fetchWithFilters() }"
+      >
+        <option value="collected_at:desc">采集时间 ↓</option>
+        <option value="collected_at:asc">采集时间 ↑</option>
+        <option value="published_at:desc">发布时间 ↓</option>
+        <option value="published_at:asc">发布时间 ↑</option>
+        <option value="updated_at:desc">更新时间 ↓</option>
+        <option value="updated_at:asc">更新时间 ↑</option>
+        <option value="last_viewed_at:desc">最近浏览</option>
+        <option value="last_viewed_at:asc">最早浏览</option>
+        <option value="view_count:desc">浏览最多</option>
+        <option value="view_count:asc">浏览最少</option>
+        <option value="title:asc">标题 A-Z</option>
+        <option value="title:desc">标题 Z-A</option>
       </select>
       <button
         class="px-4 py-2.5 text-sm font-medium text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-all duration-200"
@@ -214,11 +277,18 @@ const selectClass = 'px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl t
               <th class="px-6 py-3.5 text-left w-8">
                 <input type="checkbox" class="h-4 w-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500" :checked="selectedIds.length === store.items.length && store.items.length > 0" @change="toggleSelectAll" />
               </th>
-              <th class="px-6 py-3.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">标题</th>
+              <th class="px-6 py-3.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer select-none hover:text-slate-700 transition-colors" @click="toggleSort('title')">
+                <span class="inline-flex items-center gap-1">标题<span v-if="sortBy === 'title'" class="text-indigo-500">{{ sortOrder === 'asc' ? '↑' : '↓' }}</span></span>
+              </th>
               <th class="px-6 py-3.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">来源</th>
               <th class="px-6 py-3.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">状态</th>
               <th class="px-6 py-3.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">类型</th>
-              <th class="px-6 py-3.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">采集时间</th>
+              <th class="px-6 py-3.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer select-none hover:text-slate-700 transition-colors" @click="toggleSort('view_count')">
+                <span class="inline-flex items-center gap-1">浏览<span v-if="sortBy === 'view_count'" class="text-indigo-500">{{ sortOrder === 'asc' ? '↑' : '↓' }}</span></span>
+              </th>
+              <th class="px-6 py-3.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer select-none hover:text-slate-700 transition-colors" @click="toggleSort('collected_at')">
+                <span class="inline-flex items-center gap-1">采集时间<span v-if="sortBy === 'collected_at'" class="text-indigo-500">{{ sortOrder === 'asc' ? '↑' : '↓' }}</span></span>
+              </th>
               <th class="px-6 py-3.5 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">操作</th>
             </tr>
           </thead>
@@ -244,6 +314,7 @@ const selectClass = 'px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl t
                 </span>
               </td>
               <td class="px-6 py-3.5 text-sm text-slate-500">{{ mediaLabels[item.media_type] || item.media_type }}</td>
+              <td class="px-6 py-3.5 text-sm text-slate-400">{{ item.view_count || 0 }}</td>
               <td class="px-6 py-3.5 text-sm text-slate-400">{{ formatTime(item.collected_at) }}</td>
               <td class="px-6 py-3.5 text-right space-x-1">
                 <button

@@ -7,7 +7,8 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.models.pipeline import PipelineTemplate
+from app.models.content import SourceConfig
+from app.models.pipeline import PipelineTemplate, PipelineExecution
 from app.schemas import PipelineTemplateResponse, PipelineTemplateCreate, PipelineTemplateUpdate, error_response
 from app.services.pipeline.registry import STEP_DEFINITIONS
 
@@ -125,6 +126,16 @@ async def delete_template(template_id: str, db: Session = Depends(get_db)):
 
     if tpl.is_builtin:
         return error_response(400, "内置模板不可删除")
+
+    # 清除引用该模板的数据源绑定
+    db.query(SourceConfig).filter(
+        SourceConfig.pipeline_template_id == template_id,
+    ).update({"pipeline_template_id": None})
+
+    # 清除引用该模板的执行记录 FK（历史记录保留，仅解除 FK）
+    db.query(PipelineExecution).filter(
+        PipelineExecution.template_id == template_id,
+    ).update({"template_id": None})
 
     db.delete(tpl)
     db.commit()

@@ -100,12 +100,13 @@ class GenericAccountCollector(BaseCollector):
                 media_type=source.media_type or MediaType.TEXT.value,
                 published_at=published_at,
             )
-            db.add(item)
             try:
-                db.flush()
+                with db.begin_nested():
+                    db.add(item)
+                    db.flush()
                 new_items.append(item)
             except IntegrityError:
-                db.rollback()
+                pass  # SAVEPOINT 已自动回滚，外层事务不受影响
 
         if new_items:
             db.commit()

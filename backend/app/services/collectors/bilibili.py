@@ -74,12 +74,13 @@ class BilibiliCollector(BaseCollector):
                 media_type=entry.get("media_type", MediaType.VIDEO.value),
                 published_at=entry.get("published_at"),
             )
-            db.add(item)
             try:
-                db.flush()
+                with db.begin_nested():
+                    db.add(item)
+                    db.flush()
                 new_items.append(item)
             except IntegrityError:
-                db.rollback()
+                pass  # SAVEPOINT 已自动回滚，外层事务不受影响
 
         if new_items:
             db.commit()
@@ -103,7 +104,7 @@ class BilibiliCollector(BaseCollector):
                 modules = item.get("modules", {})
                 author_info = modules.get("module_author", {})
                 dynamic_info = modules.get("module_dynamic", {})
-                major = dynamic_info.get("major", {})
+                major = dynamic_info.get("major") or {}
 
                 # 提取标题和链接
                 title = ""

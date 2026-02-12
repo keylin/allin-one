@@ -3,18 +3,19 @@ import logging
 from typing import Any, Dict, Union
 
 from openai import AsyncOpenAI
-from app.core.config import settings
+from app.core.config import get_llm_config
 from app.models.prompt_template import PromptTemplate, OutputFormat
 
 logger = logging.getLogger(__name__)
 
 class LLMAnalyzer:
     def __init__(self):
+        cfg = get_llm_config()
         self.client = AsyncOpenAI(
-            api_key=settings.LLM_API_KEY,
-            base_url=settings.LLM_BASE_URL
+            api_key=cfg.api_key,
+            base_url=cfg.base_url
         )
-        self.model = settings.LLM_MODEL
+        self.model = cfg.model
 
     async def analyze(self, content: str, prompt_template: PromptTemplate) -> Dict[str, Any]:
         """

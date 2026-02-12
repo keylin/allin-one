@@ -20,6 +20,14 @@ export function updateNote(id, userNote) {
   return api.patch(`/content/${id}/note`, { user_note: userNote })
 }
 
+export function incrementView(id) {
+  return api.post(`/content/${id}/view`)
+}
+
 export function batchDeleteContent(ids) {
   return api.post('/content/batch-delete', { ids })
+}
+
+export function listSourceOptions() {
+  return api.get('/sources/options')
 }

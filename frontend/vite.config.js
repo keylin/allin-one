@@ -17,5 +17,10 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
+    watch: {
+      // macOS Docker bind mount 不传递 inotify 事件，需要轮询
+      usePolling: true,
+      interval: 1000,
+    },
   },
 })

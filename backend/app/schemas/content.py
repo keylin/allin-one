@@ -22,8 +22,15 @@ class ContentResponse(BaseModel):
     collected_at: Optional[datetime] = None
     is_favorited: bool = False
     user_note: Optional[str] = None
+    view_count: int = 0
+    last_viewed_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    # 列表摘要字段（API 层计算，非 ORM 字段）
+    summary_text: Optional[str] = None
+    tags: Optional[list[str]] = None
+    sentiment: Optional[str] = None
+    has_thumbnail: bool = False
 
 
 class ContentDetailResponse(ContentResponse):

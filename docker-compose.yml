@@ -11,8 +11,12 @@ services:
     environment:
       NODE_ENV: production
       CACHE_TYPE: memory
+      CACHE_EXPIRE: 900
+      PUPPETEER_WS_ENDPOINT: ws://browserless:3000
       # 根据需要添加 RSS Hub 配置
       # ALLOW_USER_HOTLINK_TEMPLATE: 'true'
+    depends_on:
+      - browserless
     networks:
       - allin-network
 

@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 
 from openai import AsyncOpenAI
 
-from app.core.config import settings
+from app.core.config import settings, get_llm_config
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +69,8 @@ async def generate_daily_report():
     report_md = "\n".join(report_lines)
 
     # 如果配置了 LLM，生成 AI 摘要
-    if settings.LLM_API_KEY:
+    llm_cfg = get_llm_config()
+    if llm_cfg.api_key:
         try:
             summary = await _generate_ai_summary(report_md, "daily")
             report_md += "\n---\n\n## AI 总结\n\n" + summary
@@ -126,7 +127,8 @@ async def generate_weekly_report():
     report_lines.append("")
     report_md = "\n".join(report_lines)
 
-    if settings.LLM_API_KEY:
+    llm_cfg = get_llm_config()
+    if llm_cfg.api_key:
         try:
             summary = await _generate_ai_summary(report_md, "weekly")
             report_md += "\n---\n\n## AI 总结\n\n" + summary
@@ -141,9 +143,10 @@ async def generate_weekly_report():
 
 async def _generate_ai_summary(report_content: str, report_type: str) -> str:
     """使用 LLM 生成报告摘要"""
+    cfg = get_llm_config()
     client = AsyncOpenAI(
-        api_key=settings.LLM_API_KEY,
-        base_url=settings.LLM_BASE_URL,
+        api_key=cfg.api_key,
+        base_url=cfg.base_url,
     )
 
     prompt_map = {
@@ -152,7 +155,7 @@ async def _generate_ai_summary(report_content: str, report_type: str) -> str:
     }
 
     response = await client.chat.completions.create(
-        model=settings.LLM_MODEL,
+        model=cfg.model,
         messages=[
             {"role": "system", "content": "你是一个信息聚合平台的智能助手，负责生成简洁的报告摘要。"},
             {"role": "user", "content": f"{prompt_map.get(report_type, prompt_map['daily'])}\n\n{report_content[:3000]}"},

@@ -7,3 +7,11 @@ export function downloadVideo(url, sourceId = null) {
 export function listDownloads(params = {}) {
   return api.get('/video/downloads', { params })
 }
+
+export function saveProgress(contentId, position) {
+  return api.put(`/video/${contentId}/progress`, { position })
+}
+
+export function deleteVideo(contentId) {
+  return api.delete(`/video/${contentId}`)
+}

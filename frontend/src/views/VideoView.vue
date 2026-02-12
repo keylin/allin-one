@@ -2,7 +2,10 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import dayjs from 'dayjs'
 import Artplayer from 'artplayer'
-import { downloadVideo, listDownloads } from '@/api/video'
+import { downloadVideo, listDownloads, deleteVideo, saveProgress } from '@/api/video'
+import { incrementView } from '@/api/content'
+import { listSources } from '@/api/sources'
+import ConfirmDialog from '@/components/confirm-dialog.vue'
 import { useToast } from '@/composables/useToast'
 
 const toast = useToast()
@@ -15,22 +18,70 @@ const showDownloadForm = ref(false)
 // --- 数据 & 加载 ---
 const downloads = ref([])
 const loading = ref(true)
+const loadingMore = ref(false)
 const totalCount = ref(0)
 const platforms = ref([])
+const sentinelRef = ref(null)
+let observer = null
 
 // --- 筛选 & 排序 ---
-const filterStatus = ref('')
+const filterStatus = ref('completed')
 const filterPlatform = ref('')
+const filterSourceId = ref('')
 const searchQuery = ref('')
-const sortBy = ref('created_at')
+const sources = ref([])
+const sortBy = ref('published_at')
 const sortOrder = ref('desc')
 const currentPage = ref(1)
 const pageSize = 18
+
+// --- 删除 ---
+const showDeleteDialog = ref(false)
+const deletingVideo = ref(null)
+
+function openDelete(d, event) {
+  event.stopPropagation()
+  deletingVideo.value = d
+  showDeleteDialog.value = true
+}
+
+async function handleDelete() {
+  showDeleteDialog.value = false
+  if (!deletingVideo.value?.content_id) return
+  try {
+    const res = await deleteVideo(deletingVideo.value.content_id)
+    if (res.code === 0) {
+      toast.success('视频已删除')
+      await fetchDownloads()
+    } else {
+      toast.error(res.message || '删除失败')
+    }
+  } catch {
+    toast.error('删除请求失败')
+  }
+}
 
 // --- 播放器 ---
 const selectedVideo = ref(null)
 const playerRef = ref(null)
 let artInstance = null
+
+// --- 横竖屏检测 ---
+const detectedOrientations = ref({})
+
+function isPortrait(d) {
+  const w = d.video_info?.width
+  const h = d.video_info?.height
+  if (w && h) return h > w
+  return detectedOrientations.value[d.id] === 'portrait'
+}
+
+function onThumbnailLoad(event, videoId) {
+  const img = event.target
+  if (img.naturalHeight > img.naturalWidth) {
+    detectedOrientations.value[videoId] = 'portrait'
+  }
+}
 
 const statusOptions = [
   { value: '', label: '全部' },
@@ -41,8 +92,10 @@ const statusOptions = [
 ]
 
 const sortOptions = [
-  { value: 'created_at:desc', label: '最新添加' },
-  { value: 'created_at:asc', label: '最早添加' },
+  { value: 'published_at:desc', label: '最新发布' },
+  { value: 'published_at:asc', label: '最早发布' },
+  { value: 'collected_at:desc', label: '最新抓取' },
+  { value: 'collected_at:asc', label: '最早抓取' },
   { value: 'title:asc', label: '标题 A-Z' },
   { value: 'title:desc', label: '标题 Z-A' },
   { value: 'duration:desc', label: '时长最长' },
@@ -58,7 +111,7 @@ const currentSort = computed({
   },
 })
 
-const totalPages = computed(() => Math.ceil(totalCount.value / pageSize))
+const hasMore = computed(() => downloads.value.length < totalCount.value)
 
 const statusStyles = {
   pending: 'bg-slate-100 text-slate-600',
@@ -76,8 +129,15 @@ const statusLabels = {
 
 // --- 数据获取 ---
 let searchTimer = null
-async function fetchDownloads() {
-  loading.value = true
+async function fetchDownloads(append = false) {
+  if (append) {
+    loadingMore.value = true
+    currentPage.value++
+  } else {
+    loading.value = true
+    currentPage.value = 1
+    downloads.value = []
+  }
   try {
     const params = {
       page: currentPage.value,
@@ -85,36 +145,41 @@ async function fetchDownloads() {
       sort_by: sortBy.value,
       sort_order: sortOrder.value,
     }
-    if (filterStatus.value) params.status = filterStatus.value
+    params.status = filterStatus.value
     if (filterPlatform.value) params.platform = filterPlatform.value
+    if (filterSourceId.value) params.source_id = filterSourceId.value
     if (searchQuery.value.trim()) params.search = searchQuery.value.trim()
 
     const res = await listDownloads(params)
     if (res.code === 0) {
-      downloads.value = res.data
+      if (append) {
+        downloads.value.push(...res.data)
+      } else {
+        downloads.value = res.data
+      }
       totalCount.value = res.total
       if (res.platforms) platforms.value = res.platforms
     }
   } finally {
-    loading.value = false
+    if (append) {
+      loadingMore.value = false
+    } else {
+      loading.value = false
+    }
   }
 }
 
-// 筛选变化时重置页码并刷新
-watch([filterStatus, filterPlatform, sortBy, sortOrder], () => {
-  currentPage.value = 1
+// 筛选变化时重置并刷新
+watch([filterStatus, filterPlatform, filterSourceId, sortBy, sortOrder], () => {
   fetchDownloads()
 })
 
 watch(searchQuery, () => {
   clearTimeout(searchTimer)
   searchTimer = setTimeout(() => {
-    currentPage.value = 1
     fetchDownloads()
   }, 300)
 })
-
-watch(currentPage, () => fetchDownloads())
 
 // --- 下载提交 ---
 async function handleSubmit() {
@@ -145,6 +210,7 @@ async function playVideo(download) {
   }
 
   selectedVideo.value = download
+  document.body.style.overflow = 'hidden'
   await nextTick()
 
   if (artInstance) {
@@ -152,8 +218,14 @@ async function playVideo(download) {
     artInstance = null
   }
 
+  // 记录查看次数（fire-and-forget）
+  if (download.content_id) {
+    incrementView(download.content_id).catch(() => {})
+  }
+
   if (playerRef.value) {
     try {
+      const savedPosition = download.playback_position || 0
       artInstance = new Artplayer({
         container: playerRef.value,
         url: `/api/video/${download.content_id}/stream`,
@@ -169,6 +241,12 @@ async function playVideo(download) {
         aspectRatio: true,
         subtitleOffset: true,
       })
+      // 恢复上次播放进度
+      if (savedPosition > 0) {
+        artInstance.once('ready', () => {
+          artInstance.currentTime = savedPosition
+        })
+      }
     } catch {
       toast.error('播放器初始化失败')
     }
@@ -176,7 +254,16 @@ async function playVideo(download) {
 }
 
 function closePlayer() {
+  // 保存播放进度（fire-and-forget）
+  if (artInstance && selectedVideo.value?.content_id) {
+    const position = Math.floor(artInstance.currentTime || 0)
+    if (position > 0) {
+      saveProgress(selectedVideo.value.content_id, position).catch(() => {})
+    }
+  }
+
   selectedVideo.value = null
+  document.body.style.overflow = ''
   if (artInstance) {
     artInstance.destroy()
     artInstance = null
@@ -194,10 +281,33 @@ function formatDuration(seconds) {
 }
 
 function formatTime(t) {
-  return t ? dayjs(t).format('MM-DD HH:mm') : '-'
+  return t ? dayjs.utc(t).local().format('MM-DD HH:mm') : '-'
 }
 
-onMounted(() => fetchDownloads())
+function onKeydown(e) {
+  if (e.key === 'Escape' && selectedVideo.value) closePlayer()
+}
+
+onMounted(async () => {
+  fetchDownloads()
+  try {
+    const res = await listSources({ page_size: 100 })
+    if (res.code === 0) sources.value = res.data.filter(s => s.media_type === 'video')
+  } catch { /* ignore */ }
+  document.addEventListener('keydown', onKeydown)
+  observer = new IntersectionObserver((entries) => {
+    if (entries[0].isIntersecting && hasMore.value && !loadingMore.value) {
+      fetchDownloads(true)
+    }
+  })
+  nextTick(() => {
+    if (sentinelRef.value) observer.observe(sentinelRef.value)
+  })
+})
+
+watch(sentinelRef, (el) => {
+  if (el && observer) observer.observe(el)
+})
 
 onBeforeUnmount(() => {
   if (artInstance) {
@@ -205,6 +315,8 @@ onBeforeUnmount(() => {
     artInstance = null
   }
   clearTimeout(searchTimer)
+  document.removeEventListener('keydown', onKeydown)
+  if (observer) observer.disconnect()
 })
 </script>
 
@@ -261,37 +373,6 @@ onBeforeUnmount(() => {
       </div>
     </Transition>
 
-    <!-- 视频播放器 -->
-    <Transition
-      enter-active-class="transition-all duration-300 ease-out"
-      enter-from-class="opacity-0 scale-95"
-      enter-to-class="opacity-100 scale-100"
-      leave-active-class="transition-all duration-200 ease-in"
-      leave-from-class="opacity-100"
-      leave-to-class="opacity-0 scale-95"
-    >
-      <div v-if="selectedVideo" class="bg-white rounded-2xl border border-slate-200/60 shadow-lg overflow-hidden mb-6">
-        <div class="flex items-center justify-between p-4 border-b border-slate-100">
-          <div class="flex-1 min-w-0">
-            <h3 class="text-base font-semibold text-slate-900 truncate">{{ selectedVideo.video_info?.title || '视频播放' }}</h3>
-            <div class="flex items-center gap-4 mt-1 text-xs text-slate-400">
-              <span v-if="selectedVideo.video_info?.duration">时长: {{ formatDuration(selectedVideo.video_info.duration) }}</span>
-              <span v-if="selectedVideo.video_info?.platform" class="capitalize">{{ selectedVideo.video_info.platform }}</span>
-            </div>
-          </div>
-          <button
-            @click="closePlayer"
-            class="ml-4 p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-lg transition-colors"
-          >
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
-        <div ref="playerRef" class="aspect-video bg-black"></div>
-      </div>
-    </Transition>
-
     <!-- 筛选工具栏 -->
     <div class="bg-white rounded-xl border border-slate-200/60 shadow-sm p-4 mb-6">
       <div class="flex flex-col lg:flex-row lg:items-center gap-4">
@@ -332,6 +413,16 @@ onBeforeUnmount(() => {
           >
             <option value="">全部平台</option>
             <option v-for="p in platforms" :key="p" :value="p" class="capitalize">{{ p }}</option>
+          </select>
+
+          <!-- 来源筛选 -->
+          <select
+            v-if="sources.length > 0"
+            v-model="filterSourceId"
+            class="px-3 py-1.5 text-xs font-medium bg-white border border-slate-200 rounded-lg text-slate-600 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 outline-none transition-all duration-200"
+          >
+            <option value="">全部来源</option>
+            <option v-for="s in sources" :key="s.id" :value="s.id">{{ s.name }}</option>
           </select>
 
           <!-- 排序 -->
@@ -375,7 +466,7 @@ onBeforeUnmount(() => {
 
     <!-- 海报墙 -->
     <div v-else>
-      <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-4">
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4">
         <div
           v-for="d in downloads"
           :key="d.id"
@@ -384,16 +475,18 @@ onBeforeUnmount(() => {
           @click="d.status === 'completed' && playVideo(d)"
         >
           <!-- 封面 -->
-          <div class="aspect-[3/4] bg-gradient-to-br from-slate-100 to-slate-50 relative overflow-hidden">
+          <div class="aspect-video bg-gradient-to-br from-slate-800 to-slate-900 relative overflow-hidden">
             <img
               v-if="d.content_id && d.video_info?.has_thumbnail"
               :src="`/api/video/${d.content_id}/thumbnail`"
-              class="absolute inset-0 w-full h-full object-cover"
+              class="absolute inset-0 w-full h-full"
+              :class="isPortrait(d) ? 'object-contain' : 'object-cover'"
               loading="lazy"
+              @load="onThumbnailLoad($event, d.id)"
               @error="$event.target.style.display='none'"
             />
             <div v-else class="absolute inset-0 flex items-center justify-center">
-              <svg class="w-12 h-12 text-slate-200" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
+              <svg class="w-12 h-12 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
               </svg>
             </div>
@@ -427,13 +520,23 @@ onBeforeUnmount(() => {
               {{ formatDuration(d.video_info.duration) }}
             </span>
 
-            <!-- 平台角标 -->
+            <!-- 平台角标 / 删除按钮 -->
             <span
               v-if="d.video_info?.platform"
-              class="absolute top-2 right-2 px-1.5 py-0.5 text-[10px] font-medium bg-white/80 text-slate-600 rounded capitalize backdrop-blur-sm"
+              class="absolute top-2 right-2 px-1.5 py-0.5 text-[10px] font-medium bg-white/80 text-slate-600 rounded capitalize backdrop-blur-sm group-hover:opacity-0 transition-opacity duration-200"
             >
               {{ d.video_info.platform }}
             </span>
+            <button
+              v-if="d.content_id"
+              class="absolute top-2 right-2 w-7 h-7 flex items-center justify-center bg-black/60 hover:bg-rose-600 text-white rounded-lg opacity-0 group-hover:opacity-100 transition-all duration-200"
+              title="删除视频"
+              @click="openDelete(d, $event)"
+            >
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+            </button>
           </div>
 
           <!-- 标题 & 元信息 -->
@@ -441,9 +544,12 @@ onBeforeUnmount(() => {
             <h4 class="text-xs font-medium text-slate-800 line-clamp-2 leading-relaxed min-h-[2rem]">
               {{ d.video_info?.title || '未知标题' }}
             </h4>
-            <p class="mt-1.5 text-[10px] text-slate-400">
-              {{ formatTime(d.completed_at || d.created_at) }}
-            </p>
+            <div class="mt-1.5 flex items-center gap-2 text-[10px] text-slate-400">
+              <span v-if="d.published_at" :title="'发布: ' + formatTime(d.published_at)">{{ formatTime(d.published_at) }}</span>
+              <span v-if="d.published_at && d.collected_at" class="text-slate-200">|</span>
+              <span v-if="d.collected_at" class="text-slate-300" :title="'抓取: ' + formatTime(d.collected_at)">{{ formatTime(d.collected_at) }}</span>
+              <span v-if="!d.published_at && !d.collected_at">{{ formatTime(d.completed_at || d.created_at) }}</span>
+            </div>
             <p v-if="d.error_message" class="mt-1 text-[10px] text-rose-500 line-clamp-1" :title="d.error_message">
               {{ d.error_message }}
             </p>
@@ -451,28 +557,67 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <!-- 分页 -->
-      <div v-if="totalPages > 1" class="flex items-center justify-center gap-2 mt-8">
-        <button
-          class="px-3 py-1.5 text-sm font-medium rounded-lg border transition-all duration-200 disabled:opacity-40"
-          :class="currentPage > 1 ? 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50' : 'bg-slate-50 border-slate-100 text-slate-300'"
-          :disabled="currentPage <= 1"
-          @click="currentPage--"
-        >
-          上一页
-        </button>
-        <span class="px-3 py-1.5 text-sm text-slate-500">
-          {{ currentPage }} / {{ totalPages }}
-        </span>
-        <button
-          class="px-3 py-1.5 text-sm font-medium rounded-lg border transition-all duration-200 disabled:opacity-40"
-          :class="currentPage < totalPages ? 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50' : 'bg-slate-50 border-slate-100 text-slate-300'"
-          :disabled="currentPage >= totalPages"
-          @click="currentPage++"
-        >
-          下一页
-        </button>
+      <!-- 无限滚动 sentinel -->
+      <div ref="sentinelRef" class="h-1" />
+      <div v-if="loadingMore" class="flex items-center justify-center py-6">
+        <svg class="w-6 h-6 animate-spin text-slate-300" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+        </svg>
+      </div>
+      <div v-else-if="!hasMore && downloads.length > 0" class="text-center py-6 text-sm text-slate-400">
+        已加载全部视频
       </div>
     </div>
+    <ConfirmDialog
+      :visible="showDeleteDialog"
+      title="删除视频"
+      :message="`确定要删除「${deletingVideo?.video_info?.title || '该视频'}」吗？视频文件和关联记录将一并清除。`"
+      confirm-text="删除"
+      :danger="true"
+      @confirm="handleDelete"
+      @cancel="showDeleteDialog = false"
+    />
+
+    <!-- 视频播放器弹层 -->
+    <Teleport to="body">
+      <Transition
+        enter-active-class="transition-all duration-300 ease-out"
+        enter-from-class="opacity-0"
+        enter-to-class="opacity-100"
+        leave-active-class="transition-all duration-200 ease-in"
+        leave-from-class="opacity-100"
+        leave-to-class="opacity-0"
+      >
+        <div
+          v-if="selectedVideo"
+          class="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center"
+          @click.self="closePlayer"
+        >
+          <div class="relative max-w-5xl w-full mx-4">
+            <!-- 标题栏 -->
+            <div class="flex items-center justify-between mb-3">
+              <div class="flex-1 min-w-0">
+                <h3 class="text-base font-semibold text-white truncate">{{ selectedVideo.video_info?.title || '视频播放' }}</h3>
+                <div class="flex items-center gap-4 mt-0.5 text-xs text-white/60">
+                  <span v-if="selectedVideo.video_info?.duration">{{ formatDuration(selectedVideo.video_info.duration) }}</span>
+                  <span v-if="selectedVideo.video_info?.platform" class="capitalize">{{ selectedVideo.video_info.platform }}</span>
+                </div>
+              </div>
+              <button
+                @click="closePlayer"
+                class="ml-4 p-2 text-white/60 hover:text-white hover:bg-white/10 rounded-lg transition-colors"
+              >
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <!-- 播放器 -->
+            <div ref="playerRef" class="aspect-video bg-black rounded-xl overflow-hidden"></div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>

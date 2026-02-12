@@ -3,6 +3,7 @@
 import logging
 from datetime import datetime, timezone
 
+import httpx
 from sqlalchemy.orm import Session
 
 from app.models.content import SourceConfig, ContentItem, CollectionRecord
@@ -77,5 +78,10 @@ async def collect_source(source: SourceConfig, db: Session) -> list[ContentItem]
         record.error_message = str(e)[:500]
         record.completed_at = datetime.now(timezone.utc)
         db.commit()
-        logger.exception(f"[collect] Failed for {source.name}: {e}")
+
+        # 暂时性网络/上游错误只记 WARNING，不打堆栈
+        if isinstance(e, (httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException)):
+            logger.warning(f"[collect] {source.name}: {e}")
+        else:
+            logger.exception(f"[collect] Failed for {source.name}: {e}")
         raise

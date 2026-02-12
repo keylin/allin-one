@@ -71,13 +71,13 @@ class ScraperCollector(BaseCollector):
                     published_at=None,  # 网页抓取通常无时间戳
                 )
 
-                db.add(content_item)
-                db.flush()
+                with db.begin_nested():
+                    db.add(content_item)
+                    db.flush()
                 new_items.append(content_item)
 
             except IntegrityError:
-                db.rollback()
-                # 重复条目，跳过
+                pass  # SAVEPOINT 已自动回滚，外层事务不受影响
             except Exception as e:
                 logger.warning(f"[ScraperCollector] Failed to parse item: {e}")
                 continue

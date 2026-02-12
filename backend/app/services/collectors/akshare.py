@@ -79,12 +79,13 @@ class AkShareCollector(BaseCollector):
                 status=ContentStatus.PENDING.value,
                 media_type=MediaType.TEXT.value,
             )
-            db.add(item)
             try:
-                db.flush()
+                with db.begin_nested():
+                    db.add(item)
+                    db.flush()
                 new_items.append(item)
             except IntegrityError:
-                db.rollback()
+                pass  # SAVEPOINT 已自动回滚，外层事务不受影响
 
         if new_items:
             db.commit()
