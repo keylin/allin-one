@@ -5,6 +5,8 @@ import logging
 import re
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -87,6 +89,9 @@ async def list_content(
     media_type: str | None = Query(None),
     q: str | None = Query(None, description="搜索标题"),
     is_favorited: bool | None = Query(None),
+    is_unread: bool | None = Query(None, description="未读过滤: true=未读, false=已读"),
+    date_from: str | None = Query(None, description="起始日期 YYYY-MM-DD"),
+    date_to: str | None = Query(None, description="结束日期 YYYY-MM-DD"),
     sort_by: str | None = Query(None, description="排序字段: collected_at / published_at / updated_at / title"),
     sort_order: str | None = Query(None, description="排序方向: desc / asc"),
     db: Session = Depends(get_db),
@@ -95,7 +100,11 @@ async def list_content(
     query = db.query(ContentItem)
 
     if source_id:
-        query = query.filter(ContentItem.source_id == source_id)
+        ids = [s.strip() for s in source_id.split(",") if s.strip()]
+        if len(ids) == 1:
+            query = query.filter(ContentItem.source_id == ids[0])
+        elif ids:
+            query = query.filter(ContentItem.source_id.in_(ids))
     if status:
         query = query.filter(ContentItem.status == status)
     if media_type:
@@ -105,6 +114,25 @@ async def list_content(
         query = query.filter(ContentItem.title.ilike(pattern))
     if is_favorited is not None:
         query = query.filter(ContentItem.is_favorited == is_favorited)
+    if is_unread is not None:
+        if is_unread:
+            query = query.filter((ContentItem.view_count == 0) | (ContentItem.view_count.is_(None)))
+        else:
+            query = query.filter(ContentItem.view_count > 0)
+
+    if date_from:
+        try:
+            dt = datetime.fromisoformat(date_from).replace(tzinfo=timezone.utc)
+            query = query.filter(ContentItem.collected_at >= dt)
+        except ValueError:
+            pass
+    if date_to:
+        try:
+            dt = datetime.fromisoformat(date_to).replace(
+                hour=23, minute=59, second=59, tzinfo=timezone.utc)
+            query = query.filter(ContentItem.collected_at <= dt)
+        except ValueError:
+            pass
 
     # 排序: 白名单校验，非法值 fallback collected_at desc
     col = SORT_COLUMNS.get(sort_by, ContentItem.collected_at)
@@ -190,6 +218,56 @@ async def batch_delete(body: ContentBatchDelete, db: Session = Depends(get_db)):
 
     logger.info(f"Batch deleted {deleted} content items ({len(execution_ids)} pipelines)")
     return {"code": 0, "data": {"deleted": deleted}, "message": "ok"}
+
+
+@router.post("/batch-read")
+async def batch_mark_read(body: ContentBatchDelete, db: Session = Depends(get_db)):
+    """批量标记已读"""
+    updated = db.query(ContentItem).filter(
+        ContentItem.id.in_(body.ids),
+        (ContentItem.view_count == 0) | (ContentItem.view_count.is_(None)),
+    ).update({ContentItem.view_count: 1, ContentItem.last_viewed_at: datetime.now(timezone.utc)},
+             synchronize_session=False)
+    db.commit()
+    return {"code": 0, "data": {"updated": updated}, "message": "ok"}
+
+
+@router.post("/batch-favorite")
+async def batch_toggle_favorite(body: ContentBatchDelete, db: Session = Depends(get_db)):
+    """批量收藏"""
+    updated = db.query(ContentItem).filter(
+        ContentItem.id.in_(body.ids)
+    ).update({ContentItem.is_favorited: True, ContentItem.updated_at: datetime.now(timezone.utc)},
+             synchronize_session=False)
+    db.commit()
+    return {"code": 0, "data": {"updated": updated}, "message": "ok"}
+
+
+@router.get("/stats")
+async def content_stats(db: Session = Depends(get_db)):
+    """内容库统计：按状态分组 + 今日新增"""
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    status_rows = (
+        db.query(ContentItem.status, func.count(ContentItem.id))
+        .group_by(ContentItem.status).all()
+    )
+    status_counts = {r[0]: r[1] for r in status_rows}
+    today_count = (
+        db.query(func.count(ContentItem.id))
+        .filter(ContentItem.collected_at >= today_start).scalar()
+    )
+    return {
+        "code": 0,
+        "data": {
+            "total": sum(status_counts.values()),
+            "today": today_count,
+            "pending": status_counts.get("pending", 0),
+            "processing": status_counts.get("processing", 0),
+            "analyzed": status_counts.get("analyzed", 0),
+            "failed": status_counts.get("failed", 0),
+        },
+        "message": "ok",
+    }
 
 
 # ---- 单个内容操作（参数路径必须在字面路径之后） ----
@@ -295,3 +373,104 @@ async def update_note(content_id: str, body: ContentNoteUpdate, db: Session = De
     db.commit()
 
     return {"code": 0, "data": None, "message": "ok"}
+
+
+# ---- AI 对话 ----
+
+class ChatRequest(BaseModel):
+    messages: list[dict]  # [{role: "user", content: "..."}, ...]
+
+
+@router.post("/{content_id}/chat")
+async def chat_with_content(content_id: str, body: ChatRequest, db: Session = Depends(get_db)):
+    """与内容进行 AI 对话（SSE 流式返回）"""
+    item = db.get(ContentItem, content_id)
+    if not item:
+        async def error_stream():
+            yield "data: [ERROR] 内容不存在\n\n"
+            yield "data: [DONE]\n\n"
+        return StreamingResponse(error_stream(), media_type="text/event-stream")
+
+    # 组装上下文
+    context_parts = [f"标题: {item.title or '无标题'}"]
+    source = db.get(SourceConfig, item.source_id) if item.source_id else None
+    if source:
+        context_parts.append(f"来源: {source.name}")
+    if item.author:
+        context_parts.append(f"作者: {item.author}")
+    if item.analysis_result:
+        try:
+            parsed = json.loads(item.analysis_result) if isinstance(item.analysis_result, str) else item.analysis_result
+            if isinstance(parsed, dict):
+                if parsed.get("summary"):
+                    context_parts.append(f"AI 摘要: {parsed['summary']}")
+                if parsed.get("tags"):
+                    context_parts.append(f"标签: {', '.join(parsed['tags']) if isinstance(parsed['tags'], list) else parsed['tags']}")
+            else:
+                context_parts.append(f"分析结果: {str(parsed)[:500]}")
+        except (json.JSONDecodeError, TypeError):
+            context_parts.append(f"分析结果: {str(item.analysis_result)[:500]}")
+    if item.processed_content:
+        context_parts.append(f"正文内容:\n{item.processed_content[:2000]}")
+    elif item.raw_data:
+        try:
+            raw = json.loads(item.raw_data) if isinstance(item.raw_data, str) else item.raw_data
+            if isinstance(raw, dict):
+                text = raw.get("summary") or raw.get("description") or ""
+                if not text and isinstance(raw.get("content"), list) and raw["content"]:
+                    first = raw["content"][0]
+                    text = first.get("value", "") if isinstance(first, dict) else str(first)
+                text = re.sub(r'<[^>]+>', '', str(text)).strip()
+                if text:
+                    context_parts.append(f"正文内容:\n{text[:2000]}")
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    system_message = (
+        "你是一个内容分析助手。用户正在阅读以下内容，请基于这篇内容回答用户的问题。"
+        "回答要准确、简洁，使用中文。如果问题与内容无关，可以礼貌地提示用户。\n\n"
+        "---\n" + "\n".join(context_parts) + "\n---"
+    )
+
+    try:
+        from app.core.config import get_llm_config
+        from openai import AsyncOpenAI
+
+        llm_config = get_llm_config(db)
+        client = AsyncOpenAI(api_key=llm_config.api_key, base_url=llm_config.base_url)
+
+        messages = [{"role": "system", "content": system_message}]
+        for msg in body.messages:
+            if msg.get("role") in ("user", "assistant") and msg.get("content"):
+                messages.append({"role": msg["role"], "content": msg["content"]})
+
+        async def stream_response():
+            try:
+                response = await client.chat.completions.create(
+                    model=llm_config.model,
+                    messages=messages,
+                    stream=True,
+                )
+                async for chunk in response:
+                    if chunk.choices and chunk.choices[0].delta.content:
+                        content = chunk.choices[0].delta.content
+                        yield f"data: {content}\n\n"
+                yield "data: [DONE]\n\n"
+            except Exception as e:
+                logger.exception("Chat stream error")
+                yield f"data: [ERROR] {str(e)}\n\n"
+                yield "data: [DONE]\n\n"
+
+        return StreamingResponse(stream_response(), media_type="text/event-stream")
+
+    except ValueError as e:
+        async def config_error():
+            yield f"data: [ERROR] {str(e)}\n\n"
+            yield "data: [DONE]\n\n"
+        return StreamingResponse(config_error(), media_type="text/event-stream")
+    except Exception as e:
+        logger.exception("Chat init error")
+        async def init_error():
+            yield f"data: [ERROR] 初始化失败: {str(e)}\n\n"
+            yield "data: [DONE]\n\n"
+        return StreamingResponse(init_error(), media_type="text/event-stream")

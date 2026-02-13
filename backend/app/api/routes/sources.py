@@ -1,5 +1,6 @@
 """Sources API - 数据源管理"""
 
+import json
 import logging
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Query, UploadFile, File
@@ -7,10 +8,10 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 import xml.etree.ElementTree as ET
-import httpx
 
 from app.core.database import get_db
 from app.models.content import SourceConfig, ContentItem, CollectionRecord, SourceType
+from app.models.finance import FinanceDataPoint
 from app.models.pipeline import PipelineTemplate, PipelineExecution, PipelineStep
 from app.schemas import (
     SourceCreate, SourceUpdate, SourceResponse, CollectionRecordResponse, error_response,
@@ -19,13 +20,48 @@ from app.schemas import (
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# 按数据源类型推断默认媒体类型
+_SOURCE_TYPE_DEFAULT_MEDIA = {
+    "account.bilibili": "mixed",
+    "api.akshare": "data",
+}
+
+
+def _validate_pipeline_routing(routing_json: str | None, db: Session) -> str | None:
+    """校验 pipeline_routing JSON 中的 template_id，返回错误信息或 None"""
+    if not routing_json:
+        return None
+    try:
+        routing = json.loads(routing_json)
+    except (json.JSONDecodeError, TypeError):
+        return "pipeline_routing 格式错误，需为 JSON 对象"
+    if not isinstance(routing, dict):
+        return "pipeline_routing 需为 JSON 对象"
+    for media_type, template_id in routing.items():
+        if not template_id:
+            continue
+        tpl = db.get(PipelineTemplate, template_id)
+        if not tpl:
+            return f"pipeline_routing 中模板 '{template_id}' (media_type={media_type}) 不存在"
+    return None
+
 
 def _source_to_response(source: SourceConfig, db: Session) -> dict:
-    """将 ORM 对象转为响应 dict，解析 pipeline_template_name"""
+    """将 ORM 对象转为响应 dict，解析 pipeline_template_name 和 routing_names"""
     data = SourceResponse.model_validate(source).model_dump()
     if source.pipeline_template_id:
         tpl = db.get(PipelineTemplate, source.pipeline_template_id)
         data["pipeline_template_name"] = tpl.name if tpl else None
+    if source.pipeline_routing:
+        try:
+            routing = json.loads(source.pipeline_routing)
+            names = {}
+            for mt, tid in routing.items():
+                tpl = db.get(PipelineTemplate, tid)
+                names[mt] = tpl.name if tpl else "未知模板"
+            data["pipeline_routing_names"] = names
+        except (json.JSONDecodeError, TypeError):
+            pass
     return data
 
 
@@ -88,7 +124,17 @@ async def create_source(body: SourceCreate, db: Session = Depends(get_db)):
         if not tpl:
             return error_response(400, f"Pipeline template '{body.pipeline_template_id}' not found")
 
-    source = SourceConfig(**body.model_dump())
+    # 校验 pipeline_routing
+    err = _validate_pipeline_routing(body.pipeline_routing, db)
+    if err:
+        return error_response(400, err)
+
+    # 自动推断 media_type
+    source_data = body.model_dump()
+    if not source_data.get("media_type") or source_data["media_type"] == "text":
+        source_data["media_type"] = _SOURCE_TYPE_DEFAULT_MEDIA.get(body.source_type, "text")
+
+    source = SourceConfig(**source_data)
     db.add(source)
     db.commit()
     db.refresh(source)
@@ -104,70 +150,6 @@ async def list_source_options(db: Session = Depends(get_db)):
         .filter(SourceConfig.is_active == True)\
         .order_by(SourceConfig.name).all()
     return {"code": 0, "data": [{"id": s.id, "name": s.name} for s in sources], "message": "ok"}
-
-
-# ---- B站 QR 登录 ----
-
-@router.post("/bilibili/qrcode/generate")
-async def bilibili_qrcode_generate():
-    """生成B站登录二维码"""
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                "https://passport.bilibili.com/x/passport-login/web/qrcode/generate",
-                headers={"User-Agent": "Mozilla/5.0"},
-            )
-            data = resp.json()
-        if data.get("code") != 0:
-            return {"code": 1, "data": None, "message": f"B站接口错误: {data.get('message', 'unknown')}"}
-        return {"code": 0, "data": data["data"], "message": "ok"}
-    except Exception as e:
-        logger.exception("Failed to generate bilibili qrcode")
-        return {"code": 1, "data": None, "message": f"生成二维码失败: {str(e)}"}
-
-
-@router.get("/bilibili/qrcode/poll")
-async def bilibili_qrcode_poll(qrcode_key: str = Query(...)):
-    """轮询B站二维码扫码状态"""
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                "https://passport.bilibili.com/x/passport-login/web/qrcode/poll",
-                params={"qrcode_key": qrcode_key},
-                headers={"User-Agent": "Mozilla/5.0"},
-                follow_redirects=False,
-            )
-            data = resp.json()
-
-        if data.get("code") != 0:
-            return {"code": 1, "data": None, "message": f"B站接口错误: {data.get('message', 'unknown')}"}
-
-        status_code = data["data"].get("code")
-        if status_code == 86101:
-            return {"code": 0, "data": {"status": "waiting"}, "message": "等待扫码"}
-        elif status_code == 86090:
-            return {"code": 0, "data": {"status": "scanned"}, "message": "已扫码，待确认"}
-        elif status_code == 86038:
-            return {"code": 0, "data": {"status": "expired"}, "message": "二维码已过期"}
-        elif status_code == 0:
-            # 成功 — 从响应 cookies 和 URL 参数中提取凭证
-            cookies = resp.cookies
-            sessdata = cookies.get("SESSDATA", "")
-            bili_jct = cookies.get("bili_jct", "")
-            # 某些情况 cookie 在 url 参数中返回
-            if not sessdata:
-                url_str = data["data"].get("url", "")
-                from urllib.parse import urlparse, parse_qs
-                qs = parse_qs(urlparse(url_str).query)
-                sessdata = qs.get("SESSDATA", [""])[0]
-                bili_jct = qs.get("bili_jct", [""])[0]
-            cookie_str = f"SESSDATA={sessdata}; bili_jct={bili_jct}"
-            return {"code": 0, "data": {"status": "success", "cookie": cookie_str}, "message": "登录成功"}
-        else:
-            return {"code": 0, "data": {"status": "unknown", "raw_code": status_code}, "message": "未知状态"}
-    except Exception as e:
-        logger.exception("Failed to poll bilibili qrcode")
-        return {"code": 1, "data": None, "message": f"轮询失败: {str(e)}"}
 
 
 # ---- OPML 导入导出 ----
@@ -330,6 +312,12 @@ async def update_source(source_id: str, body: SourceUpdate, db: Session = Depend
         if not tpl:
             return error_response(400, f"Pipeline template '{update_data['pipeline_template_id']}' not found")
 
+    # 校验 pipeline_routing
+    if "pipeline_routing" in update_data:
+        err = _validate_pipeline_routing(update_data["pipeline_routing"], db)
+        if err:
+            return error_response(400, err)
+
     for key, value in update_data.items():
         setattr(source, key, value)
 
@@ -382,6 +370,14 @@ async def delete_source(
             ContentItem.source_id == source_id
         ).delete(synchronize_session=False)
 
+    # 清理 CollectionRecord 和 FinanceDataPoint
+    db.query(CollectionRecord).filter(
+        CollectionRecord.source_id == source_id
+    ).delete(synchronize_session=False)
+    db.query(FinanceDataPoint).filter(
+        FinanceDataPoint.source_id == source_id
+    ).delete(synchronize_session=False)
+
     # 同时清理以 source_id 关联的无内容 pipeline_executions
     orphan_exec_ids = [
         eid for (eid,) in db.query(PipelineExecution.id)
@@ -417,6 +413,12 @@ async def trigger_collect(source_id: str, db: Session = Depends(get_db)):
 
     try:
         new_items = await collect_source(source, db)
+
+        # 更新采集时间 (与 scheduled_tasks 保持一致)
+        from datetime import datetime, timezone
+        source.last_collected_at = datetime.now(timezone.utc)
+        source.consecutive_failures = 0
+        db.flush()
 
         # 对新内容触发关联流水线
         orchestrator = PipelineOrchestrator(db)

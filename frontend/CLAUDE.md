@@ -80,10 +80,27 @@ const res = await api.get('/content', {
 | /feed             | FeedView.vue         | 卡片式信息流      |
 | /sources          | SourcesView.vue      | 数据源 CRUD      |
 | /content          | ContentView.vue      | 内容表格管理      |
-| /prompt-templates | TemplatesView.vue    | 提示词模板配置    |
-| /pipelines        | PipelinesView.vue    | 流水线监控        |
+| /pipelines        | PipelinesView.vue    | 流水线（执行记录+模板+提示词） |
 | /video-download   | VideoView.vue        | 视频下载/播放     |
 | /settings         | SettingsView.vue     | 系统设置          |
+
+## URL 状态持久化
+
+列表页的搜索、筛选、排序状态通过 URL query 参数持久化，支持刷新保持和浏览器导航。
+
+```javascript
+// 1. 从 route.query 初始化
+const searchQuery = ref(route.query.q || '')
+
+// 2. 变更时同步到 URL（仅非默认值，保持 URL 简洁）
+function syncQueryParams() {
+  const query = {}
+  if (searchQuery.value) query.q = searchQuery.value
+  router.replace({ query }).catch(() => {})
+}
+```
+
+已实现: ContentView, FeedView, SourcesView
 
 ## 命名规范
 
@@ -98,8 +115,35 @@ const res = await api.get('/content', {
 全屏 Modal 组件遵循此结构（参考 `source-form-modal.vue`、`pipeline-template-form-modal.vue`）：
 - Props: `visible: Boolean`, 资源对象（null=创建，object=编辑）
 - Emits: `submit(data)`, `cancel`
+- 滚动锁定: `useScrollLock(toRef(props, 'visible'))` — 所有 Modal 必须调用
 - 布局: 固定遮罩 (`fixed inset-0`) + backdrop-blur + sticky header + 可滚动内容 + sticky footer
 - 宽度: `max-w-2xl`（常规）或 `max-w-3xl`（复杂表单）
+
+## Composables
+
+`src/composables/` 中的可复用组合函数:
+
+### useScrollLock
+
+所有 Modal/Dialog 组件**必须**使用，防止背景页面滚动。支持嵌套弹窗引用计数。
+
+```javascript
+import { toRef } from 'vue'
+import { useScrollLock } from '@/composables/useScrollLock'
+
+const props = defineProps({ visible: Boolean })
+useScrollLock(toRef(props, 'visible'))
+```
+
+### useToast
+
+全局 Toast 通知:
+
+```javascript
+const { success, error, warning, info } = useToast()
+success('保存成功')
+error('操作失败', { duration: 5000 })
+```
 
 ## Pinia Store 模式
 

@@ -24,7 +24,12 @@ COPY frontend/ ./
 RUN npm run build
 
 # ============================================
-# Stage 2: Backend Runtime
+# Stage 2: Docker CLI (for RSSHub container management)
+# ============================================
+FROM docker:cli AS docker-cli
+
+# ============================================
+# Stage 3: Backend Runtime
 # ============================================
 FROM python:3.11-slim
 
@@ -39,6 +44,10 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
+
+# Docker CLI (for RSSHub container management via docker.sock)
+COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=docker-cli /usr/local/libexec/docker/cli-plugins /usr/local/libexec/docker/cli-plugins
 
 # 配置阿里云 PyPI 镜像源
 RUN pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ && \

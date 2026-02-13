@@ -28,6 +28,75 @@ export function batchDeleteContent(ids) {
   return api.post('/content/batch-delete', { ids })
 }
 
+export function getContentStats() {
+  return api.get('/content/stats')
+}
+
+export function batchMarkRead(ids) {
+  return api.post('/content/batch-read', { ids })
+}
+
+export function batchFavorite(ids) {
+  return api.post('/content/batch-favorite', { ids })
+}
+
 export function listSourceOptions() {
   return api.get('/sources/options')
+}
+
+/**
+ * 与内容进行 AI 对话（SSE 流式）
+ * @returns {AbortController} 用于取消请求
+ */
+export function chatWithContent(contentId, messages, onChunk, onDone, onError) {
+  const controller = new AbortController()
+  const apiKey = localStorage.getItem('api_key')
+
+  fetch(`/api/content/${contentId}/chat`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(apiKey ? { 'X-API-Key': apiKey } : {}),
+    },
+    body: JSON.stringify({ messages }),
+    signal: controller.signal,
+  })
+    .then(async (response) => {
+      if (!response.ok) {
+        onError?.(`请求失败: ${response.status}`)
+        return
+      }
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          const data = line.slice(6)
+          if (data === '[DONE]') {
+            onDone?.()
+            return
+          }
+          if (data.startsWith('[ERROR] ')) {
+            onError?.(data.slice(8))
+            return
+          }
+          onChunk?.(data)
+        }
+      }
+      onDone?.()
+    })
+    .catch((err) => {
+      if (err.name !== 'AbortError') {
+        onError?.(err.message || '网络错误')
+      }
+    })
+
+  return controller
 }

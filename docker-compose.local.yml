@@ -11,6 +11,7 @@ services:
     env_file:
       - ./backend/.env
     environment:
+      TZ: Asia/Shanghai
       NODE_ENV: production
       CACHE_TYPE: memory
       CACHE_EXPIRE: 900
@@ -34,6 +35,7 @@ services:
     ports:
       - "3001:3000"
     environment:
+      TZ: Asia/Shanghai
       MAX_CONCURRENT_SESSIONS: 5
       CONNECTION_TIMEOUT: 60000
       MAX_QUEUE_LENGTH: 10
@@ -58,9 +60,13 @@ services:
       - "8000:8000"
     volumes:
       - ./backend:/app
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./docker-compose.local.yml:/project/docker-compose.yml:ro
+      - ./backend/.env:/project/backend/.env
     env_file:
       - ./backend/.env
     environment:
+      TZ: Asia/Shanghai
       # 覆盖 .env 中的地址，使用 Docker 内部网络
       RSSHUB_URL: http://rsshub:1200
       BROWSERLESS_URL: http://browserless:3000
@@ -87,6 +93,7 @@ services:
       - ./frontend:/app
       - /app/node_modules
     environment:
+      TZ: Asia/Shanghai
       API_BASE_URL: http://backend:8000
     networks:
       - allin-dev
@@ -103,6 +110,7 @@ services:
     env_file:
       - ./backend/.env
     environment:
+      TZ: Asia/Shanghai
       RSSHUB_URL: http://rsshub:1200
       BROWSERLESS_URL: http://browserless:3000
       # macOS Docker bind mount 不传递 inotify 事件，需要轮询

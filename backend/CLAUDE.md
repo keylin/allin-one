@@ -27,6 +27,7 @@ Huey worker 等非 FastAPI 入口必须在使用 ORM 前执行 `import app.model
 - 迁移: 必须通过 `alembic revision --autogenerate`，禁止手写 SQL
 - SQLite WAL 模式在连接时启用（见 `app/core/database.py`）
 - 外键通过 `PRAGMA foreign_keys=ON` 强制执行
+- LLM 配置: 存储在 `system_settings` 表（非环境变量），通过 `get_llm_config()` 读取
 
 ## API 响应格式
 

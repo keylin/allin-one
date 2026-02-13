@@ -3,6 +3,7 @@ import { ref, watch, computed, onMounted } from 'vue'
 import { ChevronUp, ChevronDown, X, Plus } from 'lucide-vue-next'
 import { getStepDefinitions } from '@/api/pipeline-templates'
 import { listPromptTemplates } from '@/api/prompt-templates'
+import { useModelOptions } from '@/composables/useModelOptions'
 
 const props = defineProps({
   visible: Boolean,
@@ -14,6 +15,7 @@ const emit = defineEmits(['submit', 'cancel'])
 const stepDefinitions = ref({})
 const promptTemplates = ref([])
 const showStepPicker = ref(false)
+const { modelOptions, currentLLMModel } = useModelOptions()
 
 const form = ref({ name: '', description: '' })
 const steps = ref([])
@@ -75,9 +77,11 @@ function getConfigProperties(stepType) {
 // Add a step with default config values
 function addStep(stepDef) {
   const config = {}
-  const props = stepDef.config_schema?.properties || {}
-  for (const [key, prop] of Object.entries(props)) {
-    if (prop.default !== undefined) {
+  const cfgProps = stepDef.config_schema?.properties || {}
+  for (const [key, prop] of Object.entries(cfgProps)) {
+    if (key === 'model' && currentLLMModel.value) {
+      config[key] = currentLLMModel.value
+    } else if (prop.default !== undefined) {
       config[key] = prop.default
     } else if (prop.type === 'boolean') {
       config[key] = false
@@ -129,7 +133,7 @@ const labelClass = 'block text-sm font-medium text-slate-700 mb-1.5'
       <!-- Header -->
       <div class="sticky top-0 bg-white border-b border-slate-100 px-6 py-5 rounded-t-2xl z-10 shrink-0">
         <h3 class="text-lg font-semibold text-slate-900 tracking-tight">
-          {{ template ? '编辑流水线模板' : '创建流水线模板' }}
+          {{ template ? '编辑流水线模板' : '新增流水线模板' }}
         </h3>
         <p class="text-xs text-slate-400 mt-0.5">配置处理步骤与参数</p>
       </div>
@@ -258,6 +262,17 @@ const labelClass = 'block text-sm font-medium text-slate-700 mb-1.5'
                     >
                       <option value="">不绑定</option>
                       <option v-for="pt in promptTemplates" :key="pt.id" :value="pt.id">{{ pt.name }}</option>
+                    </select>
+
+                    <!-- model → model preset dropdown -->
+                    <select
+                      v-else-if="propKey === 'model'"
+                      v-model="step.config[propKey]"
+                      :class="selectClass"
+                      class="!py-2 !text-xs"
+                    >
+                      <option value="">系统默认</option>
+                      <option v-for="m in modelOptions" :key="m" :value="m">{{ m }}</option>
                     </select>
 
                     <!-- Default string → text input -->

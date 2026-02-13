@@ -47,15 +47,26 @@ class LLMConfig:
     model: str
 
 
-def get_llm_config() -> LLMConfig:
-    """从数据库 system_settings 表读取 LLM 配置"""
-    from app.core.database import SessionLocal
+def get_llm_config(db=None) -> LLMConfig:
+    """从数据库 system_settings 表读取 LLM 配置
+
+    Args:
+        db: 可选的数据库会话，传入时复用已有连接避免额外开销
+    """
     from app.models.system_setting import SystemSetting
 
-    with SessionLocal() as db:
-        api_key = db.get(SystemSetting, "llm_api_key")
-        base_url = db.get(SystemSetting, "llm_base_url")
-        model = db.get(SystemSetting, "llm_model")
+    def _read(session):
+        api_key = session.get(SystemSetting, "llm_api_key")
+        base_url = session.get(SystemSetting, "llm_base_url")
+        model = session.get(SystemSetting, "llm_model")
+        return api_key, base_url, model
+
+    if db:
+        api_key, base_url, model = _read(db)
+    else:
+        from app.core.database import SessionLocal
+        with SessionLocal() as session:
+            api_key, base_url, model = _read(session)
 
     key = api_key.value if api_key and api_key.value else ""
     if not key:

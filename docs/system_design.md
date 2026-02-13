@@ -99,7 +99,7 @@ system_settings  (独立配置表)
 ```
 
 **核心解耦关系**: `source_configs.pipeline_template_id → pipeline_templates.id`
-数据源通过此外键绑定流水线模版，而非硬编码映射。
+数据源通过此外键绑定流水线模板，而非硬编码映射。
 
 ### 2.2 表结构详细定义
 
@@ -112,12 +112,12 @@ CREATE TABLE source_configs (
     id              TEXT PRIMARY KEY,           -- UUID
     name            TEXT NOT NULL,              -- 源名称 (e.g. "B站-某UP主")
     source_type     TEXT NOT NULL,              -- 来源渠道: rss.hub/rss.standard/web.scraper/api.akshare/...
-    url             TEXT,                       -- 订阅/抓取地址
+    url             TEXT,                       -- 订阅/采集地址
     description     TEXT,
     media_type      TEXT DEFAULT 'text',        -- 产出的媒体类型 (辅助前端筛选)
     schedule_enabled BOOLEAN DEFAULT TRUE,
     schedule_interval INTEGER DEFAULT 3600,
-    pipeline_template_id TEXT,                  -- 绑定的流水线模版 (解耦关键!)
+    pipeline_template_id TEXT,                  -- 绑定的流水线模板 (解耦关键!)
     config_json     TEXT,                       -- 渠道特定配置 (JSON)
     last_collected_at DATETIME,
     consecutive_failures INTEGER DEFAULT 0,
@@ -166,6 +166,10 @@ CREATE TABLE content_items (
     collected_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
     is_favorited    BOOLEAN DEFAULT FALSE,      -- 是否收藏
     user_note       TEXT,                       -- 用户笔记
+    view_count      INTEGER DEFAULT 0,           -- 浏览次数
+    last_viewed_at  DATETIME,                     -- 最后浏览时间
+    playback_position INTEGER DEFAULT 0,          -- 视频播放进度（秒）
+    last_played_at  DATETIME,                     -- 最后播放时间
     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (source_id) REFERENCES source_configs(id),
@@ -209,7 +213,7 @@ CREATE TABLE pipeline_steps (
     pipeline_id     TEXT NOT NULL,
     step_index      INTEGER NOT NULL,
     step_type       TEXT NOT NULL,              -- 原子操作类型 (StepType 枚举)
-    step_config     TEXT,                       -- 操作配置 (JSON, 从模版复制)
+    step_config     TEXT,                       -- 操作配置 (JSON, 从模板复制)
     status          TEXT DEFAULT 'pending',
     is_critical     BOOLEAN DEFAULT FALSE,
     input_data      TEXT,                       -- 输入 (JSON)
@@ -223,7 +227,7 @@ CREATE TABLE pipeline_steps (
 );
 ```
 
-#### pipeline_templates (流水线模版)
+#### pipeline_templates (流水线模板)
 
 ```sql
 CREATE TABLE pipeline_templates (
@@ -231,7 +235,7 @@ CREATE TABLE pipeline_templates (
     name            TEXT NOT NULL UNIQUE,
     description     TEXT,
     steps_config    TEXT NOT NULL,              -- 步骤定义列表 (JSON)
-    is_builtin      BOOLEAN DEFAULT FALSE,     -- 是否内置模版
+    is_builtin      BOOLEAN DEFAULT FALSE,     -- 是否内置模板
     is_active       BOOLEAN DEFAULT TRUE,
     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -248,17 +252,17 @@ CREATE TABLE pipeline_templates (
 ]
 ```
 
-#### prompt_templates (提示词模版)
+#### prompt_templates (提示词模板)
 
 ```sql
 CREATE TABLE prompt_templates (
     id              TEXT PRIMARY KEY,           -- UUID
-    name            TEXT NOT NULL,              -- 模版名称
+    name            TEXT NOT NULL,              -- 模板名称
     template_type   TEXT DEFAULT 'news_analysis', -- TemplateType 枚举
     system_prompt   TEXT,                       -- 系统提示词
     user_prompt     TEXT NOT NULL,              -- 用户提示词 (支持变量插值)
     output_format   TEXT,                       -- 期望输出格式描述
-    is_default      BOOLEAN DEFAULT FALSE,      -- 是否为默认模版
+    is_default      BOOLEAN DEFAULT FALSE,      -- 是否为默认模板
     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -312,7 +316,7 @@ class PipelineOrchestrator:
     """编排器 - 为已存在的 ContentItem 创建流水线执行"""
     
     def get_template_for_source(self, source: SourceConfig) -> PipelineTemplate | None:
-        """获取源绑定的模版, 未绑定返回 None (纯采集场景)"""
+        """获取源绑定的模板, 未绑定返回 None (纯采集场景)"""
         
     def trigger_for_content(self, content: ContentItem, template_override_id=None, trigger=...) -> PipelineExecution | None:
         """为一条已存在的 ContentItem 创建并启动流水线"""
@@ -440,6 +444,9 @@ class ContentEnricher:
 
 ### 5.1 分析器接口
 
+LLM 配置存储在 `system_settings` 表中（键: `llm_api_key`, `llm_base_url`, `llm_model`），
+通过 `app.core.config.get_llm_config()` 读取，支持运行时动态修改无需重启。
+
 ```python
 class LLMAnalyzer:
     def __init__(self, provider: str, api_key: str, base_url: str, model: str):
@@ -447,7 +454,7 @@ class LLMAnalyzer:
         self.model = model
     
     async def analyze(self, content: str, prompt_template: PromptTemplate) -> dict:
-        """使用指定提示词模版分析内容"""
+        """使用指定提示词模板分析内容"""
         system_prompt = prompt_template.system_prompt
         user_prompt = prompt_template.user_prompt.format(content=content)
 
@@ -476,7 +483,7 @@ class LLMAnalyzer:
 ### 5.2 默认提示词配置
 
 ```yaml
-# 新闻分析模版
+# 新闻分析模板
 news_analysis:
   system_prompt: |
     你是一位专业的信息分析师。请对以下内容进行结构化分析，输出 JSON 格式。
@@ -680,6 +687,8 @@ services:
       - DATABASE_URL=sqlite:///data/db/allin.db
       - RSSHUB_URL=http://rsshub:1200
       - BROWSERLESS_URL=http://browserless:3000
+      - API_KEY=                           # API 认证密钥（空=禁用认证）
+      - CORS_ORIGINS=*                     # CORS 允许的来源
     env_file:
       - .env
     depends_on:

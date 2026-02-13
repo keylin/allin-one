@@ -36,10 +36,7 @@ def init_db():
     在生产环境中，请使用 `alembic upgrade head` 来创建和更新表。
     此函数保留仅用于快速开发/测试场景。
     """
-    import app.models.content  # noqa: F401 (SourceConfig, ContentItem, CollectionRecord)
-    import app.models.pipeline  # noqa: F401 (PipelineTemplate, PipelineExecution, PipelineStep)
-    import app.models.prompt_template  # noqa: F401
-    import app.models.system_setting  # noqa: F401
+    import app.models  # noqa: F401 — 确保所有 ORM 模型注册
 
     # 开发环境下的快速初始化（不推荐生产使用）
     # 生产环境应使用: alembic upgrade head

@@ -1,9 +1,11 @@
 <script setup>
-import { ref, computed, watch, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, watchEffect, toRef, onBeforeUnmount } from 'vue'
 import { getContent, analyzeContent, toggleFavorite } from '@/api/content'
+import { useScrollLock } from '@/composables/useScrollLock'
 import MarkdownIt from 'markdown-it'
 import DOMPurify from 'dompurify'
 import dayjs from 'dayjs'
+import { formatTimeFull } from '@/utils/time'
 
 const props = defineProps({
   visible: Boolean,
@@ -15,6 +17,7 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['close', 'favorite', 'note', 'prev', 'next'])
+useScrollLock(toRef(props, 'visible'))
 
 const content = ref(null)
 const loading = ref(false)
@@ -38,27 +41,21 @@ const md = new MarkdownIt({
   typographer: true,
 })
 
-// 键盘导航
-function onKeydown(e) {
-  if (e.key === 'ArrowLeft' && props.hasPrev) {
-    e.preventDefault()
-    emit('prev')
-  } else if (e.key === 'ArrowRight' && props.hasNext) {
-    e.preventDefault()
-    emit('next')
+// 键盘导航 — watchEffect 自动清理，避免事件泄漏
+watchEffect((onCleanup) => {
+  if (props.visible) {
+    const handler = (e) => {
+      if (e.key === 'ArrowLeft' && props.hasPrev) {
+        e.preventDefault()
+        emit('prev')
+      } else if (e.key === 'ArrowRight' && props.hasNext) {
+        e.preventDefault()
+        emit('next')
+      }
+    }
+    document.addEventListener('keydown', handler)
+    onCleanup(() => document.removeEventListener('keydown', handler))
   }
-}
-
-watch(() => props.visible, (val) => {
-  if (val) {
-    document.addEventListener('keydown', onKeydown)
-  } else {
-    document.removeEventListener('keydown', onKeydown)
-  }
-})
-
-onBeforeUnmount(() => {
-  document.removeEventListener('keydown', onKeydown)
 })
 
 // 监听 contentId 变化，加载数据
@@ -213,7 +210,7 @@ async function handleFavorite() {
 }
 
 function formatTime(t) {
-  return t ? dayjs.utc(t).local().format('YYYY-MM-DD HH:mm:ss') : '-'
+  return formatTimeFull(t)
 }
 
 const statusLabels = {
@@ -242,7 +239,7 @@ const statusStyles = {
   >
     <div
       v-if="visible"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4"
       @click.self="emit('close')"
     >
       <div class="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col">
@@ -282,7 +279,7 @@ const statusStyles = {
                 <span>{{ formatTime(content?.created_at) }}</span>
                 <span
                   v-if="content?.status"
-                  class="inline-flex px-2 py-0.5 text-xs font-medium rounded-lg"
+                  class="inline-flex px-2 py-0.5 text-xs font-medium rounded-md"
                   :class="statusStyles[content.status] || 'bg-slate-100 text-slate-600'"
                 >
                   {{ statusLabels[content.status] || content.status }}

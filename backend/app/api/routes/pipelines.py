@@ -243,7 +243,6 @@ async def retry_pipeline(
 ):
     """重试失败的流水线"""
     from app.models.pipeline import StepStatus
-    from app.services.pipeline.orchestrator import PipelineOrchestrator
 
     execution = db.get(PipelineExecution, pipeline_id)
     if not execution:
@@ -273,9 +272,16 @@ async def retry_pipeline(
     execution.status = PipelineStatus.RUNNING.value
     db.commit()
 
-    # 重新启动流水线
-    orchestrator = PipelineOrchestrator(db)
-    orchestrator.advance_pipeline(pipeline_id)
+    # 重新入队第一个 pending 步骤
+    first_pending = db.query(PipelineStep).filter(
+        PipelineStep.pipeline_id == pipeline_id,
+        PipelineStep.status == StepStatus.PENDING.value,
+    ).order_by(PipelineStep.step_index).first()
+    if first_pending:
+        execution.current_step = first_pending.step_index
+        db.commit()
+        from app.tasks.pipeline_tasks import execute_pipeline_step
+        execute_pipeline_step(pipeline_id, first_pending.step_index)
 
     return {
         "code": 0,

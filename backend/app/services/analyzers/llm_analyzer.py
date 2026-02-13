@@ -22,7 +22,7 @@ class LLMAnalyzer:
         执行 LLM 分析
 
         :param content: 需要分析的文本内容
-        :param prompt_template: 提示词模版对象
+        :param prompt_template: 提示词模板对象
         :return: 分析结果字典
         """
         messages = [

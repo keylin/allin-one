@@ -14,7 +14,11 @@ class SourceCreate(BaseModel):
     schedule_enabled: Optional[bool] = True
     schedule_interval: Optional[int] = 3600
     pipeline_template_id: Optional[str] = None
+    pipeline_routing: Optional[str] = None
     config_json: Optional[str] = None
+    credential_id: Optional[str] = None
+    auto_cleanup_enabled: Optional[bool] = False
+    retention_days: Optional[int] = None
 
 
 class SourceUpdate(BaseModel):
@@ -26,8 +30,12 @@ class SourceUpdate(BaseModel):
     schedule_enabled: Optional[bool] = None
     schedule_interval: Optional[int] = None
     pipeline_template_id: Optional[str] = None
+    pipeline_routing: Optional[str] = None
     config_json: Optional[str] = None
+    credential_id: Optional[str] = None
     is_active: Optional[bool] = None
+    auto_cleanup_enabled: Optional[bool] = None
+    retention_days: Optional[int] = None
 
 
 class SourceResponse(BaseModel):
@@ -43,7 +51,12 @@ class SourceResponse(BaseModel):
     schedule_interval: int = 3600
     pipeline_template_id: Optional[str] = None
     pipeline_template_name: Optional[str] = None
+    pipeline_routing: Optional[str] = None
+    pipeline_routing_names: Optional[dict] = None
     config_json: Optional[str] = None
+    credential_id: Optional[str] = None
+    auto_cleanup_enabled: bool = False
+    retention_days: Optional[int] = None
     last_collected_at: Optional[datetime] = None
     consecutive_failures: int = 0
     is_active: bool = True

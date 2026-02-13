@@ -1,4 +1,7 @@
 <script setup>
+import { toRef } from 'vue'
+import { useScrollLock } from '@/composables/useScrollLock'
+
 const props = defineProps({
   visible: Boolean,
   title: { type: String, default: '确认操作' },
@@ -9,6 +12,7 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['confirm', 'cancel'])
+useScrollLock(toRef(props, 'visible'))
 </script>
 
 <template>

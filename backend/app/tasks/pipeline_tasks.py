@@ -24,42 +24,75 @@ logger = logging.getLogger(__name__)
 executor = PipelineExecutor()
 
 
+def _run_async(coro):
+    """Run an async coroutine from sync code.
+
+    Uses asyncio.run() in Huey worker (no running loop).
+    Falls back to a thread pool when called from FastAPI test endpoint
+    (event loop already running).
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    # Already inside an event loop (e.g. FastAPI) — run in a new thread to avoid blocking
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coro).result()
+
+
+async def _llm_chat(messages, response_format=None):
+    """Create LLM client, call chat, close client properly."""
+    from app.services.analyzers.llm_analyzer import LLMAnalyzer
+    analyzer = LLMAnalyzer()
+    try:
+        return await analyzer.client.chat.completions.create(
+            model=analyzer.model,
+            messages=messages,
+            response_format=response_format,
+        )
+    finally:
+        await analyzer.client.close()
+
+
+async def _llm_analyze(text, prompt_tpl):
+    """Create LLM analyzer, run analysis, close client properly."""
+    from app.services.analyzers.llm_analyzer import LLMAnalyzer
+    analyzer = LLMAnalyzer()
+    try:
+        return await analyzer.analyze(text, prompt_tpl)
+    finally:
+        await analyzer.client.close()
+
+
 @huey.task(retries=3, retry_delay=30)
 def execute_pipeline_step(execution_id: str, step_index: int):
-    """通用步骤执行入口 — 根据 step_type 分派"""
-    from app.core.database import SessionLocal
-    from app.models.pipeline import PipelineStep
+    """通用步骤执行入口 — 根据 step_type 分派
 
-    with SessionLocal() as db:
-        step = db.query(PipelineStep).filter(
-            PipelineStep.pipeline_id == execution_id,
-            PipelineStep.step_index == step_index,
-        ).first()
-        if not step:
-            logger.error(f"Step not found: execution={execution_id}, index={step_index}")
-            return
-        step_type = step.step_type
+    使用 prepare_step + finish_step 将 5 次事务合并为 2 次。
+    """
+    try:
+        context = executor.prepare_step(execution_id, step_index)
+    except ValueError as e:
+        logger.error(str(e))
+        return
 
+    step_type = context["step_type"]
     logger.info(f"Step [{step_index}] {step_type} starting (pipeline={execution_id})")
-    executor.mark_step_running(execution_id, step_index)
 
     try:
-        context = executor.get_step_context(execution_id, step_index)
-
         handler = STEP_HANDLERS.get(step_type)
         if not handler:
             raise ValueError(f"Unknown step_type: {step_type}")
 
         result = handler(context)
 
-        executor.complete_step(execution_id, step_index, output_data=result)
+        executor.finish_step(execution_id, step_index, output_data=result)
         logger.info(f"Step [{step_index}] {step_type} completed (pipeline={execution_id})")
-        executor.advance_pipeline(execution_id)
 
     except Exception as e:
         logger.exception(f"Step [{step_index}] {step_type} failed (pipeline={execution_id}): {e}")
-        executor.fail_step(execution_id, step_index, str(e))
-        executor.advance_pipeline(execution_id)
+        executor.finish_step(execution_id, step_index, error=str(e))
 
 
 # ============ 步骤处理函数 ============
@@ -79,7 +112,7 @@ def _handle_enrich_content(context: dict) -> dict:
     from readability import Document
     from bs4 import BeautifulSoup
 
-    text = ""
+    clean_html = ""
     method = "L1_HTTP"
 
     # L1: 尝试普通 HTTP 抓取
@@ -91,46 +124,79 @@ def _handle_enrich_content(context: dict) -> dict:
 
         doc = Document(html)
         readable_html = doc.summary()
-        soup = BeautifulSoup(readable_html, "lxml")
-        text = soup.get_text(separator="\n", strip=True)
 
         # 检查内容是否太短（可能是 JS 渲染页面）
-        if len(text.strip()) < 100:
-            logger.warning(f"[enrich_content] L1 content too short ({len(text)} chars), trying L2")
-            text = ""  # 清空，准备升级到 L2
+        soup = BeautifulSoup(readable_html, "lxml")
+        plain_text = soup.get_text(separator="\n", strip=True)
+        if len(plain_text.strip()) < 100:
+            logger.warning(f"[enrich_content] L1 content too short ({len(plain_text)} chars), trying L2")
+            clean_html = ""  # 清空，准备升级到 L2
+        else:
+            clean_html = _sanitize_html(readable_html)
     except Exception as e:
         logger.warning(f"[enrich_content] L1 failed: {e}, trying L2")
-        text = ""
+        clean_html = ""
 
     # L2: 如果 L1 失败或内容太短，使用 Browserless 渲染
-    if not text:
+    if not clean_html:
         try:
             from app.core.config import settings
-            text = _fetch_with_browserless(url, settings.BROWSERLESS_URL)
+            clean_html = _fetch_with_browserless(url, settings.BROWSERLESS_URL)
             method = "L2_Browserless"
-            logger.info(f"[enrich_content] L2 succeeded, text_length={len(text)}")
+            logger.info(f"[enrich_content] L2 succeeded, html_length={len(clean_html)}")
         except Exception as e:
             logger.error(f"[enrich_content] L2 also failed: {e}")
-            # 如果 L2 也失败，尝试使用 L1 的原始结果（即使很短）
-            if not text:
+            if not clean_html:
                 raise Exception(f"Both L1 and L2 failed for {url}")
 
-    # 更新 content.processed_content
+    # 更新 content.processed_content（存储清理后的 HTML）
     from app.core.database import SessionLocal
     from app.models.content import ContentItem
     with SessionLocal() as db:
         content = db.get(ContentItem, context["content_id"])
         if content:
-            content.processed_content = text
+            content.processed_content = clean_html
             db.commit()
 
-    return {"status": "enriched", "text_length": len(text), "method": method}
+    return {"status": "enriched", "text_length": len(clean_html), "method": method}
+
+
+_SANITIZE_ALLOWED_TAGS = frozenset([
+    'p', 'br', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+    'a', 'img', 'ul', 'ol', 'li', 'blockquote', 'pre', 'code',
+    'em', 'strong', 'b', 'i', 'table', 'thead', 'tbody', 'tr', 'td', 'th',
+    'figure', 'figcaption', 'hr', 'div', 'span', 'sub', 'sup',
+])
+_SANITIZE_ALLOWED_ATTRS = {
+    'a': {'href', 'title'},
+    'img': {'src', 'alt', 'width', 'height'},
+}
+
+
+def _sanitize_html(html: str) -> str:
+    """清理 HTML，只保留安全的内容标签（使用 BeautifulSoup，无需额外依赖）"""
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "lxml")
+
+    for tag in soup.find_all(True):
+        if tag.name not in _SANITIZE_ALLOWED_TAGS:
+            # 用子节点替换不允许的标签（保留文本内容）
+            tag.unwrap()
+        else:
+            # 只保留白名单属性
+            allowed = _SANITIZE_ALLOWED_ATTRS.get(tag.name, set())
+            for attr in list(tag.attrs):
+                if attr not in allowed:
+                    del tag[attr]
+
+    return str(soup)
 
 
 def _fetch_with_browserless(url: str, browserless_url: str, timeout: int = 60) -> str:
-    """使用 Browserless 渲染 JS 页面并提取文本"""
+    """使用 Browserless 渲染 JS 页面并提取清理后的 HTML"""
     import httpx
-    from bs4 import BeautifulSoup
+    from readability import Document
 
     # Browserless API: POST /content with JSON {url}
     endpoint = f"{browserless_url.rstrip('/')}/content"
@@ -144,15 +210,10 @@ def _fetch_with_browserless(url: str, browserless_url: str, timeout: int = 60) -
         resp.raise_for_status()
         html = resp.text
 
-    # 使用 BeautifulSoup 提取文本
-    soup = BeautifulSoup(html, "lxml")
-
-    # 移除 script 和 style 标签
-    for tag in soup(["script", "style", "noscript"]):
-        tag.decompose()
-
-    text = soup.get_text(separator="\n", strip=True)
-    return text
+    # 用 Readability 提取正文，再用白名单清理
+    doc = Document(html)
+    readable_html = doc.summary()
+    return _sanitize_html(readable_html)
 
 
 def _handle_download_video(context: dict) -> dict:
@@ -172,9 +233,9 @@ def _handle_download_video(context: dict) -> dict:
     os.makedirs(output_dir, exist_ok=True)
 
     quality_map = {
-        "360p": "bestvideo[height<=360]+bestaudio/best[height<=360]",
-        "720p": "bestvideo[height<=720]+bestaudio/best[height<=720]",
-        "1080p": "bestvideo[height<=1080]+bestaudio/best[height<=1080]",
+        "360p": "bestvideo[height<=360]+bestaudio/best[height<=360]/best",
+        "720p": "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
+        "1080p": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
         "best": "bestvideo+bestaudio/best",
     }
 
@@ -223,7 +284,7 @@ def _handle_download_video(context: dict) -> dict:
         if content:
             if info.get("title"):
                 content.title = info["title"]
-            if upload_date:
+            if upload_date and not content.published_at:
                 try:
                     content.published_at = datetime.strptime(upload_date, "%Y%m%d").replace(tzinfo=timezone.utc)
                 except ValueError:
@@ -496,11 +557,7 @@ def _handle_translate_content(context: dict) -> dict:
     lang_names = {"zh": "中文", "en": "English", "ja": "日本語"}
     target_name = lang_names.get(target_lang, target_lang)
 
-    from app.services.analyzers.llm_analyzer import LLMAnalyzer
-    analyzer = LLMAnalyzer()
-
-    result = asyncio.run(analyzer.client.chat.completions.create(
-        model=analyzer.model,
+    result = _run_async(_llm_chat(
         messages=[
             {"role": "system", "content": f"你是一位专业翻译。请将以下内容翻译为{target_name}，保持原文格式和语义。只输出翻译结果，不要添加解释。"},
             {"role": "user", "content": text},
@@ -528,7 +585,6 @@ def _handle_analyze_content(context: dict) -> dict:
     from app.core.database import SessionLocal
     from app.models.content import ContentItem
     from app.models.prompt_template import PromptTemplate
-    from app.services.analyzers.llm_analyzer import LLMAnalyzer
 
     with SessionLocal() as db:
         content = db.get(ContentItem, content_id)
@@ -559,14 +615,11 @@ def _handle_analyze_content(context: dict) -> dict:
             prompt_tpl = db.query(PromptTemplate).first()
 
     # 使用 LLMAnalyzer 或 fallback
-    analyzer = LLMAnalyzer()
-
     if prompt_tpl:
-        result = asyncio.run(analyzer.analyze(text, prompt_tpl))
+        result = _run_async(_llm_analyze(text, prompt_tpl))
     else:
         # 内置 fallback prompt
-        result = asyncio.run(analyzer.client.chat.completions.create(
-            model=analyzer.model,
+        result = _run_async(_llm_chat(
             messages=[
                 {"role": "system", "content": "你是一位信息分析助手。请对以下内容进行分析，提取关键信息。返回 JSON 格式，包含 summary（摘要）、key_points（要点列表）、sentiment（情感倾向）字段。"},
                 {"role": "user", "content": text},
@@ -624,7 +677,7 @@ def _handle_publish_content(context: dict) -> dict:
             "source_name": source.name if source else None,
         }
 
-        result = asyncio.run(publish_webhook(payload, webhook_url))
+        result = _run_async(publish_webhook(payload, webhook_url))
         return result
 
     if channel == "email":
@@ -659,7 +712,7 @@ def _handle_publish_content(context: dict) -> dict:
         })
 
         to_emails = [e.strip() for e in notify_email.value.split(",") if e.strip()]
-        result = asyncio.run(publish_email(
+        result = _run_async(publish_email(
             content=email_content,
             smtp_host=smtp_host.value,
             smtp_port=int(smtp_port.value) if smtp_port else 465,
@@ -695,7 +748,7 @@ def _handle_publish_content(context: dict) -> dict:
             "analysis_result": json.loads(content.analysis_result) if content.analysis_result else None,
         })
 
-        result = asyncio.run(publish_dingtalk(
+        result = _run_async(publish_dingtalk(
             content=dingtalk_content,
             webhook_url=dingtalk_url,
         ))

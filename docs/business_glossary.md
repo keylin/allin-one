@@ -8,12 +8,12 @@
 | :--- | :--- | :--- |
 | **数据源 (Source)** | `SourceConfig` | 信息的来源配置。只描述「从哪获取」，如一个 RSSHub 路由、一个 RSS 地址。 |
 | **内容 (Content)** | `ContentItem` | 从数据源采集到的具体条目。包含原始内容→中间内容→最终内容三层。 |
-| **流水线模版 (Template)** | `PipelineTemplate` | 预定义的一组有序原子步骤，定义「怎么处理」。可绑定到任意数据源。 |
+| **流水线模板 (Template)** | `PipelineTemplate` | 预定义的一组有序原子步骤，定义「怎么处理」。可绑定到任意数据源。 |
 | **流水线执行 (Execution)** | `PipelineExecution` | 一次具体的流水线运行实例。 |
 | **步骤 (Step)** | `PipelineStep` | 流水线中的原子操作执行记录。 |
 | **原子操作类型 (StepType)** | `StepType` 枚举 | 步骤的操作类型，如"抓取全文"、"下载视频"、"模型分析"。 |
-| **提示词 (Prompt)** | `PromptTemplate` | 指导 LLM 进行分析的指令模版。 |
-| **抓取记录** | `CollectionRecord` | 每次数据源采集的执行记录，独立于流水线。 |
+| **提示词 (Prompt)** | `PromptTemplate` | 指导 LLM 进行分析的指令模板。 |
+| **采集记录** | `CollectionRecord` | 每次数据源采集的执行记录，独立于流水线。 |
 
 ## 2. 专有名词
 
@@ -86,24 +86,32 @@
 
 | 枚举值 | 描述 |
 | :--- | :--- |
-| `pending` | 等待执行 |
-| `running` | 执行中 |
-| `completed` | 完成 |
+| `pending` | 等待中 |
+| `running` | 运行中 |
+| `completed` | 已完成 |
 | `failed` | 失败 |
-| `paused` | 暂停 |
-| `cancelled` | 取消 |
+| `paused` | 已暂停 |
+| `cancelled` | 已取消 |
 
 ### 3.6 StepStatus (步骤状态)
 
 | 枚举值 | 描述 |
 | :--- | :--- |
-| `pending` | 等待 |
-| `running` | 执行中 |
-| `completed` | 完成 |
+| `pending` | 等待中 |
+| `running` | 运行中 |
+| `completed` | 已完成 |
 | `failed` | 失败 |
-| `skipped` | 跳过 (非关键步骤失败) |
+| `skipped` | 已跳过 (非关键步骤失败) |
 
-### 3.7 TriggerSource (触发来源)
+### 3.7 CollectionRecordStatus (采集记录状态)
+
+| 枚举值 | 描述 |
+| :--- | :--- |
+| `running` | 采集中 |
+| `completed` | 成功 |
+| `failed` | 失败 |
+
+### 3.8 TriggerSource (触发来源)
 
 | 枚举值 | 描述 |
 | :--- | :--- |
@@ -112,7 +120,7 @@
 | `api` | API 调用 |
 | `webhook` | 外部 Webhook |
 
-### 3.8 TemplateType (提示词模版类型)
+### 3.9 TemplateType (提示词模板类型)
 
 | 枚举值 | 描述 |
 | :--- | :--- |
@@ -121,11 +129,11 @@
 | `translation` | 翻译 |
 | `custom` | 自定义 |
 
-## 4. 内置流水线模版
+## 4. 内置流水线模板
 
 定义在 `app/services/pipeline/registry.py`，首次启动写入数据库。
 
-| 模版名称 | 包含步骤 | 适用场景 |
+| 模板名称 | 包含步骤 | 适用场景 |
 | :--- | :--- | :--- |
 | 文章分析 | enrich → analyze → publish | 中文新闻/博客 |
 | 英文文章翻译分析 | enrich → translate → analyze → publish | 英文站点 |
@@ -136,7 +144,39 @@
 
 流水线不含 fetch 步骤。数据抓取由定时器 + Collector 完成, 流水线的输入是已存在的 ContentItem。
 
-## 5. 组合示例 (数据源 + 流水线)
+## 5. 术语使用规范
+
+全系统 (前端 UI、后端注释、文档) 必须遵守以下用词规则，避免同一概念出现多种说法。
+
+### 5.1 模板 (板, 非"版")
+
+统一使用 **"模板"**，禁止使用"模版"。包括流水线模板、提示词模板等所有场景。
+
+### 5.2 采集 vs 抓取
+
+| 术语 | 语义 | 适用场景 |
+| :--- | :--- | :--- |
+| **采集** | Collector 从数据源收集内容的通用动作 | 采集时间、定时采集、最近采集、采集记录、立即采集、采集中 |
+| **抓取** | `enrich_content` 步骤的全文提取、`web.scraper` 的网页爬取 | 抓取全文、网页抓取、抓取方式、抓取级别 |
+
+- `collected_at` 字段统一显示为 **"采集时间"**
+- `enrich_content` 步骤显示名为 **"抓取全文"**
+
+### 5.3 创建操作按钮
+
+| 位置 | 用词 |
+| :--- | :--- |
+| 列表页创建按钮 | **新增** |
+| Modal 标题 (新建) | **新增XXX** (如"新增数据源") |
+| Modal 标题 (编辑) | **编辑XXX** (如"编辑数据源") |
+
+### 5.4 状态标签格式
+
+- 已完成的状态加"已"前缀: 已完成、已暂停、已取消、已跳过、已分析
+- 进行中的状态: 等待中、运行中、处理中、采集中
+- 异常状态: 失败、待处理
+
+## 6. 组合示例 (数据源 + 流水线)
 
 | 使用场景 | 数据源类型 | 数据源配置 | 绑定流水线 |
 | :--- | :--- | :--- | :--- |
@@ -146,4 +186,4 @@
 | 读 36kr 新闻 | `rss_std` | URL: 36kr.com/feed | 文章分析 |
 | 监控政府公告页 | `scraper` | `{"scrape_level": "L2", "selectors": {...}}` | 文章分析 |
 | 跟踪宏观数据 | `akshare` | `{"indicator": "macro_china_cpi"}` | 仅分析 |
-| 纯采集不处理 | `rss_std` | URL: any-feed.xml | (不绑定模版) |
+| 纯采集不处理 | `rss_std` | URL: any-feed.xml | (不绑定模板) |

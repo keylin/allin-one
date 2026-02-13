@@ -15,7 +15,9 @@ from app.core.config import settings
 from app.core.database import Base
 
 # Import all models for autogenerate
+import app.models.credential  # noqa: F401
 import app.models.content  # noqa: F401
+import app.models.finance  # noqa: F401
 import app.models.pipeline  # noqa: F401
 import app.models.prompt_template  # noqa: F401
 import app.models.system_setting  # noqa: F401

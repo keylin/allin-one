@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.auth import APIKeyMiddleware
 from app.core.database import init_db
-from app.api.routes import dashboard, sources, content, pipelines, templates, video, system_settings, prompt_templates
+from app.api.routes import dashboard, sources, content, pipelines, templates, video, system_settings, prompt_templates, finance, credentials
 
 # 配置根 logger，使 app.* 的日志正确输出到控制台
 logging.basicConfig(
@@ -30,7 +30,7 @@ async def lifespan(app: FastAPI):
     logger.info("Starting Allin-One ...")
     init_db()
 
-    # 写入内置流水线模版
+    # 写入内置流水线模板
     from app.core.database import SessionLocal
     from app.services.pipeline.orchestrator import seed_builtin_templates
     with SessionLocal() as db:
@@ -106,6 +106,8 @@ app.include_router(templates.router, prefix="/api/pipeline-templates", tags=["pi
 app.include_router(video.router, prefix="/api/video", tags=["video"])
 app.include_router(system_settings.router, prefix="/api/settings", tags=["settings"])
 app.include_router(prompt_templates.router, prefix="/api/prompt-templates", tags=["prompt-templates"])
+app.include_router(finance.router, prefix="/api/finance", tags=["finance"])
+app.include_router(credentials.router, prefix="/api/credentials", tags=["credentials"])
 
 # Static files (Vue frontend) — 必须最后注册，catch-all 会拦截未匹配路由
 if os.path.isdir("static"):

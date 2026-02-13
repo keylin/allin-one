@@ -1,8 +1,10 @@
 <script setup>
-import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, computed, watch, toRef, onMounted } from 'vue'
 import { listTemplates } from '@/api/pipeline-templates'
-import { generateBilibiliQrcode, pollBilibiliQrcode } from '@/api/sources'
-import QRCode from 'qrcode'
+import { useScrollLock } from '@/composables/useScrollLock'
+import { listCredentialOptions } from '@/api/credentials'
+import FinancePresetPicker from '@/components/finance-preset-picker.vue'
+import FinanceAlertConfig from '@/components/finance-alert-config.vue'
 
 const props = defineProps({
   visible: Boolean,
@@ -10,6 +12,7 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['submit', 'cancel'])
+useScrollLock(toRef(props, 'visible'))
 
 const sourceTypes = [
   { value: 'rss.hub', label: 'RSSHub' },
@@ -23,26 +26,38 @@ const sourceTypes = [
   { value: 'system.notification', label: '系统通知' },
 ]
 
-const mediaTypes = [
+const mediaTypeLabels = {
+  text: '文本',
+  image: '图片',
+  video: '视频',
+  audio: '音频',
+  mixed: '混合',
+  data: '数据',
+}
+
+// 路由可选的媒体类型（排除 mixed/data，它们不适合做路由 key）
+const routableMediaTypes = [
   { value: 'text', label: '文本' },
-  { value: 'image', label: '图片' },
   { value: 'video', label: '视频' },
+  { value: 'image', label: '图片' },
   { value: 'audio', label: '音频' },
-  { value: 'mixed', label: '混合' },
 ]
 
 const templates = ref([])
+const routingEnabled = ref(false)
+const routingMap = ref({})
 const form = ref(getDefaultForm())
 
 // 结构化配置（替代 config_json 文本框）
 const configForm = ref({})
 
-// B站授权状态
-const biliAuthStatus = ref('idle') // idle | loading | waiting | scanned | success | expired | error
-const biliQrcodeUrl = ref('')
-const biliQrcodeKey = ref('')
-const qrcodeCanvas = ref(null)
-let biliPollTimer = null
+// AkShare 预设
+const aksharePresetSelected = ref(false)
+const akshareUserParams = ref([])
+const akshareAlerts = ref([])
+
+// B站凭证下拉
+const biliCredentials = ref([])
 
 function getDefaultForm() {
   return {
@@ -50,11 +65,13 @@ function getDefaultForm() {
     source_type: 'rss.hub',
     url: '',
     description: '',
-    media_type: 'text',
     schedule_enabled: true,
     schedule_interval: 3600,
     pipeline_template_id: '',
     config_json: '',
+    credential_id: '',
+    auto_cleanup_enabled: false,
+    retention_days: null,
   }
 }
 
@@ -65,7 +82,7 @@ function getDefaultConfig(sourceType) {
     case 'web.scraper':
       return { item_selector: '', title_selector: '', link_selector: 'a', link_attr: 'href', author_selector: '', use_browserless: false }
     case 'api.akshare':
-      return { indicator: '', params: '', title_field: '', id_fields: '' }
+      return { indicator: '', category: '', params: '', title_field: '', id_fields: '', date_field: '', value_field: '', max_history: 120 }
     case 'account.bilibili':
       return { cookie: '', type: 'dynamic', media_id: '', max_items: 20 }
     case 'account.generic':
@@ -90,6 +107,13 @@ function deserializeConfig(jsonStr, sourceType) {
     }
     if (merged.headers && typeof merged.headers === 'object') {
       merged.headers = JSON.stringify(merged.headers, null, 2)
+    }
+    // AkShare 对象字段 → JSON 字符串
+    if (merged.ohlcv_fields && typeof merged.ohlcv_fields === 'object') {
+      merged.ohlcv_fields = JSON.stringify(merged.ohlcv_fields)
+    }
+    if (merged.nav_fields && typeof merged.nav_fields === 'object') {
+      merged.nav_fields = JSON.stringify(merged.nav_fields)
     }
     return merged
   } catch {
@@ -116,8 +140,23 @@ function serializeConfig() {
   if (typeof cfg.id_fields === 'string' && cfg.id_fields) {
     cfg.id_fields = cfg.id_fields.split(',').map(s => s.trim()).filter(Boolean)
   }
+  // JSON 对象字段 (akshare)
+  if (typeof cfg.ohlcv_fields === 'string' && cfg.ohlcv_fields) {
+    try { cfg.ohlcv_fields = JSON.parse(cfg.ohlcv_fields) } catch { delete cfg.ohlcv_fields }
+  }
+  if (typeof cfg.nav_fields === 'string' && cfg.nav_fields) {
+    try { cfg.nav_fields = JSON.parse(cfg.nav_fields) } catch { delete cfg.nav_fields }
+  }
   // 数值转换
   if (cfg.max_items !== undefined) cfg.max_items = Number(cfg.max_items) || 20
+  if (cfg.max_history !== undefined) cfg.max_history = Number(cfg.max_history) || 120
+  // AkShare alerts
+  if (form.value.source_type === 'api.akshare' && akshareAlerts.value.length) {
+    cfg.alerts = akshareAlerts.value.filter(a => a.threshold !== '' && a.threshold !== null).map(a => ({
+      ...a,
+      threshold: Number(a.threshold),
+    }))
+  }
   return Object.keys(cfg).length ? JSON.stringify(cfg) : null
 }
 
@@ -130,39 +169,64 @@ const hasStructuredConfig = computed(() => ['rss.hub', 'web.scraper', 'api.aksha
 // 无额外配置的类型
 const noConfigTypes = ['rss.standard', 'file.upload', 'user.note', 'system.notification']
 
-watch(() => props.visible, (val) => {
+watch(() => props.visible, async (val) => {
   if (val) {
     if (props.source) {
-      form.value = { ...getDefaultForm(), ...props.source, pipeline_template_id: props.source.pipeline_template_id || '' }
+      form.value = {
+        ...getDefaultForm(), ...props.source,
+        pipeline_template_id: props.source.pipeline_template_id || '',
+        credential_id: props.source.credential_id || '',
+      }
       configForm.value = deserializeConfig(props.source.config_json, props.source.source_type)
-      // 已有 bilibili cookie 时标记已授权
-      if (props.source.source_type === 'account.bilibili' && configForm.value.cookie) {
-        biliAuthStatus.value = 'success'
+      // 恢复路由配置
+      if (props.source.pipeline_routing) {
+        try {
+          routingMap.value = JSON.parse(props.source.pipeline_routing)
+          routingEnabled.value = Object.keys(routingMap.value).length > 0
+        } catch {
+          routingMap.value = {}
+          routingEnabled.value = false
+        }
+      } else {
+        routingMap.value = {}
+        routingEnabled.value = false
+      }
+      // 已有 akshare 配置时标记为已选预设
+      if (props.source.source_type === 'api.akshare' && configForm.value.indicator) {
+        aksharePresetSelected.value = true
+        // 恢复 alerts
+        try {
+          const parsed = JSON.parse(props.source.config_json || '{}')
+          akshareAlerts.value = parsed.alerts || []
+        } catch { akshareAlerts.value = [] }
       }
     } else {
       form.value = getDefaultForm()
       configForm.value = getDefaultConfig(form.value.source_type)
-      biliAuthStatus.value = 'idle'
+      routingEnabled.value = false
+      routingMap.value = {}
+      aksharePresetSelected.value = false
+      akshareUserParams.value = []
+      akshareAlerts.value = []
     }
+    // 加载 B站凭证下拉
+    try {
+      const res = await listCredentialOptions({ platform: 'bilibili' })
+      if (res.code === 0) biliCredentials.value = res.data
+    } catch { /* ignore */ }
   } else {
-    clearBiliPoll()
-    biliAuthStatus.value = 'idle'
-    biliQrcodeUrl.value = ''
-    biliQrcodeKey.value = ''
+    aksharePresetSelected.value = false
+    akshareUserParams.value = []
+    akshareAlerts.value = []
   }
 })
 
 watch(() => form.value.source_type, (newType) => {
   configForm.value = getDefaultConfig(newType)
-  // 自动设置媒体类型
-  if (newType === 'account.bilibili') {
-    form.value.media_type = 'mixed'
-  }
-  // 清理 bilibili 相关状态
-  clearBiliPoll()
-  biliAuthStatus.value = 'idle'
-  biliQrcodeUrl.value = ''
-  biliQrcodeKey.value = ''
+  // 清理 akshare 状态
+  aksharePresetSelected.value = false
+  akshareUserParams.value = []
+  akshareAlerts.value = []
 })
 
 onMounted(async () => {
@@ -172,16 +236,24 @@ onMounted(async () => {
   } catch { /* ignore */ }
 })
 
-onBeforeUnmount(() => {
-  clearBiliPoll()
-})
-
 function handleSubmit() {
   if (!form.value.name.trim()) return
   const data = { ...form.value }
   if (!data.pipeline_template_id) data.pipeline_template_id = null
+  if (!data.credential_id) data.credential_id = null
   if (!data.url) data.url = null
   if (!data.description) data.description = null
+  if (!data.retention_days) data.retention_days = null
+  // 序列化路由配置
+  if (routingEnabled.value) {
+    const filtered = {}
+    for (const [mt, tid] of Object.entries(routingMap.value)) {
+      if (tid) filtered[mt] = tid
+    }
+    data.pipeline_routing = Object.keys(filtered).length ? JSON.stringify(filtered) : null
+  } else {
+    data.pipeline_routing = null
+  }
   // 序列化结构化配置
   if (hasStructuredConfig.value) {
     data.config_json = serializeConfig()
@@ -191,82 +263,53 @@ function handleSubmit() {
   emit('submit', data)
 }
 
-// ---- B站扫码授权 ----
+function clearRouting() {
+  routingEnabled.value = false
+  routingMap.value = {}
+}
 
-async function startBiliAuth() {
-  biliAuthStatus.value = 'loading'
-  try {
-    const res = await generateBilibiliQrcode()
-    if (res.code !== 0) {
-      biliAuthStatus.value = 'error'
-      return
-    }
-    biliQrcodeUrl.value = res.data.url
-    biliQrcodeKey.value = res.data.qrcode_key
-    biliAuthStatus.value = 'waiting'
+// ---- AkShare 预设选择 ----
 
-    // 渲染二维码
-    await nextTick()
-    if (qrcodeCanvas.value) {
-      QRCode.toCanvas(qrcodeCanvas.value, res.data.url, { width: 200, margin: 2 })
-    }
+function handlePresetSelect(preset) {
+  aksharePresetSelected.value = true
+  akshareUserParams.value = preset.user_params || []
 
-    // 开始轮询
-    clearBiliPoll()
-    biliPollTimer = setInterval(pollBiliStatus, 2000)
-  } catch {
-    biliAuthStatus.value = 'error'
+  // Auto-fill form name if empty
+  if (!form.value.name && preset.name) {
+    form.value.name = preset.name
+  }
+
+  form.value.schedule_interval = preset.schedule_interval || 3600
+
+  // Build configForm
+  const cfg = preset.config
+  configForm.value = {
+    indicator: cfg.indicator || '',
+    category: cfg.category || '',
+    params: cfg.params ? JSON.stringify(cfg.params, null, 2) : '',
+    title_field: cfg.title_field || '',
+    id_fields: Array.isArray(cfg.id_fields) ? cfg.id_fields.join(', ') : (cfg.id_fields || ''),
+    date_field: cfg.date_field || '',
+    value_field: cfg.value_field || '',
+    max_history: cfg.max_history || 120,
+  }
+  // Pass through specialized fields as JSON
+  if (cfg.ohlcv_fields) configForm.value.ohlcv_fields = JSON.stringify(cfg.ohlcv_fields)
+  if (cfg.nav_fields) configForm.value.nav_fields = JSON.stringify(cfg.nav_fields)
+
+  // If custom, show full form
+  if (preset.isCustom) {
+    aksharePresetSelected.value = false
+    configForm.value = getDefaultConfig('api.akshare')
   }
 }
 
-async function pollBiliStatus() {
-  if (!biliQrcodeKey.value) return
-  try {
-    const res = await pollBilibiliQrcode(biliQrcodeKey.value)
-    if (res.code !== 0) return
-    const status = res.data.status
-    if (status === 'waiting') {
-      biliAuthStatus.value = 'waiting'
-    } else if (status === 'scanned') {
-      biliAuthStatus.value = 'scanned'
-    } else if (status === 'expired') {
-      biliAuthStatus.value = 'expired'
-      clearBiliPoll()
-    } else if (status === 'success') {
-      biliAuthStatus.value = 'success'
-      configForm.value.cookie = res.data.cookie
-      clearBiliPoll()
-    }
-  } catch { /* ignore poll errors */ }
+function resetAksharePreset() {
+  aksharePresetSelected.value = false
+  akshareUserParams.value = []
+  akshareAlerts.value = []
+  configForm.value = getDefaultConfig('api.akshare')
 }
-
-function clearBiliPoll() {
-  if (biliPollTimer) {
-    clearInterval(biliPollTimer)
-    biliPollTimer = null
-  }
-}
-
-const biliStatusText = computed(() => {
-  switch (biliAuthStatus.value) {
-    case 'loading': return '正在生成二维码...'
-    case 'waiting': return '请使用B站 App 扫描二维码'
-    case 'scanned': return '已扫码，请在手机上确认'
-    case 'success': return '授权成功'
-    case 'expired': return '二维码已过期'
-    case 'error': return '生成二维码失败'
-    default: return ''
-  }
-})
-
-const biliStatusColor = computed(() => {
-  switch (biliAuthStatus.value) {
-    case 'success': return 'text-emerald-600'
-    case 'expired': case 'error': return 'text-red-500'
-    case 'scanned': return 'text-amber-600'
-    default: return 'text-slate-500'
-  }
-})
 
 const inputClass = 'w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-sm text-slate-700 placeholder-slate-300 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 outline-none transition-all duration-200'
 const selectClass = 'w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-sm text-slate-700 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 outline-none transition-all duration-200 appearance-none cursor-pointer'
@@ -280,7 +323,7 @@ const sectionClass = 'space-y-4 p-4 bg-slate-50/50 rounded-xl border border-slat
     <div class="relative bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
       <div class="sticky top-0 bg-white border-b border-slate-100 px-6 py-5 rounded-t-2xl z-10">
         <h3 class="text-lg font-semibold text-slate-900 tracking-tight">
-          {{ source ? '编辑数据源' : '添加数据源' }}
+          {{ source ? '编辑数据源' : '新增数据源' }}
         </h3>
         <p class="text-xs text-slate-400 mt-0.5">配置信息采集来源</p>
       </div>
@@ -292,26 +335,18 @@ const sectionClass = 'space-y-4 p-4 bg-slate-50/50 rounded-xl border border-slat
           <input v-model="form.name" type="text" required :class="inputClass" placeholder="例: 少数派 RSS" />
         </div>
 
-        <!-- 类型 + 媒体类型 -->
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div>
-            <label :class="labelClass">数据源类型 *</label>
-            <select v-model="form.source_type" :class="selectClass">
-              <option v-for="t in sourceTypes" :key="t.value" :value="t.value">{{ t.label }}</option>
-            </select>
-          </div>
-          <div>
-            <label :class="labelClass">媒体类型</label>
-            <select v-model="form.media_type" :class="selectClass">
-              <option v-for="t in mediaTypes" :key="t.value" :value="t.value">{{ t.label }}</option>
-            </select>
-          </div>
+        <!-- 数据源类型 -->
+        <div>
+          <label :class="labelClass">数据源类型 *</label>
+          <select v-model="form.source_type" :class="selectClass">
+            <option v-for="t in sourceTypes" :key="t.value" :value="t.value">{{ t.label }}</option>
+          </select>
         </div>
 
         <!-- URL（按类型显示） -->
         <div v-if="needsUrl">
           <label :class="labelClass">URL</label>
-          <input v-model="form.url" type="text" :class="inputClass" placeholder="订阅或抓取地址" />
+          <input v-model="form.url" type="text" :class="inputClass" placeholder="订阅或采集地址" />
         </div>
 
         <!-- 描述 -->
@@ -320,13 +355,54 @@ const sectionClass = 'space-y-4 p-4 bg-slate-50/50 rounded-xl border border-slat
           <textarea v-model="form.description" rows="2" :class="[inputClass, 'resize-none']" placeholder="可选描述"></textarea>
         </div>
 
-        <!-- 关联模板 -->
+        <!-- 后置处理模板 -->
         <div>
-          <label :class="labelClass">关联流水线模板</label>
+          <label :class="labelClass">后置处理流水线</label>
           <select v-model="form.pipeline_template_id" :class="selectClass">
-            <option value="">不绑定</option>
+            <option value="">不绑定（仅自动预处理）</option>
             <option v-for="t in templates" :key="t.id" :value="t.id">{{ t.name }}</option>
           </select>
+          <p class="mt-1 text-xs text-slate-400">预处理（抓取全文/下载视频）按内容类型自动执行，此处配置后续的分析、翻译、推送等</p>
+        </div>
+
+        <!-- 内容路由配置 -->
+        <div>
+          <button
+            v-if="!routingEnabled"
+            type="button"
+            class="text-sm text-indigo-600 hover:text-indigo-700 font-medium transition-colors"
+            @click="routingEnabled = true"
+          >
+            + 按内容类型配置不同后置流水线
+          </button>
+          <div v-else :class="sectionClass">
+            <div class="flex items-center justify-between">
+              <div>
+                <h4 class="text-sm font-semibold text-slate-800">内容路由规则</h4>
+                <p class="text-xs text-slate-400 mt-0.5">不同媒体类型的内容可使用不同流水线处理</p>
+              </div>
+              <button
+                type="button"
+                class="text-xs text-slate-400 hover:text-rose-500 transition-colors"
+                @click="clearRouting"
+              >
+                移除路由
+              </button>
+            </div>
+            <div class="space-y-3 mt-3">
+              <div v-for="mt in routableMediaTypes" :key="mt.value" class="flex items-center gap-3">
+                <span class="text-sm text-slate-600 w-12 shrink-0">{{ mt.label }}</span>
+                <select
+                  :value="routingMap[mt.value] || ''"
+                  @change="routingMap[mt.value] = $event.target.value || undefined; if (!$event.target.value) delete routingMap[mt.value]"
+                  :class="selectClass"
+                >
+                  <option value="">使用默认模板</option>
+                  <option v-for="t in templates" :key="t.id" :value="t.id">{{ t.name }}</option>
+                </select>
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- 定时采集 -->
@@ -344,6 +420,25 @@ const sectionClass = 'space-y-4 p-4 bg-slate-50/50 rounded-xl border border-slat
             <label :class="labelClass">采集间隔 (秒)</label>
             <input v-model.number="form.schedule_interval" type="number" min="60" :class="inputClass" />
           </div>
+        </div>
+
+        <!-- 内容保留 -->
+        <div :class="sectionClass">
+          <h4 class="text-sm font-semibold text-slate-800">内容保留</h4>
+          <div class="flex items-center gap-3">
+            <input
+              v-model="form.auto_cleanup_enabled"
+              type="checkbox"
+              id="auto_cleanup_enabled"
+              class="h-4 w-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"
+            />
+            <label for="auto_cleanup_enabled" class="text-sm font-medium text-slate-700">启用自动清理</label>
+          </div>
+          <div v-if="form.auto_cleanup_enabled">
+            <label :class="labelClass">保留天数</label>
+            <input v-model.number="form.retention_days" type="number" min="1" :class="inputClass" placeholder="留空则使用全局默认值" />
+          </div>
+          <p class="text-xs text-slate-400">超过保留期的内容将自动删除，收藏或有笔记的内容不受影响</p>
         </div>
 
         <!-- ========== 结构化配置区域 ========== -->
@@ -403,81 +498,114 @@ const sectionClass = 'space-y-4 p-4 bg-slate-50/50 rounded-xl border border-slat
 
         <!-- AkShare -->
         <div v-else-if="form.source_type === 'api.akshare'" :class="sectionClass">
-          <h4 class="text-sm font-semibold text-slate-800">AkShare 配置</h4>
-          <div>
-            <label :class="labelClass">指标名称 *</label>
-            <input v-model="configForm.indicator" type="text" :class="inputClass" placeholder="macro_china_cpi" />
+          <div class="flex items-center justify-between">
+            <h4 class="text-sm font-semibold text-slate-800">AkShare 配置</h4>
+            <button
+              v-if="aksharePresetSelected"
+              type="button"
+              class="text-xs text-slate-500 hover:text-slate-700 transition-colors"
+              @click="resetAksharePreset"
+            >
+              重选预设
+            </button>
           </div>
-          <div>
-            <label :class="labelClass">参数 (JSON)</label>
-            <textarea v-model="configForm.params" rows="2" :class="[inputClass, 'font-mono resize-none text-xs']" placeholder='{"start_date": "20240101"}'></textarea>
+
+          <!-- Step 1: Preset picker (when not yet selected) -->
+          <div v-if="!aksharePresetSelected && !source">
+            <p class="text-xs text-slate-500 mb-3">选择预设指标或自定义配置</p>
+            <FinancePresetPicker @select="handlePresetSelect" />
           </div>
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+
+          <!-- Step 2: Config form (after preset selected or editing) -->
+          <template v-else>
+            <!-- User params (e.g. symbol for stock) -->
+            <div v-if="akshareUserParams.length" class="space-y-3 p-3 bg-amber-50/50 border border-amber-200/50 rounded-xl">
+              <p class="text-xs font-medium text-amber-700">请填写以下参数:</p>
+              <div v-for="param in akshareUserParams" :key="param">
+                <label :class="labelClass">{{ param }} *</label>
+                <input
+                  :value="configForm.params ? (JSON.parse(configForm.params || '{}')[param] || '') : ''"
+                  @input="(() => { const p = JSON.parse(configForm.params || '{}'); p[param] = $event.target.value; configForm.params = JSON.stringify(p, null, 2) })()"
+                  type="text"
+                  :class="inputClass"
+                  :placeholder="param === 'symbol' ? '例: 000001 (股票代码)' : param"
+                />
+              </div>
+            </div>
+
             <div>
-              <label :class="labelClass">标题字段</label>
-              <input v-model="configForm.title_field" type="text" :class="inputClass" placeholder="date" />
+              <label :class="labelClass">指标名称 *</label>
+              <input v-model="configForm.indicator" type="text" :class="inputClass" placeholder="macro_china_cpi" />
             </div>
             <div>
-              <label :class="labelClass">ID 字段（逗号分隔）</label>
-              <input v-model="configForm.id_fields" type="text" :class="inputClass" placeholder="date,indicator" />
+              <label :class="labelClass">参数 (JSON)</label>
+              <textarea v-model="configForm.params" rows="2" :class="[inputClass, 'font-mono resize-none text-xs']" placeholder='{"start_date": "20240101"}'></textarea>
             </div>
-          </div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label :class="labelClass">分类</label>
+                <select v-model="configForm.category" :class="selectClass">
+                  <option value="">自动</option>
+                  <option value="macro">宏观经济</option>
+                  <option value="stock">A股行情</option>
+                  <option value="fund">基金/ETF</option>
+                </select>
+              </div>
+              <div>
+                <label :class="labelClass">首次采集上限</label>
+                <input v-model.number="configForm.max_history" type="number" min="10" max="5000" :class="inputClass" />
+              </div>
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label :class="labelClass">标题字段</label>
+                <input v-model="configForm.title_field" type="text" :class="inputClass" placeholder="日期" />
+              </div>
+              <div>
+                <label :class="labelClass">日期字段</label>
+                <input v-model="configForm.date_field" type="text" :class="inputClass" placeholder="日期" />
+              </div>
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label :class="labelClass">ID 字段（逗号分隔）</label>
+                <input v-model="configForm.id_fields" type="text" :class="inputClass" placeholder="日期" />
+              </div>
+              <div>
+                <label :class="labelClass">数值字段</label>
+                <input v-model="configForm.value_field" type="text" :class="inputClass" placeholder="全国居民消费价格指数" />
+              </div>
+            </div>
+
+            <!-- Alert config -->
+            <FinanceAlertConfig v-model="akshareAlerts" />
+          </template>
         </div>
 
         <!-- Bilibili -->
         <div v-else-if="form.source_type === 'account.bilibili'" :class="sectionClass">
           <h4 class="text-sm font-semibold text-slate-800">B站账号配置</h4>
 
-          <!-- 授权区域 -->
-          <div class="p-4 bg-white rounded-xl border border-slate-200">
-            <div class="flex items-center justify-between mb-3">
-              <span class="text-sm font-medium text-slate-700">账号授权</span>
-              <span v-if="biliAuthStatus === 'success'" class="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-50 text-emerald-700 text-xs font-medium rounded-full">
-                <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-                已授权
-              </span>
-            </div>
+          <!-- 凭证选择 -->
+          <div>
+            <label :class="labelClass">关联凭证</label>
+            <select v-model="form.credential_id" :class="selectClass">
+              <option value="">不使用凭证（手动填写 Cookie）</option>
+              <option v-for="c in biliCredentials" :key="c.id" :value="c.id">
+                {{ c.display_name }}
+                <template v-if="c.status !== 'active'"> ({{ c.status }})</template>
+              </option>
+            </select>
+            <p class="mt-1.5 text-xs text-slate-400">
+              <router-link to="/settings" class="text-indigo-500 hover:text-indigo-600 hover:underline transition-colors">前往设置管理凭证</router-link>
+            </p>
+          </div>
 
-            <!-- 未授权 / 过期 -->
-            <div v-if="biliAuthStatus === 'idle' || biliAuthStatus === 'expired' || biliAuthStatus === 'error'">
-              <button
-                type="button"
-                class="px-4 py-2 text-sm font-medium text-white bg-pink-500 rounded-lg hover:bg-pink-600 active:bg-pink-700 transition-all duration-200"
-                @click="startBiliAuth"
-              >
-                {{ biliAuthStatus === 'expired' ? '重新扫码' : '扫码授权' }}
-              </button>
-              <p v-if="biliAuthStatus === 'expired'" class="mt-2 text-xs text-red-500">二维码已过期，请重新扫码</p>
-              <p v-if="biliAuthStatus === 'error'" class="mt-2 text-xs text-red-500">生成二维码失败，请重试</p>
-            </div>
-
-            <!-- 加载中 -->
-            <div v-else-if="biliAuthStatus === 'loading'" class="flex items-center gap-2 text-sm text-slate-500">
-              <svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-              正在生成二维码...
-            </div>
-
-            <!-- QR 码展示 -->
-            <div v-else-if="biliAuthStatus === 'waiting' || biliAuthStatus === 'scanned'" class="flex flex-col items-center gap-3">
-              <canvas ref="qrcodeCanvas" class="rounded-lg border border-slate-200"></canvas>
-              <p :class="['text-sm font-medium', biliStatusColor]">{{ biliStatusText }}</p>
-              <div v-if="biliAuthStatus === 'waiting'" class="flex items-center gap-1.5 text-xs text-slate-400">
-                <svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
-                等待扫码中...
-              </div>
-            </div>
-
-            <!-- 已授权 -->
-            <div v-else-if="biliAuthStatus === 'success'" class="space-y-2">
-              <p class="text-sm text-emerald-600">Cookie 已获取，可正常采集。</p>
-              <button
-                type="button"
-                class="text-xs text-slate-500 hover:text-slate-700 underline transition-colors"
-                @click="startBiliAuth"
-              >
-                重新授权
-              </button>
-            </div>
+          <!-- 手动 Cookie 输入（当未选凭证时显示） -->
+          <div v-if="!form.credential_id">
+            <label :class="labelClass">Cookie</label>
+            <input v-model="configForm.cookie" type="text" :class="inputClass" placeholder="SESSDATA=xxx; bili_jct=xxx" />
+            <p class="mt-1.5 text-xs text-slate-400">建议在设置页通过扫码授权自动获取</p>
           </div>
 
           <!-- 采集参数 -->

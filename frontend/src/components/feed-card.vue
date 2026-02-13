@@ -1,16 +1,10 @@
 <script setup>
 import { computed } from 'vue'
-import dayjs from 'dayjs'
-import relativeTime from 'dayjs/plugin/relativeTime'
-import utc from 'dayjs/plugin/utc'
-import 'dayjs/locale/zh-cn'
-
-dayjs.extend(relativeTime)
-dayjs.extend(utc)
-dayjs.locale('zh-cn')
+import { formatTimeShort } from '@/utils/time'
 
 const props = defineProps({
   item: { type: Object, required: true },
+  selected: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['click', 'favorite'])
@@ -40,7 +34,7 @@ const mediaColors = {
 
 const relTime = computed(() => {
   const time = props.item.published_at || props.item.collected_at
-  return time ? dayjs.utc(time).local().fromNow() : ''
+  return time ? formatTimeShort(time) : ''
 })
 
 const summaryText = computed(() => props.item.summary_text || '')
@@ -67,7 +61,10 @@ function onThumbError(e) {
 
 <template>
   <article
-    class="group bg-white rounded-xl border border-slate-200/80 overflow-hidden hover:shadow-md hover:border-slate-300 transition-all duration-200 cursor-pointer"
+    class="group bg-white rounded-xl border overflow-hidden transition-all duration-200 cursor-pointer"
+    :class="selected
+      ? 'ring-2 ring-indigo-500 border-indigo-300 shadow-md'
+      : 'border-slate-200/80 hover:shadow-md hover:border-slate-300'"
     @click="emit('click', item)"
   >
     <div class="flex">
@@ -156,7 +153,7 @@ function onThumbError(e) {
           <!-- 状态 badge -->
           <span
             :class="currentStatus.class"
-            class="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium leading-none"
+            class="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium leading-none"
           >
             {{ currentStatus.label }}
           </span>

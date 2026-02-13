@@ -63,10 +63,10 @@ graph TD
 
 ### 3.2 编排流程
 
-1.  **模版加载**: 根据 Source 绑定的 `pipeline_template_id` 加载模版定义。
+1.  **模板加载**: 根据 Source 绑定的 `pipeline_template_id` 加载模板定义。
 2.  **实例创建**:
     *   创建 `PipelineExecution` (状态: PENDING)。
-    *   根据模版步骤，创建有序的 `PipelineStep` 记录 (状态: PENDING)。
+    *   根据模板步骤，创建有序的 `PipelineStep` 记录 (状态: PENDING)。
 3.  **任务投递**:
     *   `Orchestrator` 将第一个步骤封装为 Huey 任务 (`execute_pipeline_step`)。
     *   提交到 `huey.db` 队列。
@@ -105,7 +105,7 @@ ctx = {
 *   `source_type`: 采用两段式命名 (e.g., `rss.hub`, `web.scraper`)。
 *   `config_json`: 存储特定于 Collector 的配置 (如选择器、Cookie)。
 
-### 4.2 PipelineTemplate (模版)
+### 4.2 PipelineTemplate (模板)
 *   `steps`: JSON 数组，定义执行顺序。
     ```json
     [

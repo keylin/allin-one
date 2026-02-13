@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from enum import Enum
 
 from sqlalchemy import (
-    Column, String, Boolean, DateTime, Text, Integer, ForeignKey, UniqueConstraint
+    Column, String, Boolean, DateTime, Text, Integer, ForeignKey, UniqueConstraint, Index
 )
 from sqlalchemy.orm import relationship
 
@@ -56,6 +56,7 @@ class MediaType(str, Enum):
     VIDEO = "video"
     AUDIO = "audio"
     MIXED = "mixed"
+    DATA = "data"       # 数值型金融数据（CPI、K线、净值等）
 
 
 class ContentStatus(str, Enum):
@@ -82,7 +83,7 @@ class SourceConfig(Base):
 
     只关心「从哪获取信息」:
     - source_type: 来源渠道 (rsshub / rss_std / scraper / ...)
-    - url: 订阅/抓取地址
+    - url: 订阅/采集地址
     - config_json: 渠道特定配置
     - pipeline_template_id: 绑定的处理流水线 (决定"怎么处理")
 
@@ -98,7 +99,7 @@ class SourceConfig(Base):
     id = Column(String, primary_key=True, default=_uuid)
     name = Column(String, nullable=False)
     source_type = Column(String, nullable=False)       # SourceType 枚举
-    url = Column(String)                                # 订阅/抓取地址
+    url = Column(String)                                # 订阅/采集地址
     description = Column(Text)
     media_type = Column(String, default=MediaType.TEXT.value)  # 该源产出的媒体类型
 
@@ -108,9 +109,17 @@ class SourceConfig(Base):
 
     # 流水线绑定 — 解耦的关键
     pipeline_template_id = Column(String, ForeignKey("pipeline_templates.id"), nullable=True)
+    pipeline_routing = Column(Text, nullable=True)  # JSON: {"video": "tmpl_id", "text": "tmpl_id"}
 
     # 渠道特定配置 (JSON)
     config_json = Column(Text)
+
+    # 平台凭证引用（可选，向后兼容）
+    credential_id = Column(String, ForeignKey("platform_credentials.id"), nullable=True)
+
+    # 内容保留
+    auto_cleanup_enabled = Column(Boolean, default=False)
+    retention_days = Column(Integer, nullable=True)  # NULL = 使用全局默认
 
     # 运行状态
     last_collected_at = Column(DateTime, nullable=True)
@@ -123,12 +132,18 @@ class SourceConfig(Base):
     # Relationships
     content_items = relationship("ContentItem", back_populates="source", cascade="all, delete-orphan")
     collection_records = relationship("CollectionRecord", back_populates="source", cascade="all, delete-orphan")
+    finance_data_points = relationship("FinanceDataPoint", back_populates="source", cascade="all, delete-orphan")
+    credential = relationship("PlatformCredential", back_populates="sources")
+
+    __table_args__ = (
+        Index("ix_source_credential_id", "credential_id"),
+    )
 
 
 class ContentItem(Base):
     """内容项
 
-    脑图「内容记录」: 原始内容 → 中间内容 → 最终内容 + 发布时间 + 抓取时间
+    脑图「内容记录」: 原始内容 → 中间内容 → 最终内容 + 发布时间 + 采集时间
     """
     __tablename__ = "content_items"
 
@@ -149,7 +164,7 @@ class ContentItem(Base):
     language = Column(String)
 
     published_at = Column(DateTime, nullable=True)   # 发布时间
-    collected_at = Column(DateTime, default=_utcnow)  # 抓取时间
+    collected_at = Column(DateTime, default=_utcnow)  # 采集时间
 
     is_favorited = Column(Boolean, default=False)
     user_note = Column(Text)

@@ -8,13 +8,14 @@ services:
     restart: unless-stopped
     ports:
       - "1200:1200"
+    env_file:
+      - ./backend/.env
     environment:
+      TZ: Asia/Shanghai
       NODE_ENV: production
       CACHE_TYPE: memory
       CACHE_EXPIRE: 900
       PUPPETEER_WS_ENDPOINT: ws://browserless:3000
-      # 根据需要添加 RSS Hub 配置
-      # ALLOW_USER_HOTLINK_TEMPLATE: 'true'
     depends_on:
       - browserless
     networks:
@@ -28,6 +29,7 @@ services:
     ports:
       - "3001:3000"
     environment:
+      TZ: Asia/Shanghai
       MAX_CONCURRENT_SESSIONS: 5
       CONNECTION_TIMEOUT: 60000
       MAX_QUEUE_LENGTH: 10
@@ -46,8 +48,12 @@ services:
       - "8000:8000"
     volumes:
       - ./backend/data:/app/data
-      - ./backend/.env:/app/.env:ro
+      - ./backend/.env:/app/.env
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./docker-compose.yml:/project/docker-compose.yml:ro
+      - ./backend/.env:/project/backend/.env
     environment:
+      TZ: Asia/Shanghai
       DATABASE_URL: sqlite:///data/db/allin.db
       RSSHUB_URL: http://rsshub:1200
       BROWSERLESS_URL: http://browserless:3000
@@ -84,6 +90,7 @@ services:
       - ./backend/data:/app/data
       - ./backend/.env:/app/.env:ro
     environment:
+      TZ: Asia/Shanghai
       DATABASE_URL: sqlite:///data/db/allin.db
       RSSHUB_URL: http://rsshub:1200
       BROWSERLESS_URL: http://browserless:3000

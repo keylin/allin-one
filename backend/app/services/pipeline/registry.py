@@ -108,7 +108,7 @@ STEP_DEFINITIONS: dict[str, StepDefinition] = {
                 },
                 "prompt_template_id": {
                     "type": "string",
-                    "description": "提示词模版 ID (数据关联)",
+                    "description": "提示词模板 ID (数据关联)",
                 },
             },
         },
@@ -136,13 +136,13 @@ STEP_DEFINITIONS: dict[str, StepDefinition] = {
 }
 
 
-# ============ 内置流水线模版 ============
+# ============ 内置流水线模板 ============
 # 流水线只做处理, 不含 fetch — 输入是已存在的 ContentItem
 
 BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     {
         "name": "文章分析",
-        "description": "提取全文 → LLM分析 → 推送",
+        "description": "抓取全文 → LLM分析 → 推送",
         "steps_config": json.dumps([
             {"step_type": "enrich_content",  "is_critical": True,  "config": {"scrape_level": "auto"}},
             {"step_type": "analyze_content", "is_critical": False, "config": {}},
@@ -151,7 +151,7 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "英文文章翻译分析",
-        "description": "全文提取 → 翻译 → 分析 → 推送",
+        "description": "抓取全文 → 翻译 → 分析 → 推送",
         "steps_config": json.dumps([
             {"step_type": "enrich_content",     "is_critical": True,  "config": {"scrape_level": "auto"}},
             {"step_type": "translate_content",  "is_critical": False, "config": {"target_language": "zh"}},
@@ -193,6 +193,14 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
         "description": "直接推送新内容通知, 不做分析",
         "steps_config": json.dumps([
             {"step_type": "publish_content", "is_critical": True, "config": {"channel": "email"}},
+        ], ensure_ascii=False),
+    },
+    {
+        "name": "金融数据分析",
+        "description": "LLM 分析金融数据趋势 → 推送",
+        "steps_config": json.dumps([
+            {"step_type": "analyze_content", "is_critical": True, "config": {}},
+            {"step_type": "publish_content", "is_critical": False, "config": {"channel": "none"}},
         ], ensure_ascii=False),
     },
 ]

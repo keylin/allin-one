@@ -34,9 +34,20 @@ class BilibiliCollector(BaseCollector):
 
     async def collect(self, source: SourceConfig, db: Session) -> list[ContentItem]:
         config = json.loads(source.config_json) if source.config_json else {}
-        cookie = config.get("cookie")
+
+        # 优先从 credential 读取
+        cookie = None
+        if source.credential_id and source.credential:
+            cred = source.credential
+            if cred.status == "active":
+                cookie = cred.credential_data
+
+        # 回退到 config_json.cookie（向后兼容）
         if not cookie:
-            raise ValueError(f"No cookie in config for source '{source.name}'")
+            cookie = config.get("cookie")
+
+        if not cookie:
+            raise ValueError(f"No cookie for source '{source.name}'")
 
         collect_type = config.get("type", "dynamic")
         max_items = config.get("max_items", 20)
@@ -110,19 +121,41 @@ class BilibiliCollector(BaseCollector):
                 title = ""
                 url = ""
                 media_type = MediaType.TEXT.value
+                major_type = major.get("type", "")
+                author_name = author_info.get("name", "")
 
-                if major.get("type") == "MAJOR_TYPE_ARCHIVE":
+                if major_type == "MAJOR_TYPE_ARCHIVE":
                     archive = major.get("archive", {})
                     title = archive.get("title", "")
                     url = f"https://www.bilibili.com/video/{archive.get('bvid', '')}"
                     media_type = MediaType.VIDEO.value
-                elif major.get("type") == "MAJOR_TYPE_ARTICLE":
+                elif major_type == "MAJOR_TYPE_ARTICLE":
                     article = major.get("article", {})
                     title = article.get("title", "")
                     url = f"https://www.bilibili.com/read/cv{article.get('id', '')}"
+                elif major_type == "MAJOR_TYPE_DRAW":
+                    # 图片动态: 优先取文字描述，否则用作者名
+                    desc = dynamic_info.get("desc")
+                    desc_text = desc.get("text", "").strip() if desc else ""
+                    title = desc_text[:200] if desc_text else f"{author_name}的图片动态"
+                    url = f"https://t.bilibili.com/{item.get('id_str', '')}"
+                    media_type = MediaType.IMAGE.value
+                elif major_type == "MAJOR_TYPE_LIVE_RCMD":
+                    live = major.get("live_rcmd", {})
+                    try:
+                        live_info = json.loads(live.get("content", "{}"))
+                        live_play = live_info.get("live_play_info", {})
+                        title = live_play.get("title", "")
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                    if not title:
+                        title = f"{author_name}的直播"
+                    url = f"https://t.bilibili.com/{item.get('id_str', '')}"
                 else:
-                    desc = dynamic_info.get("desc", {})
-                    title = desc.get("text", "动态")[:200] if desc else "动态"
+                    # 纯文字/转发等
+                    desc = dynamic_info.get("desc")
+                    desc_text = desc.get("text", "").strip() if desc else ""
+                    title = desc_text[:200] if desc_text else f"{author_name}的动态"
                     url = f"https://t.bilibili.com/{item.get('id_str', '')}"
 
                 if not title:

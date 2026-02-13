@@ -1,4 +1,4 @@
-"""提示词模版模型"""
+"""提示词模板模型"""
 
 import uuid
 from datetime import datetime, timezone
@@ -23,7 +23,7 @@ class OutputFormat(str, Enum):
 
 
 class PromptTemplate(Base):
-    """提示词模版"""
+    """提示词模板"""
     __tablename__ = "prompt_templates"
 
     id = Column(String, primary_key=True, default=lambda: uuid.uuid4().hex)

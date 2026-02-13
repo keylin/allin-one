@@ -1,16 +1,17 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 const routes = [
-  { path: '/', redirect: '/dashboard' },
+  { path: '/', redirect: '/feed' },
   { path: '/login', component: () => import('@/views/LoginView.vue'), meta: { public: true } },
   { path: '/dashboard', component: () => import('@/views/DashboardView.vue') },
   { path: '/feed', component: () => import('@/views/FeedView.vue') },
   { path: '/sources', component: () => import('@/views/SourcesView.vue') },
   { path: '/content', component: () => import('@/views/ContentView.vue') },
-  { path: '/processing', component: () => import('@/views/ProcessingView.vue') },
-  { path: '/prompt-templates', redirect: '/processing' },
   { path: '/pipelines', component: () => import('@/views/PipelinesView.vue') },
+  { path: '/processing', redirect: '/pipelines' },
+  { path: '/prompt-templates', redirect: '/pipelines?tab=prompts' },
   { path: '/videos', component: () => import('@/views/VideoView.vue') },
+  { path: '/finance', component: () => import('@/views/FinanceView.vue') },
   { path: '/video-download', redirect: '/videos' },
   { path: '/settings', component: () => import('@/views/SettingsView.vue') },
   { path: '/:pathMatch(.*)*', name: 'NotFound', component: () => import('@/views/NotFoundView.vue') },

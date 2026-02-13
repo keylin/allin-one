@@ -109,28 +109,73 @@ async def list_downloads(
     sort_order: str = Query("desc", description="排序方向: asc/desc"),
     db: Session = Depends(get_db),
 ):
-    """获取视频下载记录（支持筛选、搜索、排序）"""
-    query = db.query(PipelineStep).filter(PipelineStep.step_type == "download_video")
+    """获取视频下载记录（支持筛选、搜索、排序）
 
-    # 状态筛选（在 DB 层过滤）
+    使用 SQL JOIN + json_extract 在数据库层完成过滤、排序和分页，
+    避免加载全量数据到内存。
+    """
+    from sqlalchemy import func, asc, desc
+
+    # 基础查询：始终 JOIN ContentItem 和 SourceConfig
+    query = (
+        db.query(PipelineStep, ContentItem, SourceConfig)
+        .join(PipelineExecution, PipelineStep.pipeline_id == PipelineExecution.id)
+        .join(ContentItem, PipelineExecution.content_id == ContentItem.id)
+        .outerjoin(SourceConfig, ContentItem.source_id == SourceConfig.id)
+        .filter(PipelineStep.step_type == "download_video")
+    )
+
+    # 状态筛选
     if status_filter:
         query = query.filter(PipelineStep.status == status_filter)
 
-    # 来源筛选（在 DB 层通过 join 过滤）
+    # 来源筛选
     if source_id:
-        query = (
-            query
-            .join(PipelineExecution, PipelineStep.pipeline_id == PipelineExecution.id)
-            .join(ContentItem, PipelineExecution.content_id == ContentItem.id)
-            .filter(ContentItem.source_id == source_id)
+        query = query.filter(ContentItem.source_id == source_id)
+
+    # 平台筛选 (json_extract)
+    if platform:
+        query = query.filter(
+            func.json_extract(PipelineStep.output_data, "$.platform") == platform
         )
 
-    steps = query.all()
+    # 关键词搜索 (json_extract)
+    if search:
+        query = query.filter(
+            func.json_extract(PipelineStep.output_data, "$.title").like(f"%{search}%")
+        )
 
-    # 构建完整数据列表，解析 output_data 后做进一步筛选
+    # 获取平台列表（独立轻量查询）
+    platforms_query = (
+        db.query(func.distinct(func.json_extract(PipelineStep.output_data, "$.platform")))
+        .filter(
+            PipelineStep.step_type == "download_video",
+            PipelineStep.output_data.isnot(None),
+        )
+        .all()
+    )
+    platforms_set = sorted(p for (p,) in platforms_query if p)
+
+    # 计算总数
+    total = query.count()
+
+    # 排序
+    order_fn = desc if sort_order == "desc" else asc
+    sort_map = {
+        "published_at": ContentItem.published_at,
+        "collected_at": ContentItem.collected_at,
+        "title": func.json_extract(PipelineStep.output_data, "$.title"),
+        "duration": func.json_extract(PipelineStep.output_data, "$.duration"),
+    }
+    sort_column = sort_map.get(sort_by, PipelineStep.created_at)
+    query = query.order_by(order_fn(sort_column))
+
+    # 分页
+    query = query.offset((page - 1) * page_size).limit(page_size)
+
+    # 构建响应（只解析当前页的 JSON）
     data = []
-    platforms_set = set()
-    for step in steps:
+    for step, content, source in query.all():
         video_info = {}
         if step.output_data:
             try:
@@ -147,28 +192,11 @@ async def list_downloads(
             except (json.JSONDecodeError, TypeError):
                 pass
 
-        execution = step.pipeline
-        content_id = execution.content_id if execution else None
-        content = db.get(ContentItem, content_id) if content_id else None
-
-        item_platform = video_info.get("platform", "")
-        if item_platform:
-            platforms_set.add(item_platform)
-
-        # 平台筛选
-        if platform and item_platform != platform:
-            continue
-
-        # 关键词搜索
-        if search and search.lower() not in (video_info.get("title") or "").lower():
-            continue
-
-        source = content.source if content else None
         data.append({
             "id": step.id,
             "pipeline_id": step.pipeline_id,
-            "content_id": content_id,
-            "source_id": content.source_id if content else None,
+            "content_id": content.id,
+            "source_id": content.source_id,
             "source_name": source.name if source else None,
             "status": step.status,
             "step_config": step.step_config,
@@ -176,32 +204,14 @@ async def list_downloads(
             "started_at": step.started_at.isoformat() if step.started_at else None,
             "completed_at": step.completed_at.isoformat() if step.completed_at else None,
             "created_at": step.created_at.isoformat() if step.created_at else None,
-            "published_at": content.published_at.isoformat() if content and content.published_at else None,
-            "collected_at": content.collected_at.isoformat() if content and content.collected_at else None,
+            "published_at": content.published_at.isoformat() if content.published_at else None,
+            "collected_at": content.collected_at.isoformat() if content.collected_at else None,
             "video_info": video_info,
-            "content_url": content.url if content else None,
-            "playback_position": content.playback_position if content else 0,
-            "last_played_at": content.last_played_at.isoformat() if content and content.last_played_at else None,
+            "content_url": content.url,
+            "playback_position": content.playback_position or 0,
+            "last_played_at": content.last_played_at.isoformat() if content.last_played_at else None,
+            "is_favorited": content.is_favorited or False,
         })
-
-    # 排序
-    def sort_key(item):
-        if sort_by == "title":
-            return (item.get("video_info") or {}).get("title") or ""
-        if sort_by == "duration":
-            return (item.get("video_info") or {}).get("duration") or 0
-        if sort_by == "published_at":
-            return item.get("published_at") or ""
-        if sort_by == "collected_at":
-            return item.get("collected_at") or ""
-        return item.get("created_at") or ""
-
-    data.sort(key=sort_key, reverse=(sort_order == "desc"))
-
-    # 分页
-    total = len(data)
-    start = (page - 1) * page_size
-    data = data[start:start + page_size]
 
     return {
         "code": 0,
@@ -209,7 +219,7 @@ async def list_downloads(
         "total": total,
         "page": page,
         "page_size": page_size,
-        "platforms": sorted(platforms_set),
+        "platforms": platforms_set,
         "message": "ok",
     }
 

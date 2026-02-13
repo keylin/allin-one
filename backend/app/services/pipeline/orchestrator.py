@@ -4,16 +4,22 @@
   定时器 → CollectionService.collect(source) → N 条新 ContentItem
     → 对每条调用 Orchestrator.trigger_for_content(content) → 创建 PipelineExecution
 
-流水线的输入永远是一条已存在的 ContentItem。
+流水线分两阶段:
+  1. 预处理 (自动): 按 media_type 确定性注入, 让内容变得"可分析"
+     - video/audio → download_video
+     - text (摘要) → enrich_content
+     - text (全文) → 直接填充 processed_content, 无需步骤
+  2. 后置处理 (用户模板): analyze / translate / publish 等, 由用户配置
 """
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from app.models.content import SourceConfig, ContentItem
+from app.models.content import SourceConfig, ContentItem, MediaType, ContentStatus
 from app.models.pipeline import (
     PipelineTemplate, PipelineExecution, PipelineStep,
     PipelineStatus, TriggerSource,
@@ -21,20 +27,114 @@ from app.models.pipeline import (
 
 logger = logging.getLogger(__name__)
 
+# 预处理步骤类型 — 由系统自动注入, 从用户模板中去重
+PREPROCESSING_STEP_TYPES = {"enrich_content", "download_video"}
+
+# 全文判定阈值 (纯文本字符数)
+_FULL_TEXT_THRESHOLD = 500
+
 
 class PipelineOrchestrator:
 
     def __init__(self, db: Session):
         self.db = db
 
+    # ---- 模板解析 ----
+
     def get_template_for_source(self, source: SourceConfig) -> PipelineTemplate | None:
-        """获取数据源绑定的流水线模版, 未绑定返回 None (不处理)"""
+        """获取数据源绑定的流水线模板, 未绑定返回 None"""
         if not source.pipeline_template_id:
             return None
         template = self.db.query(PipelineTemplate).get(source.pipeline_template_id)
         if template and template.is_active:
             return template
         return None
+
+    def get_template_for_content(self, source: SourceConfig, content: ContentItem) -> PipelineTemplate | None:
+        """按内容的 media_type 路由到对应模板，无匹配则回退到源默认模板"""
+        if source.pipeline_routing:
+            try:
+                routing = json.loads(source.pipeline_routing)
+                if isinstance(routing, dict) and content.media_type in routing:
+                    template_id = routing[content.media_type]
+                    template = self.db.query(PipelineTemplate).get(template_id)
+                    if template and template.is_active:
+                        logger.info(
+                            f"Routed content {content.id} (media_type={content.media_type}) "
+                            f"to template '{template.name}'"
+                        )
+                        return template
+                    logger.warning(f"Routed template {template_id} not found/inactive, falling back")
+            except (json.JSONDecodeError, TypeError):
+                logger.warning(f"Invalid pipeline_routing for source {source.id}")
+        return self.get_template_for_source(source)
+
+    # ---- 自动预处理 ----
+
+    @staticmethod
+    def _strip_html(html: str) -> str:
+        """去除 HTML 标签, 返回纯文本"""
+        text = re.sub(r"<[^>]+>", "", html)
+        return text.strip()
+
+    @staticmethod
+    def _extract_raw_text(raw_data_json: str | None) -> str:
+        """从 raw_data JSON 提取最长的文本内容"""
+        if not raw_data_json:
+            return ""
+        try:
+            raw = json.loads(raw_data_json)
+        except (json.JSONDecodeError, TypeError):
+            return ""
+        # 优先 content[0].value (RSS <content:encoded>, 通常是全文 HTML)
+        contents = raw.get("content", [])
+        if isinstance(contents, list) and contents:
+            value = contents[0].get("value", "")
+            if value:
+                return value
+        # 回退 summary
+        return raw.get("summary", "")
+
+    @classmethod
+    def _has_full_text(cls, raw_data_json: str | None) -> bool:
+        """判断 raw_data 是否已包含足够正文 (≥500 字纯文本)"""
+        text = cls._extract_raw_text(raw_data_json)
+        if not text:
+            return False
+        return len(cls._strip_html(text)) >= _FULL_TEXT_THRESHOLD
+
+    def _compute_preprocessing_steps(self, content: ContentItem) -> list[dict]:
+        """按 media_type 计算自动预处理步骤"""
+        mt = content.media_type
+
+        if mt in (MediaType.VIDEO.value, MediaType.AUDIO.value):
+            return [
+                {"step_type": "download_video", "is_critical": True, "config": {"quality": "1080p"}},
+            ]
+
+        if mt == MediaType.TEXT.value:
+            if self._has_full_text(content.raw_data):
+                # RSS 已输出全文 — 直接填充 processed_content, 不需要步骤
+                if not content.processed_content:
+                    raw_text = self._extract_raw_text(content.raw_data)
+                    content.processed_content = raw_text
+                    self.db.flush()
+                    logger.info(f"Full text populated from raw_data for content {content.id}")
+                return []
+            return [
+                {"step_type": "enrich_content", "is_critical": True, "config": {"scrape_level": "auto"}},
+            ]
+
+        # image, data 等 — 无需预处理
+        return []
+
+    @staticmethod
+    def _build_steps(pre_steps: list[dict], template_steps: list[dict]) -> list[dict]:
+        """合并预处理步骤 + 模板步骤 (去重: 模板中的预处理步骤被跳过)"""
+        post_steps = [s for s in template_steps if s["step_type"] not in PREPROCESSING_STEP_TYPES]
+        return pre_steps + post_steps
+
+    # ---- 触发 ----
 
     def trigger_for_content(
         self,
@@ -44,15 +144,20 @@ class PipelineOrchestrator:
     ) -> PipelineExecution | None:
         """为一条已存在的 ContentItem 创建并启动流水线
 
+        自动注入预处理步骤 (按 media_type), 然后拼接用户模板的后置步骤。
+        无模板时仍执行预处理 (如视频下载); 无预处理也无模板则返回 None。
+
         Args:
             content: 已经由 Collector 创建的内容项
-            template_override_id: 显式指定模版 (手动触发时使用, 覆盖源绑定)
+            template_override_id: 显式指定模板 (手动触发时使用, 覆盖源绑定)
             trigger: 触发来源
-
-        Returns:
-            创建的 PipelineExecution, 若源未绑定模版则返回 None
         """
-        # 确定模版
+        # 1. 计算预处理步骤
+        pre_steps = self._compute_preprocessing_steps(content)
+
+        # 2. 确定用户模板
+        template = None
+        template_steps = []
         if template_override_id:
             template = self.db.query(PipelineTemplate).get(template_override_id)
             if not template:
@@ -61,29 +166,35 @@ class PipelineOrchestrator:
             source = self.db.query(SourceConfig).get(content.source_id)
             if not source:
                 raise ValueError(f"Source not found: {content.source_id}")
-            template = self.get_template_for_source(source)
-            if not template:
-                return None  # 源未绑定流水线, 不处理 (纯采集场景)
+            template = self.get_template_for_content(source, content)
 
-        steps_config = json.loads(template.steps_config)
-        if not steps_config:
+        if template:
+            template_steps = json.loads(template.steps_config) or []
+
+        # 3. 合并: 预处理 + 后置处理 (去重)
+        all_steps = self._build_steps(pre_steps, template_steps)
+        if not all_steps:
+            # 无预处理也无后置处理 — 标记为终态，避免补偿循环反复扫描
+            if content.status == ContentStatus.PENDING.value:
+                content.status = ContentStatus.ANALYZED.value
+                self.db.flush()
             return None
 
-        # 创建执行记录
+        # 4. 创建执行记录
         execution = PipelineExecution(
             content_id=content.id,
             source_id=content.source_id,
-            template_id=template.id,
-            template_name=template.name,
+            template_id=template.id if template else None,
+            template_name=template.name if template else "自动预处理",
             status=PipelineStatus.PENDING.value,
-            total_steps=len(steps_config),
+            total_steps=len(all_steps),
             trigger_source=trigger.value,
         )
         self.db.add(execution)
         self.db.flush()
 
-        # 从模版创建步骤实例
-        for index, step_def in enumerate(steps_config):
+        # 5. 创建步骤实例
+        for index, step_def in enumerate(all_steps):
             step = PipelineStep(
                 pipeline_id=execution.id,
                 step_index=index,
@@ -96,13 +207,15 @@ class PipelineOrchestrator:
         self.db.commit()
         logger.info(
             f"Pipeline created: {execution.id} "
-            f"(template={template.name}, steps={len(steps_config)}, content={content.id})"
+            f"(template={template.name if template else 'auto'}, "
+            f"pre={len(pre_steps)}, post={len(all_steps) - len(pre_steps)}, "
+            f"content={content.id})"
         )
         return execution
 
     def start_execution(self, execution_id: str) -> None:
         """启动执行 (入队第一个步骤)"""
-        execution = self.db.query(PipelineExecution).get(execution_id)
+        execution = self.db.get(PipelineExecution, execution_id)
         if not execution:
             raise ValueError(f"Execution not found: {execution_id}")
 
@@ -117,7 +230,7 @@ class PipelineOrchestrator:
 
 
 def seed_builtin_templates(db: Session) -> None:
-    """将内置模版写入数据库 (首次启动时调用)"""
+    """将内置模板写入数据库 (首次启动时调用)"""
     from app.services.pipeline.registry import BUILTIN_TEMPLATES
 
     created = 0
@@ -141,3 +254,46 @@ def seed_builtin_templates(db: Session) -> None:
     db.commit()
     if created:
         logger.info(f"Seeded {created} builtin pipeline templates")
+
+    # Seed builtin prompt templates
+    from app.models.prompt_template import PromptTemplate
+
+    BUILTIN_PROMPTS = [
+        {
+            "name": "金融数据分析",
+            "template_type": "news_analysis",
+            "system_prompt": (
+                "你是一位专业的金融数据分析师。分析用户提供的金融数据，给出简洁的趋势判断和解读。\n"
+                "要求:\n"
+                "1. 识别数据的变化趋势（上升/下降/震荡）\n"
+                "2. 对比历史水平，判断当前值是否异常\n"
+                "3. 给出简要的市场解读或可能的影响\n"
+                "4. 使用中文回答，语言简练专业"
+            ),
+            "user_prompt": "请分析以下金融数据:\n\n{content}",
+            "output_format": "json",
+        },
+    ]
+
+    prompt_created = 0
+    for pt_data in BUILTIN_PROMPTS:
+        existing = (
+            db.query(PromptTemplate)
+            .filter(PromptTemplate.name == pt_data["name"])
+            .first()
+        )
+        if not existing:
+            pt = PromptTemplate(
+                name=pt_data["name"],
+                template_type=pt_data.get("template_type", "custom"),
+                system_prompt=pt_data.get("system_prompt", ""),
+                user_prompt=pt_data["user_prompt"],
+                output_format=pt_data.get("output_format", "json"),
+                is_default=False,
+            )
+            db.add(pt)
+            prompt_created += 1
+
+    if prompt_created:
+        db.commit()
+        logger.info(f"Seeded {prompt_created} builtin prompt templates")

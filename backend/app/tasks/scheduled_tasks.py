@@ -8,7 +8,7 @@
 核心流程:
   定时器 → CollectionService.collect(source)
          → Collector 抓取原始数据 → 去重 → 创建 ContentItem
-         → 对每条新内容, 按绑定的流水线模版创建 PipelineExecution
+         → 对每条新内容, 按绑定的流水线模板创建 PipelineExecution
 """
 
 import logging
@@ -76,10 +76,18 @@ async def check_and_collect_sources():
             except Exception as e:
                 db.rollback()
                 source.consecutive_failures += 1
-                db.commit()
+                try:
+                    db.commit()
+                except Exception:
+                    db.rollback()
+                    logger.error(f"Failed to update failure count for {source.name}")
+
                 import httpx
-                if isinstance(e, (httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException)):
-                    logger.warning(f"Collection transient error for {source.name}: {e}")
+                from sqlalchemy.exc import OperationalError
+                if isinstance(e, OperationalError):
+                    logger.warning(f"Database contention for {source.name}: {e}")
+                elif isinstance(e, (httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException)):
+                    logger.warning(f"Collection transient error for {source.name}: {type(e).__name__}: {str(e) or repr(e)}")
                 else:
                     logger.error(f"Collection failed for {source.name}: {e}")
 
@@ -118,6 +126,7 @@ async def check_and_collect_sources():
             PipelineStep.started_at < now - stale_timeout,
         ).all()
 
+        steps_to_requeue = []
         for step in stale_steps:
             step.status = StepStatus.PENDING.value
             step.started_at = None
@@ -125,13 +134,101 @@ async def check_and_collect_sources():
             execution = db.get(PipelineExecution, step.pipeline_id)
             if execution and execution.status == PipelineStatus.RUNNING.value:
                 logger.info(f"Recovering stale step: {step.step_type} (pipeline={step.pipeline_id[:12]})")
-                db.commit()
-                # 重新入队，yt-dlp 会自动从 .part 文件断点续传
-                from app.tasks.pipeline_tasks import execute_pipeline_step
-                execute_pipeline_step(step.pipeline_id, step.step_index)
+                steps_to_requeue.append((step.pipeline_id, step.step_index))
 
         if stale_steps:
             db.commit()
+            # 重新入队（commit 后再入队，确保状态已持久化）
+            from app.tasks.pipeline_tasks import execute_pipeline_step
+            for pipeline_id, step_index in steps_to_requeue:
+                execute_pipeline_step(pipeline_id, step_index)
+
+
+async def cleanup_expired_content():
+    """定时清理过期内容 — 凌晨 03:00 执行
+
+    逻辑:
+    1. 读取全局默认 default_retention_days
+    2. 遍历所有 auto_cleanup_enabled=True 的数据源
+    3. 删除超过保留期且未收藏、无笔记的内容（级联删除关联数据+媒体文件）
+    """
+    import shutil
+    from pathlib import Path
+    from datetime import datetime, timezone, timedelta
+    from app.core.database import SessionLocal
+    from app.core.config import settings
+    from app.models.content import SourceConfig, ContentItem
+    from app.models.pipeline import PipelineExecution, PipelineStep
+    from app.models.system_setting import SystemSetting
+
+    with SessionLocal() as db:
+        # 读取全局默认保留天数
+        setting = db.get(SystemSetting, "default_retention_days")
+        global_retention = int(setting.value) if setting and setting.value else 30
+        if global_retention <= 0:
+            logger.info("Cleanup skipped: global retention is 0 (keep forever)")
+            return
+
+        sources = db.query(SourceConfig).filter(
+            SourceConfig.auto_cleanup_enabled == True,
+        ).all()
+
+        if not sources:
+            logger.info("Cleanup: no sources with auto_cleanup_enabled")
+            return
+
+        now = datetime.now(timezone.utc)
+        total_deleted = 0
+
+        for source in sources:
+            retention = source.retention_days if source.retention_days and source.retention_days > 0 else global_retention
+            cutoff = now - timedelta(days=retention)
+
+            # 查找过期且未保护的内容
+            expired_items = db.query(ContentItem).filter(
+                ContentItem.source_id == source.id,
+                ContentItem.collected_at < cutoff,
+                ContentItem.is_favorited == False,
+                ContentItem.user_note.is_(None),
+            ).all()
+
+            if not expired_items:
+                continue
+
+            item_ids = [item.id for item in expired_items]
+
+            # 级联删除: steps → executions → items（复用 batch_delete 模式）
+            execution_ids = [
+                eid for (eid,) in db.query(PipelineExecution.id)
+                .filter(PipelineExecution.content_id.in_(item_ids))
+                .all()
+            ]
+            if execution_ids:
+                db.query(PipelineStep).filter(
+                    PipelineStep.pipeline_id.in_(execution_ids)
+                ).delete(synchronize_session=False)
+                db.query(PipelineExecution).filter(
+                    PipelineExecution.id.in_(execution_ids)
+                ).delete(synchronize_session=False)
+
+            deleted = db.query(ContentItem).filter(
+                ContentItem.id.in_(item_ids)
+            ).delete(synchronize_session=False)
+
+            db.commit()
+
+            # 清理媒体文件
+            media_base = Path(settings.MEDIA_DIR)
+            audio_base = media_base / "audio"
+            for item_id in item_ids:
+                for d in [media_base / item_id, audio_base / item_id]:
+                    if d.is_dir():
+                        shutil.rmtree(d, ignore_errors=True)
+
+            total_deleted += deleted
+            logger.info(f"Cleanup [{source.name}]: deleted {deleted} expired items (retention={retention}d)")
+
+        logger.info(f"Cleanup complete: {total_deleted} items deleted from {len(sources)} sources")
 
 
 def start_scheduler():
@@ -162,8 +259,16 @@ def start_scheduler():
         replace_existing=True,
     )
 
+    # 内容清理 — 每天 03:00
+    scheduler.add_job(
+        cleanup_expired_content,
+        CronTrigger(hour=3, minute=0),
+        id="cleanup_expired_content",
+        replace_existing=True,
+    )
+
     scheduler.start()
-    logger.info("Scheduler started: collection loop + daily/weekly reports")
+    logger.info("Scheduler started: collection loop + daily/weekly reports + content cleanup")
 
 
 def stop_scheduler():

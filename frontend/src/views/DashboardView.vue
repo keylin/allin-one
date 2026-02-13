@@ -9,7 +9,9 @@ import {
   getSourceHealth,
   getRecentContent,
 } from '@/api/dashboard'
+import { getFinanceSummary } from '@/api/finance'
 import { collectSource } from '@/api/sources'
+import { useToast } from '@/composables/useToast'
 
 const router = useRouter()
 
@@ -21,6 +23,8 @@ const activities = ref([])
 const trend = ref([])
 const sourceHealthList = ref([])
 const recentContentList = ref([])
+const financeSummaries = ref([])
+const toast = useToast()
 const loading = ref(true)
 const collectingId = ref(null)
 let timer = null
@@ -86,18 +90,22 @@ const healthStyles = {
 
 async function fetchData() {
   try {
-    const [statsRes, actRes, trendRes, healthRes, contentRes] = await Promise.all([
+    const [statsRes, actRes, trendRes, healthRes, contentRes, finRes] = await Promise.all([
       getDashboardStats(),
       getRecentActivity(),
       getCollectionTrend(7),
       getSourceHealth(),
       getRecentContent(6),
+      getFinanceSummary().catch(() => ({ code: -1 })),
     ])
     if (statsRes.code === 0) stats.value = statsRes.data
     if (actRes.code === 0) activities.value = actRes.data
     if (trendRes.code === 0) trend.value = trendRes.data
     if (healthRes.code === 0) sourceHealthList.value = healthRes.data
     if (contentRes.code === 0) recentContentList.value = contentRes.data
+    if (finRes.code === 0) financeSummaries.value = finRes.data.slice(0, 4)
+  } catch (e) {
+    toast.error('仪表盘数据加载失败，请稍后刷新重试')
   } finally {
     loading.value = false
   }
@@ -141,34 +149,10 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="p-4 md:p-8 max-w-7xl mx-auto">
-    <!-- 页头 + 快捷操作 -->
-    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
-      <div>
-        <h2 class="text-2xl font-bold tracking-tight text-slate-900">仪表盘</h2>
-        <p class="text-sm text-slate-400 mt-1">系统概览与数据监控</p>
-      </div>
-      <div class="flex items-center gap-2">
-        <button
-          class="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-indigo-600 bg-indigo-50 rounded-lg hover:bg-indigo-100 transition-colors"
-          @click="router.push('/videos')"
-        >
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-          </svg>
-          下载视频
-        </button>
-        <button
-          class="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-slate-600 bg-slate-100 rounded-lg hover:bg-slate-200 transition-colors"
-          @click="router.push('/sources')"
-        >
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
-          </svg>
-          管理数据源
-        </button>
-      </div>
-    </div>
+  <div class="flex flex-col h-full">
+    <!-- Scrollable content -->
+    <div class="flex-1 overflow-y-auto">
+      <div class="px-4 py-4">
 
     <!-- 统计卡片 -->
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
@@ -199,6 +183,42 @@ onUnmounted(() => {
         </div>
         <div class="text-sm text-slate-500 mt-1">{{ card.label }}</div>
         <div class="text-xs text-slate-300">{{ card.subtitle }}</div>
+      </div>
+    </div>
+
+    <!-- 金融数据概览 -->
+    <div v-if="financeSummaries.length" class="bg-white rounded-xl border border-slate-200/60 shadow-sm p-5 mb-6">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="text-sm font-semibold text-slate-700">金融数据概览</h3>
+        <button
+          class="text-xs text-indigo-500 hover:text-indigo-700 transition-colors"
+          @click="router.push('/finance')"
+        >
+          查看全部
+        </button>
+      </div>
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <div
+          v-for="item in financeSummaries"
+          :key="item.source_id"
+          class="px-3 py-2.5 rounded-lg bg-slate-50/50 cursor-pointer hover:bg-slate-100 transition-colors"
+          @click="router.push('/finance')"
+        >
+          <div class="text-xs text-slate-500 mb-1 truncate">{{ item.name }}</div>
+          <div class="flex items-end gap-2">
+            <span class="text-base font-bold text-slate-900">
+              {{ item.value != null ? (Math.abs(item.value) >= 1e4 ? (item.value / 1e4).toFixed(2) + '万' : item.value.toFixed(2)) : '-' }}
+            </span>
+            <span
+              v-if="item.change != null"
+              class="text-xs font-medium mb-0.5"
+              :class="item.change > 0 ? 'text-red-500' : item.change < 0 ? 'text-emerald-500' : 'text-slate-400'"
+            >
+              {{ item.change > 0 ? '+' : '' }}{{ item.change.toFixed(2) }}
+            </span>
+          </div>
+          <div v-if="item.date" class="text-[10px] text-slate-300 mt-0.5">{{ item.date }}</div>
+        </div>
       </div>
     </div>
 
@@ -346,7 +366,7 @@ onUnmounted(() => {
                 <div class="text-xs font-medium text-slate-700 line-clamp-1">{{ item.title }}</div>
                 <div class="flex items-center gap-2 mt-1.5">
                   <span
-                    class="inline-flex px-1.5 py-0.5 text-[10px] font-medium rounded"
+                    class="inline-flex px-2 py-0.5 text-xs font-medium rounded-md"
                     :class="contentStatusStyles[item.status] || 'bg-slate-100 text-slate-500'"
                   >
                     {{ statusLabels[item.status] || item.status }}
@@ -408,7 +428,7 @@ onUnmounted(() => {
               <td class="px-5 py-3.5 text-xs text-slate-700 font-medium max-w-[180px] truncate">{{ a.content_title || '-' }}</td>
               <td class="px-5 py-3.5 text-xs text-slate-500">{{ a.template_name || '-' }}</td>
               <td class="px-5 py-3.5">
-                <span class="inline-flex px-2 py-0.5 text-[10px] font-medium rounded-md" :class="statusStyles[a.status] || 'bg-slate-100 text-slate-500'">
+                <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-md" :class="statusStyles[a.status] || 'bg-slate-100 text-slate-500'">
                   {{ statusLabels[a.status] || a.status }}
                 </span>
               </td>
@@ -440,7 +460,7 @@ onUnmounted(() => {
                 <div class="text-sm font-medium text-slate-700 line-clamp-1">{{ a.content_title || '-' }}</div>
                 <div class="text-xs text-slate-400 mt-0.5">{{ a.template_name || '-' }}</div>
               </div>
-              <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-lg shrink-0" :class="statusStyles[a.status] || 'bg-slate-100 text-slate-500'">
+              <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-md shrink-0" :class="statusStyles[a.status] || 'bg-slate-100 text-slate-500'">
                 {{ statusLabels[a.status] || a.status }}
               </span>
             </div>
@@ -460,6 +480,9 @@ onUnmounted(() => {
             </div>
           </div>
         </div>
+      </div>
+    </div>
+
       </div>
     </div>
   </div>

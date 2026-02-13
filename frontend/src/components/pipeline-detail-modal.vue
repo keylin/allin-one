@@ -1,7 +1,9 @@
 <script setup>
-import { ref, watch } from 'vue'
+import { ref, watch, toRef } from 'vue'
 import dayjs from 'dayjs'
 import { getPipeline } from '@/api/pipelines'
+import { formatTimeFull } from '@/utils/time'
+import { useScrollLock } from '@/composables/useScrollLock'
 
 const triggerLabels = {
   manual: '手动',
@@ -16,6 +18,7 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['close'])
+useScrollLock(toRef(props, 'visible'))
 
 const detail = ref(null)
 const loading = ref(false)
@@ -69,7 +72,7 @@ watch(() => props.visible, async (val) => {
 })
 
 function formatTime(t) {
-  return t ? dayjs.utc(t).local().format('YYYY-MM-DD HH:mm:ss') : '-'
+  return formatTimeFull(t)
 }
 
 function formatDuration(startedAt, completedAt) {
@@ -125,7 +128,7 @@ function formatOutput(data) {
         <div class="grid grid-cols-2 gap-4 mb-6">
           <div class="bg-slate-50 rounded-xl p-4">
             <span class="text-xs text-slate-400 block mb-1">状态</span>
-            <span class="inline-flex px-2.5 py-1 text-xs font-medium rounded-lg" :class="statusStyles[detail.status]">
+            <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-md" :class="statusStyles[detail.status]">
               {{ statusLabels[detail.status] || detail.status }}
             </span>
           </div>

@@ -81,7 +81,7 @@ async def collect_source(source: SourceConfig, db: Session) -> list[ContentItem]
 
         # 暂时性网络/上游错误只记 WARNING，不打堆栈
         if isinstance(e, (httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException)):
-            logger.warning(f"[collect] {source.name}: {e}")
+            logger.warning(f"[collect] {source.name}: {type(e).__name__}: {str(e) or repr(e)}")
         else:
             logger.exception(f"[collect] Failed for {source.name}: {e}")
         raise

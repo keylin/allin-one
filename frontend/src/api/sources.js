@@ -41,10 +41,3 @@ export function exportOPML() {
   return '/api/sources/export'
 }
 
-export function generateBilibiliQrcode() {
-  return api.post('/sources/bilibili/qrcode/generate')
-}
-
-export function pollBilibiliQrcode(qrcodeKey) {
-  return api.get('/sources/bilibili/qrcode/poll', { params: { qrcode_key: qrcodeKey } })
-}

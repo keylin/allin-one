@@ -62,16 +62,28 @@ async def update_settings(body: SettingsUpdate, db: Session = Depends(get_db)):
     return {"code": 0, "data": None, "message": "ok"}
 
 
+_MASK_PATTERN = re.compile(r'^\*{3}\w{0,4}$')
+
+
 @router.post("/test-llm")
-async def test_llm_connection(body: LLMTestRequest):
+async def test_llm_connection(body: LLMTestRequest, db: Session = Depends(get_db)):
     """测试 LLM API 连接"""
     from openai import AsyncOpenAI
 
     if not body.api_key or not body.base_url or not body.model:
         return error_response(400, "请填写完整的 API Key、Base URL 和模型名称")
 
+    # 如果前端传来的是掩码值，从 DB 读取真实 key
+    api_key = body.api_key
+    if _MASK_PATTERN.match(api_key):
+        row = db.get(SystemSetting, "llm_api_key")
+        if row and row.value:
+            api_key = row.value
+        else:
+            return error_response(400, "未找到已保存的 API Key，请输入真实值")
+
     try:
-        client = AsyncOpenAI(api_key=body.api_key, base_url=body.base_url, timeout=15)
+        client = AsyncOpenAI(api_key=api_key, base_url=body.base_url, timeout=15)
         resp = await client.chat.completions.create(
             model=body.model,
             messages=[{"role": "user", "content": "Hi, reply with OK"}],
