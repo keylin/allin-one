@@ -10,11 +10,15 @@ logger = logging.getLogger(__name__)
 
 class Settings(BaseSettings):
     # Database
-    DATABASE_URL: str = "sqlite:///data/db/allin.db"
+    DATABASE_URL: str = "postgresql://allinone:allinone@localhost:5432/allinone"
 
     # External Services
     RSSHUB_URL: str = "http://rsshub:1200"
     BROWSERLESS_URL: str = "http://browserless:3000"
+
+    # Miniflux
+    MINIFLUX_URL: str = "http://miniflux:8080"
+    MINIFLUX_API_KEY: str = ""
 
     # Security
     API_KEY: str = ""

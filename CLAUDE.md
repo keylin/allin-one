@@ -14,7 +14,8 @@
 
 ## 技术栈
 
-后端 Python 3.11+ (FastAPI + SQLite WAL + Huey + APScheduler)，前端 Vue 3 + Vite + TailwindCSS，部署 Docker Compose。
+后端 Python 3.11+ (FastAPI + PostgreSQL + Huey + APScheduler)，前端 Vue 3 + Vite + TailwindCSS，部署 Docker Compose。
+Miniflux 作为 RSS 前端（管理订阅+全文提取），RSSHub 生成非标准平台 feed。
 
 ## 常用命令
 
@@ -43,9 +44,10 @@ docker compose up -d --build
 
 ## 关键决策
 
-- SQLite (非 PostgreSQL): 个人项目，单机部署，WAL 模式够用
-- Huey (非 Celery): 无需 Redis，SQLite 后端轻量
+- PostgreSQL: 与 Miniflux 共用实例，一个 PG 两个 database (allinone + miniflux)
+- Huey (非 Celery): 无需 Redis，SQLite 后端轻量（任务队列仍用 SqliteHuey）
 - 前后端同容器: Vite 构建产物由 FastAPI 静态服务
+- Miniflux: RSS 订阅管理+全文提取前端，MinifluxCollector 通过 API 拉取
 
 ## 文档导航
 

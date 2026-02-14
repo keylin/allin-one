@@ -44,6 +44,8 @@ class SourceType(str, Enum):
     # 账号授权
     ACCOUNT_BILIBILI = "account.bilibili"  # B站账号
     ACCOUNT_GENERIC = "account.generic"    # 其他平台账号
+    # Miniflux 托管 RSS
+    RSS_MINIFLUX = "rss.miniflux"    # Miniflux 托管的 RSS feed
     # 用户记录
     USER_NOTE = "user.note"          # 日常笔记
     SYSTEM_NOTIFICATION = "system.notification"  # 系统消息

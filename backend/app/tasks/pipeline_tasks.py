@@ -18,7 +18,6 @@ import re
 
 from app.tasks.huey_instance import huey
 import app.models  # noqa: F401 — 确保所有 ORM 模型注册，避免 relationship 解析失败
-from app.core.database import commit_with_retry as _commit_with_retry
 from app.services.pipeline.executor import PipelineExecutor
 
 logger = logging.getLogger(__name__)
@@ -198,7 +197,7 @@ def _handle_enrich_content(context: dict) -> dict:
                 content = db.get(ContentItem, context["content_id"])
                 if content and original_html:
                     content.processed_content = original_html
-                    _commit_with_retry(db)
+                    db.commit()
             return {
                 "status": "fallback_to_original",
                 "reason": quality["reason"],
@@ -212,7 +211,7 @@ def _handle_enrich_content(context: dict) -> dict:
             content = db.get(ContentItem, context["content_id"])
             if content:
                 content.processed_content = enriched_md
-                _commit_with_retry(db)
+                db.commit()
 
         return {
             "status": "enriched",
@@ -229,7 +228,7 @@ def _handle_enrich_content(context: dict) -> dict:
             content = db.get(ContentItem, context["content_id"])
             if content:
                 content.processed_content = original_html
-                _commit_with_retry(db)
+                db.commit()
         return {
             "status": "fallback_to_original",
             "reason": "all fetch methods failed",
@@ -542,7 +541,7 @@ def _handle_transcribe_content(context: dict) -> dict:
             content = db.get(ContentItem, context["content_id"])
             if content:
                 content.processed_content = text
-                _commit_with_retry(db)
+                db.commit()
 
         return {"status": "transcribed", "text_length": len(text), "source": "subtitle_file"}
 
@@ -573,7 +572,7 @@ def _handle_transcribe_content(context: dict) -> dict:
             content = db.get(ContentItem, context["content_id"])
             if content:
                 content.processed_content = text
-                _commit_with_retry(db)
+                db.commit()
 
         return {"status": "transcribed", "text_length": len(text), "source": "whisper_asr"}
 
@@ -694,7 +693,7 @@ def _handle_translate_content(context: dict) -> dict:
         content = db.get(ContentItem, content_id)
         if content:
             content.processed_content = translated
-            _commit_with_retry(db)
+            db.commit()
 
     return {"status": "translated", "target_language": target_lang, "text_length": len(translated)}
 
@@ -761,7 +760,7 @@ def _handle_analyze_content(context: dict) -> dict:
         content = db.get(ContentItem, content_id)
         if content:
             content.analysis_result = json.dumps(result, ensure_ascii=False)
-            _commit_with_retry(db)
+            db.commit()
 
     return {"status": "analyzed", "result_keys": list(result.keys()) if isinstance(result, dict) else []}
 
@@ -1026,7 +1025,7 @@ def _handle_localize_media(context: dict) -> dict:
                     if desc:
                         content.processed_content = desc
 
-                _commit_with_retry(db)
+                db.commit()
 
             result["has_video"] = True
             result["file_path"] = video_path or ""
@@ -1051,7 +1050,7 @@ def _handle_localize_media(context: dict) -> dict:
                     metadata_json=json.dumps({"error": str(e)[:200]}),
                 )
                 db.add(media_item)
-                _commit_with_retry(db)
+                db.commit()
             result["media_items_created"] += 1
 
         return result
@@ -1125,7 +1124,7 @@ def _handle_localize_media(context: dict) -> dict:
                     metadata_json=json.dumps({"alt": img.get("alt", "")}),
                 )
                 db.add(media_item)
-                _commit_with_retry(db)
+                db.commit()
 
             # Rewrite URL in HTML
             img["src"] = f"/api/media/{content_id}/images/{filename}"
@@ -1142,7 +1141,7 @@ def _handle_localize_media(context: dict) -> dict:
             content = db.get(ContentItem, content_id)
             if content:
                 content.processed_content = str(soup)
-                _commit_with_retry(db)
+                db.commit()
 
     logger.info(f"[localize_media] content={content_id}: {images_downloaded} images downloaded")
     return result

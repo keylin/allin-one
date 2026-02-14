@@ -56,5 +56,6 @@ pnpm-debug.log*
 
 # Allin-One Specific
 backend/static/
+backend/alembic/versions_sqlite_backup/
 .pids/
 .cache/

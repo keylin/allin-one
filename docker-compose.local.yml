@@ -1,6 +1,47 @@
 # 本地开发环境 - 全容器化，支持热重载
 
 services:
+  # ---- 基础设施 ----
+  postgres:
+    image: postgres:17-alpine
+    container_name: allin-dev-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      TZ: Asia/Shanghai
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+      - ./scripts/init-databases.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - allin-dev
+
+  miniflux:
+    image: miniflux/miniflux:latest
+    container_name: allin-dev-miniflux
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://miniflux:miniflux@postgres:5432/miniflux?sslmode=disable
+      RUN_MIGRATIONS: "1"
+      CREATE_ADMIN: "1"
+      ADMIN_USERNAME: ${MINIFLUX_ADMIN_USER:-admin}
+      ADMIN_PASSWORD: ${MINIFLUX_ADMIN_PASSWORD:-changeme}
+      TZ: Asia/Shanghai
+    ports:
+      - "8180:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - allin-dev
+
   # ---- 依赖服务 ----
   rsshub:
     image: diygod/rsshub:latest
@@ -68,13 +109,17 @@ services:
       - ./backend/.env
     environment:
       TZ: Asia/Shanghai
+      DATABASE_URL: postgresql://allinone:allinone@postgres:5432/allinone
       # 覆盖 .env 中的地址，使用 Docker 内部网络
       RSSHUB_URL: http://rsshub:1200
       BROWSERLESS_URL: http://browserless:3000
+      MINIFLUX_URL: http://miniflux:8080
       SCHEDULER_ENABLED: "true"
       # macOS Docker bind mount 不传递 inotify 事件，需要轮询
       WATCHFILES_FORCE_POLLING: "true"
     depends_on:
+      postgres:
+        condition: service_healthy
       rsshub:
         condition: service_healthy
       browserless:
@@ -113,11 +158,15 @@ services:
       - ./backend/.env
     environment:
       TZ: Asia/Shanghai
+      DATABASE_URL: postgresql://allinone:allinone@postgres:5432/allinone
       RSSHUB_URL: http://rsshub:1200
       BROWSERLESS_URL: http://browserless:3000
+      MINIFLUX_URL: http://miniflux:8080
       # macOS Docker bind mount 不传递 inotify 事件，需要轮询
       WATCHFILES_FORCE_POLLING: "true"
     depends_on:
+      postgres:
+        condition: service_healthy
       rsshub:
         condition: service_healthy
       browserless:
@@ -128,3 +177,7 @@ services:
 networks:
   allin-dev:
     driver: bridge
+
+volumes:
+  postgres_dev_data:
+    driver: local

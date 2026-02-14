@@ -753,7 +753,7 @@ services:
       - ./data:/app/data
       - ./data/reports:/app/reports
     environment:
-      - DATABASE_URL=sqlite:///data/db/allin.db
+      - DATABASE_URL=postgresql://allinone:allinone@postgres:5432/allinone
       - RSSHUB_URL=http://rsshub:1200
       - BROWSERLESS_URL=http://browserless:3000
       - API_KEY=                           # API 认证密钥（空=禁用认证）
@@ -774,7 +774,7 @@ services:
       - ./data:/app/data
       - ./data/reports:/app/reports
     environment:
-      - DATABASE_URL=sqlite:///data/db/allin.db
+      - DATABASE_URL=postgresql://allinone:allinone@postgres:5432/allinone
       - RSSHUB_URL=http://rsshub:1200
       - BROWSERLESS_URL=http://browserless:3000
     env_file:

@@ -1,6 +1,46 @@
 version: '3.8'
 
 services:
+  # PostgreSQL - 共享数据库实例 (allinone + miniflux)
+  postgres:
+    image: postgres:17-alpine
+    container_name: allin-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      TZ: Asia/Shanghai
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-databases.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - allin-network
+
+  # Miniflux - RSS 阅读器
+  miniflux:
+    image: miniflux/miniflux:latest
+    container_name: allin-miniflux
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://miniflux:miniflux@postgres:5432/miniflux?sslmode=disable
+      RUN_MIGRATIONS: "1"
+      CREATE_ADMIN: "1"
+      ADMIN_USERNAME: ${MINIFLUX_ADMIN_USER:-admin}
+      ADMIN_PASSWORD: ${MINIFLUX_ADMIN_PASSWORD:-changeme}
+      TZ: Asia/Shanghai
+    ports:
+      - "8180:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - allin-network
+
   # RSS Hub - RSS 聚合服务
   rsshub:
     image: diygod/rsshub:latest
@@ -54,9 +94,11 @@ services:
       - ./backend/.env:/project/backend/.env
     environment:
       TZ: Asia/Shanghai
-      DATABASE_URL: sqlite:///data/db/allin.db
+      DATABASE_URL: postgresql://allinone:allinone@postgres:5432/allinone
       RSSHUB_URL: http://rsshub:1200
       BROWSERLESS_URL: http://browserless:3000
+      MINIFLUX_URL: http://miniflux:8080
+      MINIFLUX_API_KEY: ${MINIFLUX_API_KEY:-}
       SCHEDULER_ENABLED: 'true'
       LOG_LEVEL: INFO
       # 安全设置（强烈建议在生产环境配置）
@@ -65,10 +107,14 @@ services:
       # 代理设置（httpx / OpenAI SDK 自动识别）
       # HTTP_PROXY: http://host.docker.internal:7890
       # HTTPS_PROXY: http://host.docker.internal:7890
-      # NO_PROXY: localhost,rsshub,browserless
+      # NO_PROXY: localhost,rsshub,browserless,postgres,miniflux
     depends_on:
-      - rsshub
-      - browserless
+      postgres:
+        condition: service_healthy
+      rsshub:
+        condition: service_started
+      browserless:
+        condition: service_started
     networks:
       - allin-network
     healthcheck:
@@ -91,17 +137,23 @@ services:
       - ./backend/.env:/app/.env:ro
     environment:
       TZ: Asia/Shanghai
-      DATABASE_URL: sqlite:///data/db/allin.db
+      DATABASE_URL: postgresql://allinone:allinone@postgres:5432/allinone
       RSSHUB_URL: http://rsshub:1200
       BROWSERLESS_URL: http://browserless:3000
+      MINIFLUX_URL: http://miniflux:8080
+      MINIFLUX_API_KEY: ${MINIFLUX_API_KEY:-}
       LOG_LEVEL: INFO
       # 代理设置（httpx / OpenAI SDK 自动识别）
       # HTTP_PROXY: http://host.docker.internal:7890
       # HTTPS_PROXY: http://host.docker.internal:7890
-      # NO_PROXY: localhost,rsshub,browserless
+      # NO_PROXY: localhost,rsshub,browserless,postgres,miniflux
     depends_on:
-      - rsshub
-      - browserless
+      postgres:
+        condition: service_healthy
+      rsshub:
+        condition: service_started
+      browserless:
+        condition: service_started
     networks:
       - allin-network
 
@@ -110,5 +162,7 @@ networks:
     driver: bridge
 
 volumes:
+  postgres_data:
+    driver: local
   data:
     driver: local

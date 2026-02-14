@@ -8,7 +8,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from app.core.database import SessionLocal, commit_with_retry as _commit_with_retry
+from app.core.database import SessionLocal
 from app.models.pipeline import (
     PipelineExecution, PipelineStep,
     PipelineStatus, StepStatus,
@@ -56,7 +56,7 @@ class PipelineExecutor:
             from app.models.content import ContentItem
             content = db.get(ContentItem, execution.content_id)
 
-            _commit_with_retry(db)
+            db.commit()
 
             return {
                 "execution_id": execution_id,
@@ -100,7 +100,7 @@ class PipelineExecutor:
                         execution.error_message = f"关键步骤 '{step.step_type}' 失败: {error}"
                         execution.completed_at = now
                     logger.error(f"Pipeline {execution_id} 在关键步骤 {step.step_type} 失败")
-                    _commit_with_retry(db)
+                    db.commit()
                     return  # 关键步骤失败，不推进
                 else:
                     step.status = StepStatus.SKIPPED.value
@@ -114,7 +114,7 @@ class PipelineExecutor:
             # ---- 推进流水线 ----
             execution = db.get(PipelineExecution, execution_id)
             if not execution or execution.status == PipelineStatus.FAILED.value:
-                _commit_with_retry(db)
+                db.commit()
                 return
 
             next_index = execution.current_step + 1
@@ -133,12 +133,12 @@ class PipelineExecutor:
                     else:
                         content.status = ContentStatus.READY.value
 
-                _commit_with_retry(db)
+                db.commit()
                 logger.info(f"Pipeline {execution_id} ({execution.template_name}) 完成")
                 return
 
             execution.current_step = next_index
-            _commit_with_retry(db)
+            db.commit()
 
             logger.info(f"Pipeline {execution_id} advancing to step {next_index}")
             from app.tasks.pipeline_tasks import execute_pipeline_step

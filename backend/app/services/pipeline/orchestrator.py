@@ -87,8 +87,11 @@ class PipelineOrchestrator:
         """基于内容检测计算自动预处理步骤"""
         steps = []
 
-        # 1. 全文检测: raw_data 文本量不足 → 需要抓取全文
-        if not self._has_full_text(content.raw_data):
+        # 1. 全文检测
+        # 如果 processed_content 已有充足文本（如 Miniflux 来源），跳过 enrich
+        if content.processed_content and len(self._strip_html(content.processed_content)) >= _FULL_TEXT_THRESHOLD:
+            logger.info(f"processed_content already sufficient for content {content.id}, skip enrich")
+        elif not self._has_full_text(content.raw_data):
             steps.append({"step_type": "enrich_content", "is_critical": False,
                           "config": {"scrape_level": "auto"}})
         else:

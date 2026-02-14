@@ -65,37 +65,29 @@ maybe_restart_worker() {
 }
 
 # ---- 数据库安全 ----
-DB_DIR="$ROOT_DIR/data/db"
 BACKUP_DIR="$ROOT_DIR/data/backups"
 
 backup_db() {
-    local db_file="$DB_DIR/allin.db"
-    [ -f "$db_file" ] || return 0
-
+    # PostgreSQL 备份通过 pg_dump
     mkdir -p "$BACKUP_DIR"
     local timestamp=$(date +%Y%m%d_%H%M%S)
-    local backup_file="$BACKUP_DIR/allin_${timestamp}.db"
+    local backup_file="$BACKUP_DIR/allinone_${timestamp}.sql"
 
-    # 用 sqlite3 的 .backup 命令安全导出（会自动合并 WAL）
-    if command -v sqlite3 >/dev/null 2>&1; then
-        sqlite3 "$db_file" ".backup '$backup_file'"
+    if $DC exec -T postgres pg_dump -U allinone allinone > "$backup_file" 2>/dev/null; then
+        ok "数据库已备份: ${backup_file##*/}"
     else
-        cp "$db_file" "$backup_file"
-        # 同时拷贝 WAL 文件以保证完整性
-        [ -f "${db_file}-wal" ] && cp "${db_file}-wal" "${backup_file}-wal"
-        [ -f "${db_file}-shm" ] && cp "${db_file}-shm" "${backup_file}-shm"
+        warn "数据库备份跳过 (postgres 未运行)"
+        rm -f "$backup_file"
+        return 0
     fi
 
-    ok "数据库已备份: ${backup_file##*/}"
-
     # 只保留最近 5 个备份
-    ls -t "$BACKUP_DIR"/allin_*.db 2>/dev/null | tail -n +6 | while read old; do
-        rm -f "$old" "${old}-wal" "${old}-shm"
+    ls -t "$BACKUP_DIR"/allinone_*.sql 2>/dev/null | tail -n +6 | while read old; do
+        rm -f "$old"
     done
 }
 
 safe_stop() {
-    # 先停 worker 避免写入冲突，再停 backend 让 WAL checkpoint 完成
     $DC stop worker 2>/dev/null || true
     $DC stop backend 2>/dev/null || true
 }
@@ -153,8 +145,10 @@ show_status() {
     echo "  前端页面:    http://localhost:3000/"
     echo "  后端 API:    http://localhost:8000/api/"
     echo "  API 文档:    http://localhost:8000/docs"
+    echo "  Miniflux:    http://localhost:8180/"
     echo "  RSSHub:      http://localhost:1200/"
     echo "  Browserless: http://localhost:3001/"
+    echo "  PostgreSQL:  localhost:5432"
     echo ""
 }
 

@@ -21,13 +21,14 @@ Huey worker 等非 FastAPI 入口必须在使用 ORM 前执行 `import app.model
 
 ## 数据库约定
 
+- **PostgreSQL** 为主数据库（与 Miniflux 共用同一 PG 实例，各自独立 database）
 - 主键: `Column(String, primary_key=True, default=lambda: uuid.uuid4().hex)`
 - 时间戳: 一律 UTC (`datetime.now(timezone.utc)`)，禁止 naive datetime
 - 枚举: 使用 `str, Enum` 子类，存储 `.value` 字符串到 DB
 - 迁移: 必须通过 `alembic revision --autogenerate`，禁止手写 SQL
-- SQLite WAL 模式在连接时启用（见 `app/core/database.py`）
-- 外键通过 `PRAGMA foreign_keys=ON` 强制执行
-- `busy_timeout=30000`，并提供 `commit_with_retry()` 处理 "database is locked" 错误
+- JSON 字段当前存储为 `Column(Text)` + `json.loads`/`json.dumps`（后续可迁移到 JSONB）
+- `database.py` 保留 SQLite fallback（用于本地测试），通过 `DATABASE_URL` 前缀自动切换
+- Huey 任务队列仍使用 SqliteHuey（`data/db/huey.db`），不受 PG 迁移影响
 - LLM 配置: 存储在 `system_settings` 表（非环境变量），通过 `get_llm_config()` 读取
 - 数据目录: `data/` 在项目根目录（非 backend/data/），backend 和 worker 共享
 
@@ -82,7 +83,7 @@ class SourceResponse(BaseModel):     # 响应模型
 ## 枚举定义
 
 枚举值以代码为准，不要凭记忆：
-- `app/models/content.py` — SourceType, MediaType (仅用于 MediaItem: image/video/audio), ContentStatus (含 ready)
+- `app/models/content.py` — SourceType (含 rss.miniflux), MediaType (仅用于 MediaItem: image/video/audio), ContentStatus (含 ready)
 - `app/models/pipeline.py` — StepType (含 localize_media), PipelineStatus, StepStatus, TriggerSource
 - `app/models/prompt_template.py` — TemplateType
 
