@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.models.content import ContentItem
-from app.models.pipeline import PipelineExecution, PipelineStep, PipelineStatus
+from app.models.pipeline import PipelineExecution, PipelineStep, PipelineStatus, StepStatus
 from app.schemas import (
     PipelineResponse, PipelineDetailResponse, PipelineStepResponse, error_response,
 )
@@ -43,11 +43,15 @@ async def list_pipelines(
         .all()
     )
 
+    # 批量加载关联的 content 标题，避免 N+1
+    content_ids = {ex.content_id for ex in executions}
+    contents = db.query(ContentItem.id, ContentItem.title).filter(ContentItem.id.in_(content_ids)).all()
+    content_map = {c.id: c.title for c in contents}
+
     data = []
     for ex in executions:
         item = PipelineResponse.model_validate(ex).model_dump()
-        content = db.get(ContentItem, ex.content_id)
-        item["content_title"] = content.title if content else None
+        item["content_title"] = content_map.get(ex.content_id)
         data.append(item)
 
     return {
@@ -94,7 +98,7 @@ async def manual_pipeline(
         content.status = ContentStatus.PROCESSING.value
         db.commit()
 
-        orchestrator.start_execution(execution.id)
+        await orchestrator.async_start_execution(execution.id)
 
         return {
             "code": 0,
@@ -192,6 +196,41 @@ async def test_step(
         }
 
 
+@router.post("/cancel-all")
+async def cancel_all_pipelines(db: Session = Depends(get_db)):
+    """一键取消所有 pending/running 的流水线"""
+    now = datetime.now(timezone.utc)
+    active_statuses = [PipelineStatus.PENDING.value, PipelineStatus.RUNNING.value]
+
+    executions = db.query(PipelineExecution).filter(
+        PipelineExecution.status.in_(active_statuses)
+    ).all()
+
+    if not executions:
+        return {"code": 0, "data": {"cancelled_count": 0}, "message": "没有需要取消的流水线"}
+
+    execution_ids = []
+    for ex in executions:
+        ex.status = PipelineStatus.CANCELLED.value
+        ex.completed_at = now
+        execution_ids.append(ex.id)
+
+    # 批量将关联的 pending 步骤设为 skipped
+    db.query(PipelineStep).filter(
+        PipelineStep.pipeline_id.in_(execution_ids),
+        PipelineStep.status == StepStatus.PENDING.value,
+    ).update({"status": StepStatus.SKIPPED.value}, synchronize_session="fetch")
+
+    db.commit()
+
+    logger.info(f"Batch cancelled {len(execution_ids)} pipelines")
+    return {
+        "code": 0,
+        "data": {"cancelled_count": len(execution_ids)},
+        "message": f"已取消 {len(execution_ids)} 条流水线",
+    }
+
+
 # ---- 单个 Pipeline 操作（参数路径必须在字面路径之后） ----
 
 @router.get("/{pipeline_id}")
@@ -242,8 +281,6 @@ async def retry_pipeline(
     db: Session = Depends(get_db),
 ):
     """重试失败的流水线"""
-    from app.models.pipeline import StepStatus
-
     execution = db.get(PipelineExecution, pipeline_id)
     if not execution:
         return error_response(404, "Pipeline not found")
@@ -281,7 +318,8 @@ async def retry_pipeline(
         execution.current_step = first_pending.step_index
         db.commit()
         from app.tasks.pipeline_tasks import execute_pipeline_step
-        execute_pipeline_step(pipeline_id, first_pending.step_index)
+        from app.tasks.procrastinate_app import async_defer
+        await async_defer(execute_pipeline_step, execution_id=pipeline_id, step_index=first_pending.step_index)
 
     return {
         "code": 0,

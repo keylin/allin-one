@@ -40,6 +40,7 @@ const akshareAlerts = ref([])
 // B站凭证下拉
 const biliCredentials = ref([])
 
+
 function getDefaultForm() {
   return {
     name: '',
@@ -68,6 +69,8 @@ function getDefaultConfig(sourceType) {
       return { cookie: '', type: 'dynamic', media_id: '', max_items: 20 }
     case 'account.generic':
       return { api_url: '', method: 'GET', headers: '', items_path: '', title_field: 'title', url_field: 'url', id_field: 'id' }
+    case 'rss.standard':
+      return {}
     default:
       return {}
   }
@@ -145,10 +148,10 @@ function serializeConfig() {
 const needsUrl = computed(() => !['account.bilibili', 'file.upload', 'user.note', 'system.notification'].includes(form.value.source_type))
 
 // 有结构化配置的类型
-const hasStructuredConfig = computed(() => ['rss.hub', 'web.scraper', 'api.akshare', 'account.bilibili', 'account.generic'].includes(form.value.source_type))
+const hasStructuredConfig = computed(() => ['rss.hub', 'rss.standard', 'web.scraper', 'api.akshare', 'account.bilibili', 'account.generic'].includes(form.value.source_type))
 
 // 无额外配置的类型
-const noConfigTypes = ['rss.standard', 'file.upload', 'user.note', 'system.notification']
+const noConfigTypes = ['file.upload', 'user.note', 'system.notification']
 
 watch(() => props.visible, async (val) => {
   if (val) {
@@ -313,7 +316,7 @@ const sectionClass = 'space-y-4 p-4 bg-slate-50/50 rounded-xl border border-slat
             <option value="">不绑定（仅自动预处理）</option>
             <option v-for="t in templates" :key="t.id" :value="t.id">{{ t.name }}</option>
           </select>
-          <p class="mt-1 text-xs text-slate-400">预处理（抓取全文/下载视频）按内容类型自动执行，此处配置后续的分析、翻译、推送等</p>
+          <p class="mt-1 text-xs text-slate-400">预处理（媒体下载）自动执行，此处配置后续的分析、翻译、推送等</p>
         </div>
 
         <!-- 定时采集 -->
@@ -366,7 +369,8 @@ const sectionClass = 'space-y-4 p-4 bg-slate-50/50 rounded-xl border border-slat
 
         <!-- RSS Standard -->
         <div v-else-if="form.source_type === 'rss.standard'" :class="sectionClass">
-          <p class="text-sm text-slate-500">标准 RSS/Atom 订阅，只需在上方填写 Feed URL 即可。</p>
+          <h4 class="text-sm font-semibold text-slate-800">RSS/Atom 配置</h4>
+          <p class="text-sm text-slate-500">在上方 URL 栏填写 Feed 地址即可，无需额外配置。</p>
         </div>
 
         <!-- Web Scraper -->

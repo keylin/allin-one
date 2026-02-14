@@ -5,9 +5,7 @@
     → 对每条调用 Orchestrator.trigger_for_content(content) → 创建 PipelineExecution
 
 流水线分两阶段:
-  1. 预处理 (自动): 基于内容检测自动执行，让内容变得"可分析"
-     - 文本量不足 → enrich_content (抓取全文)
-     - 始终 → localize_media (媒体检测+下载+URL改写)
+  1. 预处理 (自动): 用 raw_data 填充 processed_content, 并注入 localize_media
   2. 后置处理 (用户模板): analyze / translate / publish 等, 由用户配置
 """
 
@@ -27,10 +25,7 @@ from app.models.pipeline import (
 logger = logging.getLogger(__name__)
 
 # 预处理步骤类型 — 由系统自动注入, 从用户模板中去重
-PREPROCESSING_STEP_TYPES = {"enrich_content", "localize_media"}
-
-# 全文判定阈值 (纯文本字符数)
-_FULL_TEXT_THRESHOLD = 500
+PREPROCESSING_STEP_TYPES = {"localize_media"}
 
 
 class PipelineOrchestrator:
@@ -75,35 +70,22 @@ class PipelineOrchestrator:
         # 回退 summary
         return raw.get("summary", "")
 
-    @classmethod
-    def _has_full_text(cls, raw_data_json: str | None) -> bool:
-        """判断 raw_data 是否已包含足够正文 (≥500 字纯文本)"""
-        text = cls._extract_raw_text(raw_data_json)
-        if not text:
-            return False
-        return len(cls._strip_html(text)) >= _FULL_TEXT_THRESHOLD
-
     def _compute_preprocessing_steps(self, content: ContentItem) -> list[dict]:
-        """基于内容检测计算自动预处理步骤"""
+        """计算自动预处理步骤: 用 raw_data 填充 processed_content + localize_media"""
         steps = []
 
-        # 1. 全文检测
-        # 如果 processed_content 已有充足文本（如 Miniflux 来源），跳过 enrich
-        if content.processed_content and len(self._strip_html(content.processed_content)) >= _FULL_TEXT_THRESHOLD:
-            logger.info(f"processed_content already sufficient for content {content.id}, skip enrich")
-        elif not self._has_full_text(content.raw_data):
-            steps.append({"step_type": "enrich_content", "is_critical": False,
-                          "config": {"scrape_level": "auto"}})
-        else:
-            # 已有全文 → 直接填充 processed_content
-            if not content.processed_content:
-                content.processed_content = self._extract_raw_text(content.raw_data)
-                self.db.flush()
-                logger.info(f"Full text populated from raw_data for content {content.id}")
-
-        # 2. 媒体本地化: 始终添加（步骤内部检测是否有媒体需处理）
-        #    纯数据源 (api.akshare) 跳过
         source = self.db.query(SourceConfig).get(content.source_id)
+
+        # 直接用 raw_data 填充 processed_content（不再自动富化）
+        if not content.processed_content:
+            raw_text = self._extract_raw_text(content.raw_data)
+            if raw_text:
+                content.processed_content = raw_text
+                self.db.flush()
+                logger.info(f"raw_data populated into processed_content for content {content.id}")
+
+        # 媒体本地化: 始终添加（步骤内部检测是否有媒体需处理）
+        # 纯数据源 (api.akshare) 跳过
         if source and source.source_type != "api.akshare":
             steps.append({"step_type": "localize_media", "is_critical": False, "config": {}})
 
@@ -195,19 +177,30 @@ class PipelineOrchestrator:
         return execution
 
     def start_execution(self, execution_id: str) -> None:
-        """启动执行 (入队第一个步骤)"""
+        """入队第一个步骤 (同步版本, 仅供 executor.py 同步 worker 线程使用)"""
         execution = self.db.get(PipelineExecution, execution_id)
         if not execution:
             raise ValueError(f"Execution not found: {execution_id}")
 
-        execution.status = PipelineStatus.RUNNING.value
-        execution.started_at = datetime.now(timezone.utc)
-        execution.current_step = 0
         self.db.commit()
 
-        logger.info(f"Pipeline started: {execution_id}")
+        logger.info(f"Pipeline queued: {execution_id}")
         from app.tasks.pipeline_tasks import execute_pipeline_step
-        execute_pipeline_step(execution_id, 0)
+        from app.tasks.procrastinate_app import sync_defer
+        sync_defer(execute_pipeline_step, execution_id=execution_id, step_index=0)
+
+    async def async_start_execution(self, execution_id: str) -> None:
+        """入队第一个步骤 (异步版本, 供 FastAPI handlers 和 periodic tasks 使用)"""
+        execution = self.db.get(PipelineExecution, execution_id)
+        if not execution:
+            raise ValueError(f"Execution not found: {execution_id}")
+
+        self.db.commit()
+
+        logger.info(f"Pipeline queued: {execution_id}")
+        from app.tasks.pipeline_tasks import execute_pipeline_step
+        from app.tasks.procrastinate_app import async_defer
+        await async_defer(execute_pipeline_step, execution_id=execution_id, step_index=0)
 
 
 def seed_builtin_templates(db: Session) -> None:

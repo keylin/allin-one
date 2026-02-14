@@ -9,7 +9,7 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
-      TZ: Asia/Shanghai
+      TZ: UTC
     ports:
       - "5432:5432"
     volumes:
@@ -20,25 +20,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    networks:
-      - allin-dev
-
-  miniflux:
-    image: miniflux/miniflux:latest
-    container_name: allin-dev-miniflux
-    restart: unless-stopped
-    environment:
-      DATABASE_URL: postgres://miniflux:miniflux@postgres:5432/miniflux?sslmode=disable
-      RUN_MIGRATIONS: "1"
-      CREATE_ADMIN: "1"
-      ADMIN_USERNAME: ${MINIFLUX_ADMIN_USER:-admin}
-      ADMIN_PASSWORD: ${MINIFLUX_ADMIN_PASSWORD:-changeme}
-      TZ: Asia/Shanghai
-    ports:
-      - "8180:8080"
-    depends_on:
-      postgres:
-        condition: service_healthy
     networks:
       - allin-dev
 
@@ -102,7 +83,7 @@ services:
     volumes:
       - ./backend:/app
       - ./data:/app/data
-      - /var/run/docker.sock:/var/run/docker.sock
+      - ${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
       - ./docker-compose.local.yml:/project/docker-compose.yml:ro
       - ./backend/.env:/project/backend/.env
     env_file:
@@ -113,8 +94,6 @@ services:
       # 覆盖 .env 中的地址，使用 Docker 内部网络
       RSSHUB_URL: http://rsshub:1200
       BROWSERLESS_URL: http://browserless:3000
-      MINIFLUX_URL: http://miniflux:8080
-      SCHEDULER_ENABLED: "true"
       # macOS Docker bind mount 不传递 inotify 事件，需要轮询
       WATCHFILES_FORCE_POLLING: "true"
     depends_on:
@@ -141,16 +120,19 @@ services:
     environment:
       TZ: Asia/Shanghai
       API_BASE_URL: http://backend:8000
+    depends_on:
+      backend:
+        condition: service_started
     networks:
       - allin-dev
 
-  worker:
+  worker-pipeline:
     build:
       context: .
       dockerfile: docker/Dockerfile.dev.backend
-    container_name: allin-dev-worker
+    container_name: allin-dev-worker-pipeline
     restart: unless-stopped
-    command: ["python", "dev_worker.py"]
+    command: ["python", "dev_worker.py", "pipeline"]
     volumes:
       - ./backend:/app
       - ./data:/app/data
@@ -161,8 +143,34 @@ services:
       DATABASE_URL: postgresql://allinone:allinone@postgres:5432/allinone
       RSSHUB_URL: http://rsshub:1200
       BROWSERLESS_URL: http://browserless:3000
-      MINIFLUX_URL: http://miniflux:8080
-      # macOS Docker bind mount 不传递 inotify 事件，需要轮询
+      WATCHFILES_FORCE_POLLING: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rsshub:
+        condition: service_healthy
+      browserless:
+        condition: service_healthy
+    networks:
+      - allin-dev
+
+  worker-scheduled:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dev.backend
+    container_name: allin-dev-worker-scheduled
+    restart: unless-stopped
+    command: ["python", "dev_worker.py", "scheduled"]
+    volumes:
+      - ./backend:/app
+      - ./data:/app/data
+    env_file:
+      - ./backend/.env
+    environment:
+      TZ: Asia/Shanghai
+      DATABASE_URL: postgresql://allinone:allinone@postgres:5432/allinone
+      RSSHUB_URL: http://rsshub:1200
+      BROWSERLESS_URL: http://browserless:3000
       WATCHFILES_FORCE_POLLING: "true"
     depends_on:
       postgres:

@@ -124,17 +124,18 @@ class GenericAccountCollector(BaseCollector):
         return current
 
     def _parse_time(self, value, fmt: str) -> datetime | None:
-        """解析时间值"""
+        """解析时间值，返回 naive UTC datetime"""
         try:
             if fmt == "timestamp":
                 ts = int(value)
                 if ts > 1e12:  # 毫秒时间戳
                     ts = ts / 1000
-                return datetime.fromtimestamp(ts, tz=timezone.utc)
+                return datetime.fromtimestamp(ts, tz=timezone.utc).replace(tzinfo=None)
             else:
                 # ISO 格式
                 if isinstance(value, str):
-                    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+                    dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                    return dt.astimezone(timezone.utc).replace(tzinfo=None)
         except Exception:
             pass
         return None

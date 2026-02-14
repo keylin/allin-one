@@ -1,4 +1,4 @@
-"""定时调度任务
+"""定时调度任务 — Procrastinate periodic
 
 对照脑图「任务调度」:
   定时器 → 数据抓取 (智能调度, 退避策略, 信息流抓取)
@@ -9,16 +9,20 @@
   定时器 → CollectionService.collect(source)
          → Collector 抓取原始数据 → 去重 → 创建 ContentItem
          → 对每条新内容, 按绑定的流水线模板创建 PipelineExecution
+
+所有定时任务由 Procrastinate worker 的 periodic 功能驱动。
 """
 
 import logging
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+from app.tasks.procrastinate_app import proc_app
 
 logger = logging.getLogger(__name__)
-scheduler = AsyncIOScheduler()
 
 
-async def check_and_collect_sources():
+@proc_app.periodic(cron="*/5 * * * *")
+@proc_app.task(queue="scheduled", queueing_lock="collection_loop")
+async def check_and_collect_sources(timestamp):
     """主采集循环 — 智能调度 + 退避策略"""
     from app.core.database import SessionLocal
     from app.models.content import SourceConfig, ContentItem, ContentStatus
@@ -62,7 +66,7 @@ async def check_and_collect_sources():
                             trigger=TriggerSource.SCHEDULED,
                         )
                         if execution:
-                            orchestrator.start_execution(execution.id)
+                            await orchestrator.async_start_execution(execution.id)
                             logger.info(
                                 f"Pipeline triggered: {item.title} → {execution.template_name}"
                             )
@@ -110,7 +114,7 @@ async def check_and_collect_sources():
                         trigger=TriggerSource.SCHEDULED,
                     )
                     if execution:
-                        orchestrator.start_execution(execution.id)
+                        await orchestrator.async_start_execution(execution.id)
                         logger.info(f"Compensation pipeline: {item.title[:50]} → {execution.template_name}")
                 except Exception as e:
                     db.rollback()
@@ -140,12 +144,76 @@ async def check_and_collect_sources():
             db.commit()
             # 重新入队（commit 后再入队，确保状态已持久化）
             from app.tasks.pipeline_tasks import execute_pipeline_step
+            from app.tasks.procrastinate_app import async_defer
             for pipeline_id, step_index in steps_to_requeue:
-                execute_pipeline_step(pipeline_id, step_index)
+                await async_defer(execute_pipeline_step, execution_id=pipeline_id, step_index=step_index)
+
+        # ---- 恢复: execution 卡住 (defer 失败或 worker 崩溃) ----
+        # 情况1: PENDING 超过 10 分钟 — sync_defer 可能失败, 重新入队
+        # 情况2: RUNNING 但当前步骤仍 pending — worker 崩溃后未推进
+        stuck_execs = db.query(PipelineExecution).filter(
+            (
+                (PipelineExecution.status == PipelineStatus.PENDING.value)
+                & (PipelineExecution.created_at < now - timedelta(minutes=10))
+            ) | (
+                (PipelineExecution.status == PipelineStatus.RUNNING.value)
+                & (PipelineExecution.started_at < now - timedelta(minutes=2))
+            )
+        ).all()
+
+        stuck_to_requeue = []
+        for ex in stuck_execs:
+            current_step = db.query(PipelineStep).filter(
+                PipelineStep.pipeline_id == ex.id,
+                PipelineStep.step_index == ex.current_step,
+                PipelineStep.status == StepStatus.PENDING.value,
+            ).first()
+            if current_step:
+                stuck_to_requeue.append((ex.id, ex.current_step))
+
+        if stuck_to_requeue:
+            logger.info(f"Recovering {len(stuck_to_requeue)} stuck executions (pending step, defer likely failed)")
+            from app.tasks.pipeline_tasks import execute_pipeline_step
+            from app.tasks.procrastinate_app import async_defer
+            for pipeline_id, step_index in stuck_to_requeue:
+                try:
+                    await async_defer(execute_pipeline_step, execution_id=pipeline_id, step_index=step_index)
+                except Exception as e:
+                    logger.error(f"Failed to requeue stuck step: pipeline={pipeline_id[:12]}, error={e}")
+
+
+@proc_app.periodic(cron="0 22 * * *")
+@proc_app.task(queue="scheduled", queueing_lock="daily_report")
+async def trigger_daily_report(timestamp):
+    """日报 — 每天 22:00"""
+    from app.tasks.report_tasks import generate_daily_report
+    await generate_daily_report()
+
+
+@proc_app.periodic(cron="0 9 * * 1")
+@proc_app.task(queue="scheduled", queueing_lock="weekly_report")
+async def trigger_weekly_report(timestamp):
+    """周报 — 每周一 09:00"""
+    from app.tasks.report_tasks import generate_weekly_report
+    await generate_weekly_report()
+
+
+@proc_app.periodic(cron="0 3 * * *")
+@proc_app.task(queue="scheduled", queueing_lock="cleanup_content")
+async def trigger_cleanup_content(timestamp):
+    """内容清理 — 每天 03:00"""
+    await cleanup_expired_content()
+
+
+@proc_app.periodic(cron="30 3 * * *")
+@proc_app.task(queue="scheduled", queueing_lock="cleanup_records")
+async def trigger_cleanup_records(timestamp):
+    """记录清理 — 每天 03:30"""
+    await cleanup_records()
 
 
 async def cleanup_expired_content():
-    """定时清理过期内容 — 凌晨 03:00 执行
+    """定时清理过期内容
 
     逻辑:
     1. 读取全局默认 default_retention_days
@@ -236,7 +304,7 @@ async def cleanup_expired_content():
 
 
 async def cleanup_records():
-    """定时清理执行记录和采集记录 — 凌晨 03:30 执行
+    """定时清理执行记录和采集记录
 
     逻辑:
     1. 读取 4 个 setting key (retention_days + max_count)
@@ -341,56 +409,3 @@ async def cleanup_records():
             f"Records cleanup: {total_exec_deleted} executions, "
             f"{total_coll_deleted} collection records deleted"
         )
-
-
-def start_scheduler():
-    from apscheduler.triggers.interval import IntervalTrigger
-    from apscheduler.triggers.cron import CronTrigger
-    from app.tasks.report_tasks import generate_daily_report, generate_weekly_report
-
-    scheduler.add_job(
-        check_and_collect_sources,
-        IntervalTrigger(minutes=5),
-        id="main_collection_loop",
-        replace_existing=True,
-    )
-
-    # 日报 — 每天 22:00
-    scheduler.add_job(
-        generate_daily_report,
-        CronTrigger(hour=22, minute=0),
-        id="daily_report",
-        replace_existing=True,
-    )
-
-    # 周报 — 每周一 09:00
-    scheduler.add_job(
-        generate_weekly_report,
-        CronTrigger(day_of_week="mon", hour=9, minute=0),
-        id="weekly_report",
-        replace_existing=True,
-    )
-
-    # 内容清理 — 每天 03:00
-    scheduler.add_job(
-        cleanup_expired_content,
-        CronTrigger(hour=3, minute=0),
-        id="cleanup_expired_content",
-        replace_existing=True,
-    )
-
-    # 记录清理 — 每天 03:30 (执行记录 + 采集记录)
-    scheduler.add_job(
-        cleanup_records,
-        CronTrigger(hour=3, minute=30),
-        id="cleanup_records",
-        replace_existing=True,
-    )
-
-    scheduler.start()
-    logger.info("Scheduler started: collection loop + daily/weekly reports + content/records cleanup")
-
-
-def stop_scheduler():
-    scheduler.shutdown()
-    logger.info("Scheduler stopped")

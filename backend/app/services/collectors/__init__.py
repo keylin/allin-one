@@ -12,7 +12,6 @@ from app.services.collectors.akshare import AkShareCollector
 from app.services.collectors.file_upload import FileUploadCollector
 from app.services.collectors.bilibili import BilibiliCollector
 from app.services.collectors.generic_account import GenericAccountCollector
-from app.services.collectors.miniflux import MinifluxCollector
 
 logger = logging.getLogger(__name__)
 
@@ -22,12 +21,10 @@ _akshare_collector = AkShareCollector()
 _file_upload_collector = FileUploadCollector()
 _bilibili_collector = BilibiliCollector()
 _generic_account_collector = GenericAccountCollector()
-_miniflux_collector = MinifluxCollector()
 
 COLLECTOR_MAP = {
     "rss.hub": _rss_collector,
     "rss.standard": _rss_collector,
-    "rss.miniflux": _miniflux_collector,
     "web.scraper": _scraper_collector,
     "api.akshare": _akshare_collector,
     "file.upload": _file_upload_collector,

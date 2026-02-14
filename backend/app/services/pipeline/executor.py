@@ -33,6 +33,9 @@ class PipelineExecutor:
             if not execution:
                 raise ValueError(f"Execution not found: {execution_id}")
 
+            if execution.status == PipelineStatus.CANCELLED.value:
+                raise ValueError(f"Execution {execution_id} was cancelled")
+
             current_step = None
             previous_outputs = {}
             for step in execution.steps:
@@ -44,9 +47,15 @@ class PipelineExecutor:
             if not current_step:
                 raise ValueError(f"Step not found: execution={execution_id}, index={step_index}")
 
-            # 标记运行中
+            # 标记步骤运行中
             current_step.status = StepStatus.RUNNING.value
             current_step.started_at = datetime.now(timezone.utc)
+
+            # 首个步骤实际执行时, 将 execution 从 PENDING 转为 RUNNING
+            if execution.status == PipelineStatus.PENDING.value:
+                execution.status = PipelineStatus.RUNNING.value
+                execution.started_at = datetime.now(timezone.utc)
+                execution.current_step = step_index
 
             step_config = {}
             if current_step.step_config:
@@ -76,15 +85,19 @@ class PipelineExecutor:
         step_index: int,
         output_data: dict = None,
         error: str = None,
-    ) -> None:
-        """完成或失败步骤，并推进流水线（单事务）"""
+    ) -> int | None:
+        """完成或失败步骤，并推进流水线（单事务）
+
+        Returns:
+            下一步的 step_index，或 None（流水线结束/失败）
+        """
         with SessionLocal() as db:
             step = db.query(PipelineStep).filter(
                 PipelineStep.pipeline_id == execution_id,
                 PipelineStep.step_index == step_index,
             ).first()
             if not step:
-                return
+                return None
 
             now = datetime.now(timezone.utc)
             step.completed_at = now
@@ -101,7 +114,7 @@ class PipelineExecutor:
                         execution.completed_at = now
                     logger.error(f"Pipeline {execution_id} 在关键步骤 {step.step_type} 失败")
                     db.commit()
-                    return  # 关键步骤失败，不推进
+                    return None  # 关键步骤失败，不推进
                 else:
                     step.status = StepStatus.SKIPPED.value
                     logger.warning(f"非关键步骤 {step.step_type} 失败, 跳过继续")
@@ -113,9 +126,9 @@ class PipelineExecutor:
 
             # ---- 推进流水线 ----
             execution = db.get(PipelineExecution, execution_id)
-            if not execution or execution.status == PipelineStatus.FAILED.value:
+            if not execution or execution.status in (PipelineStatus.FAILED.value, PipelineStatus.CANCELLED.value):
                 db.commit()
-                return
+                return None
 
             next_index = execution.current_step + 1
 
@@ -135,11 +148,9 @@ class PipelineExecutor:
 
                 db.commit()
                 logger.info(f"Pipeline {execution_id} ({execution.template_name}) 完成")
-                return
+                return None
 
             execution.current_step = next_index
             db.commit()
 
-            logger.info(f"Pipeline {execution_id} advancing to step {next_index}")
-            from app.tasks.pipeline_tasks import execute_pipeline_step
-            execute_pipeline_step(execution_id, next_index)
+            return next_index

@@ -173,9 +173,13 @@ export const useSourcesStore = defineStore('sources', () => {
 
 ## 时间戳处理
 
-- 后端存 UTC 时间戳
-- 前端通过 dayjs 转为本地时间:
+- 后端存 naive UTC 时间戳（无时区信息），序列化为 `"2026-02-14T10:00:00"` 格式
+- 前端必须用 `dayjs.utc(t).local()` 先标记为 UTC 再转本地时间:
 ```javascript
 import dayjs from 'dayjs'
+// ✅ 正确 — 先标记 UTC 再转本地
+dayjs.utc(item.collected_at).local().format('YYYY-MM-DD HH:mm')
+// ❌ 错误 — dayjs(t) 会当作本地时间解析
 dayjs(item.collected_at).format('YYYY-MM-DD HH:mm')
 ```
+- 推荐使用 `src/utils/time.js` 中的 `formatTimeShort()` / `formatTimeFull()` 工具函数

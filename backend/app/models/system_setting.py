@@ -12,5 +12,5 @@ class SystemSetting(Base):
     key = Column(String, primary_key=True)
     value = Column(Text)
     description = Column(Text)
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
-                        onupdate=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+                        onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None))

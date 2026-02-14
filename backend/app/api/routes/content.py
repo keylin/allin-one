@@ -389,7 +389,7 @@ async def analyze_content(content_id: str, db: Session = Depends(get_db)):
         item.status = ContentStatus.PROCESSING.value
         db.commit()
 
-        orchestrator.start_execution(execution.id)
+        await orchestrator.async_start_execution(execution.id)
 
         return {
             "code": 0,
@@ -399,6 +399,48 @@ async def analyze_content(content_id: str, db: Session = Depends(get_db)):
     except Exception as e:
         logger.exception(f"Analyze failed for content {content_id}")
         return error_response(500, f"分析任务创建失败: {str(e)}")
+
+
+class EnrichApplyRequest(BaseModel):
+    content: str
+    method: str
+
+
+@router.post("/{content_id}/enrich")
+async def enrich_content_compare(content_id: str, db: Session = Depends(get_db)):
+    """并行运行三级富化，返回对比结果（不修改内容）"""
+    from app.services.enrichment import enrich_compare
+
+    item = db.get(ContentItem, content_id)
+    if not item:
+        return error_response(404, "Content not found")
+    if not item.url:
+        return error_response(400, "该内容没有 URL，无法富化")
+
+    try:
+        results = await enrich_compare(item.url)
+        return {
+            "code": 0,
+            "data": {"url": item.url, "results": results},
+            "message": "ok",
+        }
+    except Exception as e:
+        logger.exception(f"Enrich compare failed for content {content_id}")
+        return error_response(500, f"富化对比失败: {str(e)}")
+
+
+@router.post("/{content_id}/enrich/apply")
+async def apply_enrichment(content_id: str, body: EnrichApplyRequest, db: Session = Depends(get_db)):
+    """应用选中的富化结果到 processed_content"""
+    item = db.get(ContentItem, content_id)
+    if not item:
+        return error_response(404, "Content not found")
+
+    item.processed_content = body.content
+    item.updated_at = datetime.now(timezone.utc)
+    db.commit()
+
+    return {"code": 0, "data": {"method": body.method}, "message": "已应用富化结果"}
 
 
 @router.post("/{content_id}/favorite")

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 import xml.etree.ElementTree as ET
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.models.content import SourceConfig, ContentItem, CollectionRecord, SourceType, MediaItem
 from app.models.finance import FinanceDataPoint
@@ -19,6 +20,19 @@ from app.schemas import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# ---- RSS 辅助 ----
+
+_RSS_TYPES = {"rss.standard", "rss.hub"}
+
+
+def _resolve_rss_feed_url(source_type: str, url: str | None, config: dict) -> str:
+    """根据源类型解析出实际的 RSS feed URL"""
+    if source_type == "rss.hub":
+        rsshub_route = config.get("rsshub_route") or url or ""
+        return f"{settings.RSSHUB_URL.rstrip('/')}{rsshub_route}"
+    # rss.standard → 直接用 url
+    return url or ""
 
 
 def _source_to_response(source: SourceConfig, db: Session) -> dict:
@@ -89,7 +103,9 @@ async def create_source(body: SourceCreate, db: Session = Depends(get_db)):
         if not tpl:
             return error_response(400, f"Pipeline template '{body.pipeline_template_id}' not found")
 
-    source = SourceConfig(**body.model_dump())
+    data = body.model_dump()
+
+    source = SourceConfig(**data)
     db.add(source)
     db.commit()
     db.refresh(source)
@@ -192,7 +208,6 @@ async def export_opml(
     db: Session = Depends(get_db),
 ):
     """导出 RSS 源为 OPML 文件"""
-    # 获取所有 RSS 类型的数据源
     sources = db.query(SourceConfig).filter(
         SourceConfig.source_type.in_([
             SourceType.RSS_HUB.value,
@@ -315,7 +330,7 @@ async def batch_collect_all(db: Session = Depends(get_db)):
                     trigger=TriggerSource.MANUAL,
                 )
                 if execution:
-                    orchestrator.start_execution(execution.id)
+                    await orchestrator.async_start_execution(execution.id)
                     pipelines_started += 1
         except Exception as e:
             logger.warning(f"Batch collect failed for source {source.id} ({source.name}): {e}")
@@ -511,7 +526,7 @@ async def trigger_collect(source_id: str, db: Session = Depends(get_db)):
                 trigger=TriggerSource.MANUAL,
             )
             if execution:
-                orchestrator.start_execution(execution.id)
+                await orchestrator.async_start_execution(execution.id)
                 pipelines_started += 1
 
         # 获取最近一条 CollectionRecord 用于响应

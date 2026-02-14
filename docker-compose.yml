@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  # PostgreSQL - 共享数据库实例 (allinone + miniflux)
+  # PostgreSQL - 主数据库
   postgres:
     image: postgres:17-alpine
     container_name: allin-postgres
@@ -9,7 +9,7 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
-      TZ: Asia/Shanghai
+      TZ: UTC
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/init-databases.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -18,26 +18,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    networks:
-      - allin-network
-
-  # Miniflux - RSS 阅读器
-  miniflux:
-    image: miniflux/miniflux:latest
-    container_name: allin-miniflux
-    restart: unless-stopped
-    environment:
-      DATABASE_URL: postgres://miniflux:miniflux@postgres:5432/miniflux?sslmode=disable
-      RUN_MIGRATIONS: "1"
-      CREATE_ADMIN: "1"
-      ADMIN_USERNAME: ${MINIFLUX_ADMIN_USER:-admin}
-      ADMIN_PASSWORD: ${MINIFLUX_ADMIN_PASSWORD:-changeme}
-      TZ: Asia/Shanghai
-    ports:
-      - "8180:8080"
-    depends_on:
-      postgres:
-        condition: service_healthy
     networks:
       - allin-network
 
@@ -89,7 +69,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./backend/.env:/app/.env
-      - /var/run/docker.sock:/var/run/docker.sock
+      - ${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
       - ./docker-compose.yml:/project/docker-compose.yml:ro
       - ./backend/.env:/project/backend/.env
     environment:
@@ -97,9 +77,6 @@ services:
       DATABASE_URL: postgresql://allinone:allinone@postgres:5432/allinone
       RSSHUB_URL: http://rsshub:1200
       BROWSERLESS_URL: http://browserless:3000
-      MINIFLUX_URL: http://miniflux:8080
-      MINIFLUX_API_KEY: ${MINIFLUX_API_KEY:-}
-      SCHEDULER_ENABLED: 'true'
       LOG_LEVEL: INFO
       # 安全设置（强烈建议在生产环境配置）
       # API_KEY: your-secret-key-here
@@ -107,7 +84,7 @@ services:
       # 代理设置（httpx / OpenAI SDK 自动识别）
       # HTTP_PROXY: http://host.docker.internal:7890
       # HTTPS_PROXY: http://host.docker.internal:7890
-      # NO_PROXY: localhost,rsshub,browserless,postgres,miniflux
+      # NO_PROXY: localhost,rsshub,browserless,postgres
     depends_on:
       postgres:
         condition: service_healthy
@@ -124,14 +101,14 @@ services:
       retries: 3
       start_period: 40s
 
-  # Huey Worker - 异步任务队列
-  allin-worker:
+  # Procrastinate Worker - 流水线任务 (enrich, localize, analyze, publish ...)
+  allin-worker-pipeline:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: allin-worker
+    container_name: allin-worker-pipeline
     restart: unless-stopped
-    command: ["huey_consumer", "app.tasks.huey_instance.huey", "-w", "4", "-k", "thread"]
+    command: ["python", "-m", "procrastinate", "--app=app.tasks.procrastinate_app.proc_app", "worker", "--concurrency=4", "--queues=pipeline"]
     volumes:
       - ./data:/app/data
       - ./backend/.env:/app/.env:ro
@@ -140,13 +117,34 @@ services:
       DATABASE_URL: postgresql://allinone:allinone@postgres:5432/allinone
       RSSHUB_URL: http://rsshub:1200
       BROWSERLESS_URL: http://browserless:3000
-      MINIFLUX_URL: http://miniflux:8080
-      MINIFLUX_API_KEY: ${MINIFLUX_API_KEY:-}
       LOG_LEVEL: INFO
-      # 代理设置（httpx / OpenAI SDK 自动识别）
-      # HTTP_PROXY: http://host.docker.internal:7890
-      # HTTPS_PROXY: http://host.docker.internal:7890
-      # NO_PROXY: localhost,rsshub,browserless,postgres,miniflux
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rsshub:
+        condition: service_started
+      browserless:
+        condition: service_started
+    networks:
+      - allin-network
+
+  # Procrastinate Worker - 定时调度任务 (采集循环, 日报, 清理)
+  allin-worker-scheduled:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: allin-worker-scheduled
+    restart: unless-stopped
+    command: ["python", "-m", "procrastinate", "--app=app.tasks.procrastinate_app.proc_app", "worker", "--concurrency=2", "--queues=scheduled"]
+    volumes:
+      - ./data:/app/data
+      - ./backend/.env:/app/.env:ro
+    environment:
+      TZ: Asia/Shanghai
+      DATABASE_URL: postgresql://allinone:allinone@postgres:5432/allinone
+      RSSHUB_URL: http://rsshub:1200
+      BROWSERLESS_URL: http://browserless:3000
+      LOG_LEVEL: INFO
     depends_on:
       postgres:
         condition: service_healthy

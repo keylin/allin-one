@@ -36,6 +36,14 @@ export function getContentStats() {
   return api.get('/content/stats')
 }
 
+export function enrichContent(id) {
+  return api.post(`/content/${id}/enrich`, null, { timeout: 90000 })
+}
+
+export function applyEnrichment(id, content, method) {
+  return api.post(`/content/${id}/enrich/apply`, { content, method })
+}
+
 export function batchMarkRead(ids) {
   return api.post('/content/batch-read', { ids })
 }

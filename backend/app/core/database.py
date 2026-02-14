@@ -26,8 +26,9 @@ if _is_sqlite:
 else:
     engine = create_engine(
         settings.DATABASE_URL,
-        pool_size=5,
-        max_overflow=10,
+        pool_size=20,
+        max_overflow=20,
+        pool_recycle=3600,
         pool_pre_ping=True,
         echo=False,
     )

@@ -17,34 +17,24 @@ async def get_dashboard_stats(db: Session = Depends(get_db)):
     """获取仪表盘统计数据"""
     sources_count = db.query(func.count(SourceConfig.id)).scalar()
 
-    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start = datetime.now(timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0, tzinfo=None,
+    )
     contents_today = (
         db.query(func.count(ContentItem.id))
         .filter(ContentItem.collected_at >= today_start)
         .scalar()
     )
 
-    pipelines_running = (
-        db.query(func.count(PipelineExecution.id))
-        .filter(PipelineExecution.status == PipelineStatus.RUNNING.value)
-        .scalar()
-    )
-
-    pipelines_failed = (
-        db.query(func.count(PipelineExecution.id))
-        .filter(PipelineExecution.status == PipelineStatus.FAILED.value)
-        .scalar()
+    # 单次查询聚合所有 pipeline 状态计数，避免 3 次独立 COUNT
+    pipeline_counts = dict(
+        db.query(PipelineExecution.status, func.count(PipelineExecution.id))
+        .group_by(PipelineExecution.status)
+        .all()
     )
 
     # 总内容数
     contents_total = db.query(func.count(ContentItem.id)).scalar()
-
-    # 待处理队列
-    pipelines_pending = (
-        db.query(func.count(PipelineExecution.id))
-        .filter(PipelineExecution.status == PipelineStatus.PENDING.value)
-        .scalar()
-    )
 
     return {
         "code": 0,
@@ -52,9 +42,9 @@ async def get_dashboard_stats(db: Session = Depends(get_db)):
             "sources_count": sources_count,
             "contents_today": contents_today,
             "contents_total": contents_total,
-            "pipelines_running": pipelines_running,
-            "pipelines_failed": pipelines_failed,
-            "pipelines_pending": pipelines_pending,
+            "pipelines_running": pipeline_counts.get(PipelineStatus.RUNNING.value, 0),
+            "pipelines_failed": pipeline_counts.get(PipelineStatus.FAILED.value, 0),
+            "pipelines_pending": pipeline_counts.get(PipelineStatus.PENDING.value, 0),
         },
         "message": "ok",
     }
@@ -137,15 +127,19 @@ async def get_recent_content(
         .all()
     )
 
+    # 批量加载关联的 source 名称，避免 N+1
+    source_ids = {item.source_id for item in items}
+    sources = db.query(SourceConfig.id, SourceConfig.name).filter(SourceConfig.id.in_(source_ids)).all()
+    source_map = {s.id: s.name for s in sources}
+
     data = []
     for item in items:
-        source = db.get(SourceConfig, item.source_id)
         data.append({
             "id": item.id,
             "title": item.title,
             "url": item.url,
             "status": item.status,
-            "source_name": source.name if source else None,
+            "source_name": source_map.get(item.source_id),
             "collected_at": item.collected_at.isoformat() if item.collected_at else None,
         })
 
@@ -165,13 +159,17 @@ async def get_recent_activity(
         .all()
     )
 
+    # 批量加载关联的 content 标题，避免 N+1
+    content_ids = {ex.content_id for ex in executions}
+    contents = db.query(ContentItem.id, ContentItem.title).filter(ContentItem.id.in_(content_ids)).all()
+    content_map = {c.id: c.title for c in contents}
+
     data = []
     for ex in executions:
-        content = db.get(ContentItem, ex.content_id)
         data.append({
             "id": ex.id,
             "content_id": ex.content_id,
-            "content_title": content.title if content else None,
+            "content_title": content_map.get(ex.content_id),
             "template_name": ex.template_name,
             "status": ex.status,
             "trigger_source": ex.trigger_source,

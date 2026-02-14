@@ -74,8 +74,10 @@ class RSSCollector(BaseCollector):
                 base = settings.RSSHUB_URL.rstrip("/")
                 if not route.startswith("/"):
                     route = f"/{route}"
-                return f"{base}{route}"
-            return source.url
+                url = f"{base}{route}"
+            else:
+                url = source.url
+            return url
         else:
             return source.url
 
@@ -110,14 +112,14 @@ class RSSCollector(BaseCollector):
             if tp:
                 try:
                     import calendar
-                    return datetime.fromtimestamp(calendar.timegm(tp), tz=timezone.utc)
+                    return datetime.fromtimestamp(calendar.timegm(tp), tz=timezone.utc).replace(tzinfo=None)
                 except Exception:
                     pass
         for field in ("published", "updated"):
             val = entry.get(field)
             if val:
                 try:
-                    return parsedate_to_datetime(val).astimezone(timezone.utc)
+                    return parsedate_to_datetime(val).astimezone(timezone.utc).replace(tzinfo=None)
                 except Exception:
                     pass
         return None

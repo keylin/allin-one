@@ -164,7 +164,7 @@ class BilibiliCollector(BaseCollector):
                     "author": author_info.get("name"),
                     "published_at": datetime.fromtimestamp(
                         author_info.get("pub_ts", 0), tz=timezone.utc
-                    ) if author_info.get("pub_ts") else None,
+                    ).replace(tzinfo=None) if author_info.get("pub_ts") else None,
                     "raw": item,
                 })
 
@@ -195,7 +195,7 @@ class BilibiliCollector(BaseCollector):
                     "author": media.get("upper", {}).get("name"),
                     "published_at": datetime.fromtimestamp(
                         media.get("ctime", 0), tz=timezone.utc
-                    ) if media.get("ctime") else None,
+                    ).replace(tzinfo=None) if media.get("ctime") else None,
                     "raw": media,
                 })
 
@@ -221,7 +221,7 @@ class BilibiliCollector(BaseCollector):
                     "author": item.get("author_name"),
                     "published_at": datetime.fromtimestamp(
                         item.get("view_at", 0), tz=timezone.utc
-                    ) if item.get("view_at") else None,
+                    ).replace(tzinfo=None) if item.get("view_at") else None,
                     "raw": item,
                 })
 

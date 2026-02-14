@@ -24,7 +24,7 @@ services/
 
 ### 流程 1：采集（调度器 → 采集器 → ContentItem）
 ```
-APScheduler (每5分钟) → check_and_collect_sources()
+Procrastinate periodic (每5分钟) → check_and_collect_sources()
   → 遍历活跃数据源:
     → 按 source_type 获取对应的 Collector
     → collector.collect(source) → list[RawContentItem]
@@ -40,7 +40,7 @@ APScheduler (每5分钟) → check_and_collect_sources()
     → 读取 source.pipeline_template_id → PipelineTemplate
     → 从 template.steps_config 创建 PipelineStep 行
   → orchestrator.start_execution(execution_id)
-    → 通过 Huey 入队第一个步骤
+    → 通过 Procrastinate 入队第一个步骤
   → execute_pipeline_step(execution_id, step_index)
     → STEP_HANDLERS[step_type](context) → output_data
     → executor.advance_pipeline() → 下一步或完成

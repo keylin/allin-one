@@ -58,7 +58,7 @@ save_backend_checksum() {
 maybe_restart_worker() {
     if backend_code_changed; then
         info "检测到后端代码变化，重启 Worker 以加载新代码..."
-        $DC restart worker
+        $DC restart worker-pipeline worker-scheduled
         save_backend_checksum
         ok "Worker 已重启"
     fi
@@ -88,7 +88,7 @@ backup_db() {
 }
 
 safe_stop() {
-    $DC stop worker 2>/dev/null || true
+    $DC stop worker-pipeline worker-scheduled 2>/dev/null || true
     $DC stop backend 2>/dev/null || true
 }
 
@@ -103,6 +103,11 @@ check_deps() {
         echo "  brew install ${missing[*]}"
         exit 1
     fi
+
+    # 设置 Colima 的 Docker socket (仅用于 CLI 连接)
+    export DOCKER_HOST="unix://$HOME/.colima/default/docker.sock"
+    # 注意: 不设置 DOCKER_SOCK，compose 中 volume mount 使用默认 /var/run/docker.sock
+    # Colima VM 内部的 socket 始终在 /var/run/docker.sock
 
     # 检查 Docker 是否运行，未运行则通过 Colima 启动
     if ! docker info >/dev/null 2>&1; then
@@ -145,7 +150,6 @@ show_status() {
     echo "  前端页面:    http://localhost:3000/"
     echo "  后端 API:    http://localhost:8000/api/"
     echo "  API 文档:    http://localhost:8000/docs"
-    echo "  Miniflux:    http://localhost:8180/"
     echo "  RSSHub:      http://localhost:1200/"
     echo "  Browserless: http://localhost:3001/"
     echo "  PostgreSQL:  localhost:5432"
@@ -161,6 +165,8 @@ show_logs() {
 # ============================================================
 # 主入口
 # ============================================================
+check_deps
+
 case "${1:-}" in
     stop)
         info "停止所有服务..."
@@ -184,7 +190,6 @@ case "${1:-}" in
         show_logs "${2:-backend}"
         ;;
     start)
-        check_deps
         ensure_env
         info "启动所有服务 (不重新构建)..."
         $DC up -d
@@ -193,7 +198,6 @@ case "${1:-}" in
         show_status
         ;;
     rebuild)
-        check_deps
         ensure_env
         info "强制重新构建所有镜像..."
         safe_stop
@@ -213,7 +217,6 @@ case "${1:-}" in
         echo "  ╚═══════════════════════════════════════╝"
         echo ""
 
-        check_deps
         ensure_env
 
         # 智能构建检测
@@ -237,6 +240,8 @@ case "${1:-}" in
         echo "    ./local-dev.sh rebuild    强制重新构建"
         echo "    ./local-dev.sh status     查看状态"
         echo "    ./local-dev.sh logs       查看后端日志"
+        echo "    ./local-dev.sh logs worker-pipeline   查看流水线 Worker 日志"
+        echo "    ./local-dev.sh logs worker-scheduled  查看调度 Worker 日志"
         echo "    ./local-dev.sh logs frontend  查看前端日志"
         echo ""
         ;;

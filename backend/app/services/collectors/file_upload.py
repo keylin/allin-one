@@ -86,7 +86,7 @@ class FileUploadCollector(BaseCollector):
                 url=str(file_path),
                 raw_data=raw_data,
                 status=ContentStatus.PENDING.value,
-                published_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+                published_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).replace(tzinfo=None),
             )
             try:
                 with db.begin_nested():

@@ -11,6 +11,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query, Request, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+from sqlalchemy import cast, func, type_coerce, Float
+from sqlalchemy.dialects.postgresql import JSONB
 
 from app.core.database import get_db
 from app.core.config import settings
@@ -79,7 +81,7 @@ async def download_video(body: VideoDownloadRequest, db: Session = Depends(get_d
         if not execution:
             return error_response(500, "Pipeline 创建失败")
 
-        orchestrator.start_execution(execution.id)
+        await orchestrator.async_start_execution(execution.id)
 
         logger.info(f"Video download submitted: {url} -> pipeline={execution.id}")
         return {
@@ -99,7 +101,7 @@ async def download_video(body: VideoDownloadRequest, db: Session = Depends(get_d
 async def list_downloads(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    status_filter: Optional[str] = Query("completed", alias="status", description="筛选状态: pending/running/completed/failed，空字符串=全部"),
+    status_filter: Optional[str] = Query("completed", alias="status", description="筛选状态: pending/completed/failed，空字符串=全部"),
     platform: Optional[str] = Query(None, description="筛选平台: bilibili/youtube 等"),
     source_id: Optional[str] = Query(None, description="按来源筛选"),
     search: Optional[str] = Query(None, description="搜索标题关键词"),
@@ -109,51 +111,53 @@ async def list_downloads(
 ):
     """获取视频下载记录（支持筛选、搜索、排序）
 
-    使用 SQL JOIN + json_extract 在数据库层完成过滤、排序和分页，
-    避免加载全量数据到内存。
+    基于 MediaItem 表查询（media_type=video），JOIN ContentItem 获取元数据。
     """
-    from sqlalchemy import func, asc, desc
+    from sqlalchemy import asc, desc
 
-    # 基础查询：始终 JOIN ContentItem 和 SourceConfig
-    # 查询 localize_media (has_video) 步骤
-    query = (
-        db.query(PipelineStep, ContentItem, SourceConfig)
-        .join(PipelineExecution, PipelineStep.pipeline_id == PipelineExecution.id)
-        .join(ContentItem, PipelineExecution.content_id == ContentItem.id)
-        .outerjoin(SourceConfig, ContentItem.source_id == SourceConfig.id)
-        .filter(PipelineStep.step_type == "localize_media")
-        .filter(func.json_extract(PipelineStep.output_data, "$.has_video") == True)
+    # MediaItem.metadata_json 是 Text 列存储 JSON，cast 为 JSONB 用于 PG JSONB 操作符
+    media_meta = cast(MediaItem.metadata_json, JSONB)
+
+    # 去重：同一 URL 可能被多次采集为不同 ContentItem，只保留最新的一条
+    dedup_content = (
+        db.query(ContentItem.id)
+        .distinct(ContentItem.url)
+        .order_by(ContentItem.url, ContentItem.created_at.desc())
+        .subquery()
     )
 
-    # 状态筛选
+    # 基础查询：MediaItem (video) JOIN ContentItem 和 SourceConfig
+    query = (
+        db.query(MediaItem, ContentItem, SourceConfig)
+        .join(ContentItem, MediaItem.content_id == ContentItem.id)
+        .outerjoin(SourceConfig, ContentItem.source_id == SourceConfig.id)
+        .filter(MediaItem.media_type == "video")
+        .filter(ContentItem.id.in_(db.query(dedup_content.c.id)))
+    )
+
+    # 状态筛选：前端 "completed" 映射到 MediaItem.status "downloaded"
     if status_filter:
-        query = query.filter(PipelineStep.status == status_filter)
+        status_map = {"completed": "downloaded", "failed": "failed", "pending": "pending"}
+        media_status = status_map.get(status_filter, status_filter)
+        query = query.filter(MediaItem.status == media_status)
 
     # 来源筛选
     if source_id:
         query = query.filter(ContentItem.source_id == source_id)
 
-    # 平台筛选 (json_extract)
+    # 平台筛选
     if platform:
-        query = query.filter(
-            func.json_extract(PipelineStep.output_data, "$.platform") == platform
-        )
+        query = query.filter(media_meta["platform"].astext == platform)
 
-    # 关键词搜索 (json_extract + ContentItem.title fallback)
+    # 关键词搜索
     if search:
-        from sqlalchemy import or_
-        query = query.filter(or_(
-            func.json_extract(PipelineStep.output_data, "$.title").like(f"%{search}%"),
-            ContentItem.title.like(f"%{search}%"),
-        ))
+        query = query.filter(ContentItem.title.ilike(f"%{search}%"))
 
     # 获取平台列表（独立轻量查询）
     platforms_query = (
-        db.query(func.distinct(func.json_extract(PipelineStep.output_data, "$.platform")))
-        .filter(
-            PipelineStep.step_type == "localize_media",
-            PipelineStep.output_data.isnot(None),
-        )
+        db.query(cast(MediaItem.metadata_json, JSONB)["platform"].astext)
+        .filter(MediaItem.media_type == "video", MediaItem.metadata_json.isnot(None))
+        .distinct()
         .all()
     )
     platforms_set = sorted(p for (p,) in platforms_query if p)
@@ -166,48 +170,46 @@ async def list_downloads(
     sort_map = {
         "published_at": ContentItem.published_at,
         "collected_at": ContentItem.collected_at,
-        "title": func.coalesce(func.json_extract(PipelineStep.output_data, "$.title"), ContentItem.title),
-        "duration": func.json_extract(PipelineStep.output_data, "$.duration"),
+        "title": ContentItem.title,
+        "duration": cast(media_meta["duration"].astext, Float),
     }
-    sort_column = sort_map.get(sort_by, PipelineStep.created_at)
+    sort_column = sort_map.get(sort_by, MediaItem.created_at)
     query = query.order_by(order_fn(sort_column))
 
     # 分页
     query = query.offset((page - 1) * page_size).limit(page_size)
 
-    # 构建响应（只解析当前页的 JSON）
+    # 构建响应
     data = []
-    for step, content, source in query.all():
-        video_info = {}
-        if step.output_data:
+    for media, content, source in query.all():
+        meta = {}
+        if media.metadata_json:
             try:
-                output = json.loads(step.output_data)
-                video_info = {
-                    "title": output.get("title") or content.title or "",
-                    "duration": output.get("duration"),
-                    "platform": output.get("platform", ""),
-                    "file_path": output.get("file_path", ""),
-                    "has_thumbnail": bool(output.get("thumbnail_path")),
-                    "width": output.get("width"),
-                    "height": output.get("height"),
-                }
+                meta = json.loads(media.metadata_json)
             except (json.JSONDecodeError, TypeError):
-                video_info = {"title": content.title or ""}
-        else:
-            video_info = {"title": content.title or ""}
+                pass
+
+        # 映射 MediaItem.status 回前端状态
+        display_status = "completed" if media.status == "downloaded" else media.status
+
+        video_info = {
+            "title": content.title or "",
+            "duration": meta.get("duration"),
+            "platform": meta.get("platform", ""),
+            "file_path": media.local_path or "",
+            "has_thumbnail": bool(meta.get("thumbnail_path")),
+            "width": meta.get("width"),
+            "height": meta.get("height"),
+        }
 
         data.append({
-            "id": step.id,
-            "pipeline_id": step.pipeline_id,
+            "id": media.id,
             "content_id": content.id,
             "source_id": content.source_id,
             "source_name": source.name if source else None,
-            "status": step.status,
-            "step_config": step.step_config,
-            "error_message": step.error_message,
-            "started_at": step.started_at.isoformat() if step.started_at else None,
-            "completed_at": step.completed_at.isoformat() if step.completed_at else None,
-            "created_at": step.created_at.isoformat() if step.created_at else None,
+            "status": display_status,
+            "error_message": meta.get("error") if media.status == "failed" else None,
+            "created_at": media.created_at.isoformat() if media.created_at else None,
             "published_at": content.published_at.isoformat() if content.published_at else None,
             "collected_at": content.collected_at.isoformat() if content.collected_at else None,
             "video_info": video_info,

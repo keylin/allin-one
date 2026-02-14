@@ -67,7 +67,8 @@ def _uuid():
     return uuid.uuid4().hex
 
 def _utcnow():
-    return datetime.now(timezone.utc)
+    """返回 naive UTC datetime，避免 PG TIMESTAMP WITHOUT TIME ZONE 的时区转换"""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 # ============ 模型定义 ============

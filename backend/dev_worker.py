@@ -1,8 +1,13 @@
-"""Dev worker: watch Python files and auto-restart huey_consumer.
+"""Dev worker: watch Python files and auto-restart procrastinate worker.
 
 Graceful restart: detects code changes but waits for the current
-huey task queue to drain (up to DRAIN_TIMEOUT) before killing,
+task queue to drain (up to DRAIN_TIMEOUT) before killing,
 so long-running tasks like video downloads aren't interrupted.
+
+Usage:
+    python dev_worker.py                 # 启动所有队列 (默认)
+    python dev_worker.py pipeline        # 仅 pipeline 队列
+    python dev_worker.py scheduled       # 仅 scheduled 队列
 """
 
 import signal
@@ -12,9 +17,28 @@ import time
 
 from watchfiles import watch
 
-CMD = ["huey_consumer", "app.tasks.huey_instance.huey", "-w", "4", "-k", "thread"]
 WATCH_DIR = "/app/app"
 DRAIN_TIMEOUT = 600  # 最多等 10 分钟让当前任务完成
+
+# 队列配置: name → (queues, concurrency)
+WORKER_PROFILES = {
+    "pipeline":  (["pipeline"],  4),
+    "scheduled": (["scheduled"], 2),
+}
+
+
+def _build_cmd(queues: list[str] | None, concurrency: int) -> list[str]:
+    queues_arg = repr(queues) if queues else "None"
+    return ["python", "-c", f"""
+import asyncio
+from app.tasks.procrastinate_app import proc_app
+
+async def main():
+    async with proc_app.open_async():
+        await proc_app.run_worker_async(queues={queues_arg}, concurrency={concurrency})
+
+asyncio.run(main())
+"""]
 
 
 def has_running_tasks():
@@ -52,13 +76,23 @@ def graceful_restart(proc):
 
 
 def main():
-    proc = subprocess.Popen(CMD)
+    profile = sys.argv[1] if len(sys.argv) > 1 else None
+
+    if profile and profile in WORKER_PROFILES:
+        queues, concurrency = WORKER_PROFILES[profile]
+        print(f"[dev-worker] Starting {profile} worker: queues={queues}, concurrency={concurrency}", flush=True)
+    else:
+        queues, concurrency = None, 4
+        print(f"[dev-worker] Starting worker: all queues, concurrency={concurrency}", flush=True)
+
+    cmd = _build_cmd(queues, concurrency)
+    proc = subprocess.Popen(cmd)
     try:
         for changes in watch(WATCH_DIR, watch_filter=lambda _, path: path.endswith(".py")):
             changed = [c[1] for c in changes]
             print(f"[dev-reload] Changed: {changed}", flush=True)
             graceful_restart(proc)
-            proc = subprocess.Popen(CMD)
+            proc = subprocess.Popen(cmd)
             print("[dev-reload] Worker restarted.", flush=True)
     except KeyboardInterrupt:
         proc.terminate()

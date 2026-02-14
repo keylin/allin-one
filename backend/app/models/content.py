@@ -44,8 +44,6 @@ class SourceType(str, Enum):
     # 账号授权
     ACCOUNT_BILIBILI = "account.bilibili"  # B站账号
     ACCOUNT_GENERIC = "account.generic"    # 其他平台账号
-    # Miniflux 托管 RSS
-    RSS_MINIFLUX = "rss.miniflux"    # Miniflux 托管的 RSS feed
     # 用户记录
     USER_NOTE = "user.note"          # 日常笔记
     SYSTEM_NOTIFICATION = "system.notification"  # 系统消息
@@ -73,7 +71,8 @@ def _uuid():
     return uuid.uuid4().hex
 
 def _utcnow():
-    return datetime.now(timezone.utc)
+    """返回 naive UTC datetime，避免 PG TIMESTAMP WITHOUT TIME ZONE 的时区转换"""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 # ============ 模型定义 ============

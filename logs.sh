@@ -5,7 +5,8 @@
 # 用法:
 #   ./logs.sh                  # 交互式选择要查看的日志
 #   ./logs.sh backend          # 后端 Docker 日志 (实时跟踪)
-#   ./logs.sh worker           # Worker Docker 日志
+#   ./logs.sh worker-pipeline  # 流水线 Worker 日志
+#   ./logs.sh worker-scheduled # 调度 Worker 日志
 #   ./logs.sh frontend         # 前端 Docker 日志
 #   ./logs.sh rsshub           # RSSHub Docker 日志
 #   ./logs.sh browserless      # Browserless Docker 日志
@@ -26,9 +27,14 @@ set -e
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 COMPOSE_FILE="$ROOT_DIR/docker-compose.local.yml"
+LOG_DIR="$ROOT_DIR/data/logs"
+
+# Colima Docker socket
+if [ -S "$HOME/.colima/default/docker.sock" ]; then
+    export DOCKER_HOST="unix://$HOME/.colima/default/docker.sock"
+fi
+
 DC="docker compose -f $COMPOSE_FILE"
-LOG_DIR="$ROOT_DIR/backend/data/logs"
-DB_FILE="$ROOT_DIR/backend/data/db/allin.db"
 
 # 颜色
 RED='\033[0;31m'
@@ -133,7 +139,7 @@ show_errors() {
     echo -e "${RED}${BOLD}=== 错误日志汇总 ===${NC}"
     echo ""
 
-    for svc in backend worker; do
+    for svc in backend worker-pipeline worker-scheduled; do
         local count
         count=$($DC logs $opts "$svc" 2>&1 | grep -ic "error\|exception\|traceback\|failed" || true)
         if [ "$count" -gt 0 ]; then
@@ -160,62 +166,6 @@ show_errors() {
     done
 }
 
-# ---- 数据库状态 ----
-show_db_status() {
-    if [ ! -f "$DB_FILE" ]; then
-        echo -e "${RED}数据库文件不存在: $DB_FILE${NC}"
-        return 1
-    fi
-
-    if ! command -v sqlite3 >/dev/null 2>&1; then
-        echo -e "${RED}sqlite3 未安装${NC}"
-        return 1
-    fi
-
-    echo -e "${CYAN}${BOLD}=== 数据库状态 ===${NC}"
-    echo ""
-
-    # 文件信息
-    echo -e "${BOLD}文件:${NC}"
-    ls -lh "$DB_FILE" | awk '{print "  主库:  " $5 "  " $6 " " $7 " " $8}'
-    local wal="${DB_FILE}-wal"
-    [ -f "$wal" ] && ls -lh "$wal" | awk '{print "  WAL:   " $5 "  " $6 " " $7 " " $8}'
-    echo ""
-
-    # 各表行数
-    echo -e "${BOLD}数据统计:${NC}"
-    sqlite3 "$DB_FILE" "
-        SELECT '  数据源:        ' || COUNT(*) FROM source_configs;
-        SELECT '  内容条目:      ' || COUNT(*) FROM content_items;
-        SELECT '  流水线模板:    ' || COUNT(*) FROM pipeline_templates;
-        SELECT '  流水线执行:    ' || COUNT(*) FROM pipeline_executions;
-        SELECT '  提示词模板:    ' || COUNT(*) FROM prompt_templates;
-        SELECT '  系统设置:      ' || COUNT(*) FROM system_settings;
-    "
-    echo ""
-
-    # 内容状态分布
-    echo -e "${BOLD}内容状态:${NC}"
-    sqlite3 "$DB_FILE" "
-        SELECT '  ' || status || ': ' || COUNT(*) FROM content_items GROUP BY status ORDER BY COUNT(*) DESC;
-    "
-    echo ""
-
-    # 最近 pipeline 执行
-    echo -e "${BOLD}最近 5 次流水线执行:${NC}"
-    sqlite3 -header -column "$DB_FILE" "
-        SELECT
-            pe.status,
-            pt.name AS template,
-            ci.title AS content,
-            pe.started_at
-        FROM pipeline_executions pe
-        LEFT JOIN pipeline_templates pt ON pe.template_id = pt.id
-        LEFT JOIN content_items ci ON pe.content_id = ci.id
-        ORDER BY pe.created_at DESC
-        LIMIT 5;
-    "
-}
 
 # ---- 交互式菜单 ----
 show_menu() {
@@ -224,38 +174,38 @@ show_menu() {
     echo -e "  ──────────────────────────────"
     echo ""
     echo -e "  ${CYAN}Docker 容器日志:${NC}"
-    echo "    1) backend       后端 API 服务"
-    echo "    2) worker        Huey 异步任务"
-    echo "    3) frontend      前端开发服务"
-    echo "    4) rsshub        RSSHub 服务"
-    echo "    5) browserless   无头浏览器"
-    echo "    6) all           所有容器 (混合)"
+    echo "    1) backend            后端 API 服务"
+    echo "    2) worker-pipeline    流水线 Worker"
+    echo "    3) worker-scheduled   调度 Worker"
+    echo "    4) frontend           前端开发服务"
+    echo "    5) rsshub             RSSHub 服务"
+    echo "    6) browserless        无头浏览器"
+    echo "    7) all                所有容器 (混合)"
     echo ""
     echo -e "  ${CYAN}文件日志:${NC}"
-    echo "    7) file backend     后端文件日志"
-    echo "    8) file frontend    前端文件日志"
+    echo "    8) file backend       后端文件日志"
+    echo "    9) file worker        Worker 文件日志"
     echo ""
     echo -e "  ${CYAN}诊断:${NC}"
-    echo "    9) error         错误日志汇总"
-    echo "    0) db            数据库状态"
+    echo "    0) error              错误日志汇总"
     echo ""
     echo -e "  ${DIM}q) 退出${NC}"
     echo ""
 
-    read -rp "  选择 [1-9,0,q]: " choice
+    read -rp "  选择 [0-9,q]: " choice
     echo ""
 
     case "$choice" in
         1) docker_logs backend ;;
-        2) docker_logs worker ;;
-        3) docker_logs frontend ;;
-        4) docker_logs rsshub ;;
-        5) docker_logs browserless ;;
-        6) docker_logs_all ;;
-        7) file_logs backend ;;
-        8) file_logs frontend ;;
-        9) FOLLOW=false; show_errors ;;
-        0) FOLLOW=false; show_db_status ;;
+        2) docker_logs worker-pipeline ;;
+        3) docker_logs worker-scheduled ;;
+        4) docker_logs frontend ;;
+        5) docker_logs rsshub ;;
+        6) docker_logs browserless ;;
+        7) docker_logs_all ;;
+        8) file_logs backend ;;
+        9) file_logs worker ;;
+        0) FOLLOW=false; show_errors ;;
         q|Q) exit 0 ;;
         *) echo -e "${RED}无效选择${NC}"; show_menu ;;
     esac
@@ -267,7 +217,7 @@ show_menu() {
 parse_args "$@"
 
 case "$CMD" in
-    backend|worker|frontend|rsshub|browserless)
+    backend|worker-pipeline|worker-scheduled|frontend|rsshub|browserless)
         docker_logs "$CMD"
         ;;
     all)
@@ -280,16 +230,12 @@ case "$CMD" in
         FOLLOW=false
         show_errors
         ;;
-    db)
-        FOLLOW=false
-        show_db_status
-        ;;
     "")
         show_menu
         ;;
     *)
         echo -e "${RED}未知命令: $CMD${NC}"
-        echo "用法: ./logs.sh [backend|worker|frontend|rsshub|browserless|all|file|error|db]"
+        echo "用法: ./logs.sh [backend|worker-pipeline|worker-scheduled|frontend|rsshub|browserless|all|file|error]"
         exit 1
         ;;
 esac

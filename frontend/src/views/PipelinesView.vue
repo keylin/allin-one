@@ -2,7 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import dayjs from 'dayjs'
-import { listPipelines, cancelPipeline, retryPipeline, testStep } from '@/api/pipelines'
+import { listPipelines, cancelPipeline, cancelAllPipelines, retryPipeline, testStep } from '@/api/pipelines'
 import { listTemplates, createTemplate, updateTemplate, deleteTemplate, getStepDefinitions } from '@/api/pipeline-templates'
 import { listPromptTemplates, createPromptTemplate, updatePromptTemplate, deletePromptTemplate } from '@/api/prompt-templates'
 import { listContent } from '@/api/content'
@@ -129,6 +129,27 @@ async function handleCancel(pipeline) {
   if (res.code === 0) {
     toast.success('流水线已取消')
     fetchPipelines()
+  }
+}
+
+const hasActivePipelines = computed(() =>
+  pipelines.value.some(p => p.status === 'pending' || p.status === 'running')
+)
+
+const showCancelAllDialog = ref(false)
+
+async function handleCancelAll() {
+  showCancelAllDialog.value = false
+  try {
+    const res = await cancelAllPipelines()
+    if (res.code === 0) {
+      toast.success(res.message || '已取消全部流水线')
+      fetchPipelines()
+    } else {
+      toast.error(res.message || '取消失败')
+    }
+  } catch {
+    toast.error('取消请求失败')
   }
 }
 
@@ -514,6 +535,13 @@ onMounted(() => {
             @click="filterStatus = value; handleFilterChange()"
           >
             {{ label }}
+          </button>
+          <button
+            v-if="hasActivePipelines"
+            class="ml-auto px-3 py-1.5 text-xs font-medium rounded-lg border border-rose-200 text-rose-600 hover:bg-rose-50 transition-all duration-200"
+            @click="showCancelAllDialog = true"
+          >
+            取消全部
           </button>
         </div>
 
@@ -1100,6 +1128,16 @@ onMounted(() => {
       :danger="true"
       @confirm="handleDeletePrompt"
       @cancel="showDeletePrDialog = false"
+    />
+
+    <ConfirmDialog
+      :visible="showCancelAllDialog"
+      title="取消全部流水线"
+      message="确定要取消所有等待中和运行中的流水线吗？"
+      confirm-text="全部取消"
+      :danger="true"
+      @confirm="handleCancelAll"
+      @cancel="showCancelAllDialog = false"
     />
   </div>
 </template>

@@ -32,21 +32,20 @@ async def lifespan(app: FastAPI):
     with SessionLocal() as db:
         seed_builtin_templates(db)
 
-    # 启动定时调度器
-    if settings.SCHEDULER_ENABLED:
-        from app.tasks.scheduled_tasks import start_scheduler
-        start_scheduler()
-    else:
-        logger.info("Scheduler disabled by config")
+    # 初始化 Procrastinate schema (首次运行自动创建 procrastinate_* 表)
+    from app.tasks.procrastinate_app import proc_app
+    await proc_app.open_async()
+    try:
+        await proc_app.schema_manager.apply_schema_async()
+    except Exception:
+        logger.debug("Procrastinate schema already exists, skipping")
 
     logger.info("Allin-One started")
     yield
 
     # Shutdown
     logger.info("Shutting down Allin-One ...")
-    if settings.SCHEDULER_ENABLED:
-        from app.tasks.scheduled_tasks import stop_scheduler
-        stop_scheduler()
+    await proc_app.close_async()
 
 
 app = FastAPI(
