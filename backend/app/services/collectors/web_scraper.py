@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models.content import SourceConfig, ContentItem, ContentStatus, MediaType
+from app.models.content import SourceConfig, ContentItem, ContentStatus
 from app.services.collectors.base import BaseCollector
 
 logger = logging.getLogger(__name__)
@@ -67,7 +67,6 @@ class ScraperCollector(BaseCollector):
                     url=link if link and link.startswith("http") else self._resolve_url(source.url, link),
                     author=author,
                     status=ContentStatus.PENDING.value,
-                    media_type=source.media_type or MediaType.TEXT.value,
                     published_at=None,  # 网页抓取通常无时间戳
                 )
 

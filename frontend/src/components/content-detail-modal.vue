@@ -215,6 +215,7 @@ function formatTime(t) {
 
 const statusLabels = {
   pending: '待处理',
+  ready: '已就绪',
   processing: '处理中',
   analyzed: '已分析',
   failed: '失败',
@@ -222,6 +223,7 @@ const statusLabels = {
 
 const statusStyles = {
   pending: 'bg-slate-100 text-slate-600',
+  ready: 'bg-sky-50 text-sky-700',
   processing: 'bg-indigo-50 text-indigo-700',
   analyzed: 'bg-emerald-50 text-emerald-700',
   failed: 'bg-rose-50 text-rose-700',
@@ -320,7 +322,7 @@ const statusStyles = {
             </div>
 
             <!-- 视频播放器 -->
-            <div v-if="content.media_type === 'video'" class="bg-black rounded-xl overflow-hidden">
+            <div v-if="content.media_items?.some(m => m.media_type === 'video')" class="bg-black rounded-xl overflow-hidden">
               <video
                 ref="videoRef"
                 controls

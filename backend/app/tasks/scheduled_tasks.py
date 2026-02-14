@@ -157,7 +157,7 @@ async def cleanup_expired_content():
     from datetime import datetime, timezone, timedelta
     from app.core.database import SessionLocal
     from app.core.config import settings
-    from app.models.content import SourceConfig, ContentItem
+    from app.models.content import SourceConfig, ContentItem, MediaItem
     from app.models.pipeline import PipelineExecution, PipelineStep
     from app.models.system_setting import SystemSetting
 
@@ -197,7 +197,7 @@ async def cleanup_expired_content():
 
             item_ids = [item.id for item in expired_items]
 
-            # 级联删除: steps → executions → items（复用 batch_delete 模式）
+            # 级联删除: steps → executions → media_items → items
             execution_ids = [
                 eid for (eid,) in db.query(PipelineExecution.id)
                 .filter(PipelineExecution.content_id.in_(item_ids))
@@ -210,6 +210,10 @@ async def cleanup_expired_content():
                 db.query(PipelineExecution).filter(
                     PipelineExecution.id.in_(execution_ids)
                 ).delete(synchronize_session=False)
+
+            db.query(MediaItem).filter(
+                MediaItem.content_id.in_(item_ids)
+            ).delete(synchronize_session=False)
 
             deleted = db.query(ContentItem).filter(
                 ContentItem.id.in_(item_ids)
@@ -229,6 +233,114 @@ async def cleanup_expired_content():
             logger.info(f"Cleanup [{source.name}]: deleted {deleted} expired items (retention={retention}d)")
 
         logger.info(f"Cleanup complete: {total_deleted} items deleted from {len(sources)} sources")
+
+
+async def cleanup_records():
+    """定时清理执行记录和采集记录 — 凌晨 03:30 执行
+
+    逻辑:
+    1. 读取 4 个 setting key (retention_days + max_count)
+    2. 按天数清理: 删除 created_at/started_at 早于 cutoff 的已终态记录
+    3. 按数量清理: 按时间倒序保留前 N 条，删除多余的已终态记录
+    """
+    from datetime import datetime, timezone, timedelta
+    from app.core.database import SessionLocal
+    from app.models.system_setting import SystemSetting
+    from app.models.pipeline import PipelineExecution, PipelineStep, PipelineStatus
+    from app.models.content import CollectionRecord
+
+    with SessionLocal() as db:
+        # 读取设置
+        def get_setting(key: str, default: int) -> int:
+            row = db.get(SystemSetting, key)
+            if row and row.value:
+                try:
+                    return int(row.value)
+                except ValueError:
+                    pass
+            return default
+
+        exec_retention_days = get_setting("execution_retention_days", 30)
+        exec_max_count = get_setting("execution_max_count", 0)
+        coll_retention_days = get_setting("collection_retention_days", 30)
+        coll_max_count = get_setting("collection_max_count", 0)
+
+        now = datetime.now(timezone.utc)
+        total_exec_deleted = 0
+        total_coll_deleted = 0
+
+        # ---- 执行记录清理 ----
+        exec_terminal = [
+            PipelineStatus.COMPLETED.value,
+            PipelineStatus.FAILED.value,
+            PipelineStatus.CANCELLED.value,
+        ]
+
+        # 按天数清理
+        if exec_retention_days > 0:
+            cutoff = now - timedelta(days=exec_retention_days)
+            exec_ids = [
+                eid for (eid,) in db.query(PipelineExecution.id).filter(
+                    PipelineExecution.status.in_(exec_terminal),
+                    PipelineExecution.created_at < cutoff,
+                ).all()
+            ]
+            if exec_ids:
+                db.query(PipelineStep).filter(
+                    PipelineStep.pipeline_id.in_(exec_ids)
+                ).delete(synchronize_session=False)
+                deleted = db.query(PipelineExecution).filter(
+                    PipelineExecution.id.in_(exec_ids)
+                ).delete(synchronize_session=False)
+                total_exec_deleted += deleted
+
+        # 按数量清理
+        if exec_max_count > 0:
+            # 按创建时间倒序, 跳过前 N 条, 删除剩余的已终态记录
+            overflow_ids = [
+                eid for (eid,) in db.query(PipelineExecution.id).filter(
+                    PipelineExecution.status.in_(exec_terminal),
+                ).order_by(PipelineExecution.created_at.desc()).offset(exec_max_count).all()
+            ]
+            if overflow_ids:
+                db.query(PipelineStep).filter(
+                    PipelineStep.pipeline_id.in_(overflow_ids)
+                ).delete(synchronize_session=False)
+                deleted = db.query(PipelineExecution).filter(
+                    PipelineExecution.id.in_(overflow_ids)
+                ).delete(synchronize_session=False)
+                total_exec_deleted += deleted
+
+        # ---- 采集记录清理 ----
+        coll_terminal = ["completed", "failed"]
+
+        # 按天数清理
+        if coll_retention_days > 0:
+            cutoff = now - timedelta(days=coll_retention_days)
+            deleted = db.query(CollectionRecord).filter(
+                CollectionRecord.status.in_(coll_terminal),
+                CollectionRecord.started_at < cutoff,
+            ).delete(synchronize_session=False)
+            total_coll_deleted += deleted
+
+        # 按数量清理
+        if coll_max_count > 0:
+            overflow_ids = [
+                cid for (cid,) in db.query(CollectionRecord.id).filter(
+                    CollectionRecord.status.in_(coll_terminal),
+                ).order_by(CollectionRecord.started_at.desc()).offset(coll_max_count).all()
+            ]
+            if overflow_ids:
+                deleted = db.query(CollectionRecord).filter(
+                    CollectionRecord.id.in_(overflow_ids)
+                ).delete(synchronize_session=False)
+                total_coll_deleted += deleted
+
+        db.commit()
+        logger.info(
+            f"Records cleanup: {total_exec_deleted} executions, "
+            f"{total_coll_deleted} collection records deleted"
+        )
 
 
 def start_scheduler():
@@ -267,8 +379,16 @@ def start_scheduler():
         replace_existing=True,
     )
 
+    # 记录清理 — 每天 03:30 (执行记录 + 采集记录)
+    scheduler.add_job(
+        cleanup_records,
+        CronTrigger(hour=3, minute=30),
+        id="cleanup_records",
+        replace_existing=True,
+    )
+
     scheduler.start()
-    logger.info("Scheduler started: collection loop + daily/weekly reports + content cleanup")
+    logger.info("Scheduler started: collection loop + daily/weekly reports + content/records cleanup")
 
 
 def stop_scheduler():

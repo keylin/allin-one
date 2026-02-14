@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models.content import SourceConfig, ContentItem, ContentStatus, MediaType
+from app.models.content import SourceConfig, ContentItem, ContentStatus
 from app.services.collectors.base import BaseCollector
 
 logger = logging.getLogger(__name__)
@@ -45,7 +45,6 @@ class RSSCollector(BaseCollector):
                 author=entry.get("author"),
                 raw_data=json.dumps(self._entry_to_dict(entry), ensure_ascii=False),
                 status=ContentStatus.PENDING.value,
-                media_type=self._detect_media_type(entry, source.media_type),
                 published_at=self._parse_published(entry),
             )
             try:
@@ -122,32 +121,6 @@ class RSSCollector(BaseCollector):
                 except Exception:
                     pass
         return None
-
-    def _detect_media_type(self, entry: dict, source_default: str) -> str:
-        """从 RSS entry 元数据推断媒体类型"""
-        # 1. enclosures MIME type (feedparser 解析)
-        for enc in entry.get("enclosures", []):
-            mime = (enc.get("type") or "").lower()
-            if mime.startswith("video/"):
-                return MediaType.VIDEO.value
-            if mime.startswith("audio/"):
-                return MediaType.AUDIO.value
-
-        # 2. media:content 元素
-        for mc in entry.get("media_content", []):
-            medium = (mc.get("medium") or "").lower()
-            if medium == "video":
-                return MediaType.VIDEO.value
-            if medium == "audio":
-                return MediaType.AUDIO.value
-
-        # 3. URL 特征匹配
-        link = entry.get("link", "")
-        if any(p in link for p in ["bilibili.com/video/", "youtube.com/watch", "youtu.be/"]):
-            return MediaType.VIDEO.value
-
-        # 4. 回退到数据源默认
-        return source_default or MediaType.TEXT.value
 
     def _entry_to_dict(self, entry) -> dict:
         """将 feedparser entry 转为可序列化 dict"""

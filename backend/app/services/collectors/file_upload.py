@@ -11,31 +11,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models.content import SourceConfig, ContentItem, ContentStatus, MediaType
+from app.models.content import SourceConfig, ContentItem, ContentStatus
 from app.services.collectors.base import BaseCollector
 
 logger = logging.getLogger(__name__)
 
-# 支持的文件类型 → 媒体类型映射
-_MEDIA_MAP = {
-    ".txt": MediaType.TEXT.value,
-    ".md": MediaType.TEXT.value,
-    ".csv": MediaType.TEXT.value,
-    ".json": MediaType.TEXT.value,
-    ".html": MediaType.TEXT.value,
-    ".xml": MediaType.TEXT.value,
-    ".png": MediaType.IMAGE.value,
-    ".jpg": MediaType.IMAGE.value,
-    ".jpeg": MediaType.IMAGE.value,
-    ".gif": MediaType.IMAGE.value,
-    ".webp": MediaType.IMAGE.value,
-    ".mp4": MediaType.VIDEO.value,
-    ".mkv": MediaType.VIDEO.value,
-    ".mp3": MediaType.AUDIO.value,
-    ".wav": MediaType.AUDIO.value,
-    ".flac": MediaType.AUDIO.value,
-    ".pdf": MediaType.TEXT.value,
-}
+# 支持的文件扩展名 — 文本类可读取内容
+_TEXT_EXTENSIONS = {".txt", ".md", ".csv", ".json", ".html", ".xml", ".pdf"}
 
 
 class FileUploadCollector(BaseCollector):
@@ -77,12 +59,9 @@ class FileUploadCollector(BaseCollector):
                 f"{file_path.name}:{stat.st_size}:{stat.st_mtime}".encode()
             ).hexdigest()
 
-            # 媒体类型
-            media_type = _MEDIA_MAP.get(ext, MediaType.MIXED.value)
-
             # 读取文本内容
             raw_data = None
-            if read_text and media_type == MediaType.TEXT.value:
+            if read_text and ext in _TEXT_EXTENSIONS:
                 try:
                     text = file_path.read_text(encoding="utf-8", errors="replace")
                     raw_data = json.dumps({
@@ -107,7 +86,6 @@ class FileUploadCollector(BaseCollector):
                 url=str(file_path),
                 raw_data=raw_data,
                 status=ContentStatus.PENDING.value,
-                media_type=media_type,
                 published_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
             )
             try:

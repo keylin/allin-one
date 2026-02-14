@@ -42,7 +42,7 @@ const statusLabels = {
 
 const stepTypeLabels = {
   enrich_content: '内容富化',
-  download_video: '视频下载',
+  localize_media: '媒体本地化',
   extract_audio: '音频提取',
   transcribe_content: '语音转文字',
   translate_content: '内容翻译',

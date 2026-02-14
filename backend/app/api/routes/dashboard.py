@@ -145,7 +145,6 @@ async def get_recent_content(
             "title": item.title,
             "url": item.url,
             "status": item.status,
-            "media_type": item.media_type,
             "source_name": source.name if source else None,
             "collected_at": item.collected_at.isoformat() if item.collected_at else None,
         })

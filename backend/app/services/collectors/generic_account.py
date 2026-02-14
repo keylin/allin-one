@@ -9,7 +9,7 @@ import httpx
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models.content import SourceConfig, ContentItem, ContentStatus, MediaType
+from app.models.content import SourceConfig, ContentItem, ContentStatus
 from app.services.collectors.base import BaseCollector
 
 logger = logging.getLogger(__name__)
@@ -97,7 +97,6 @@ class GenericAccountCollector(BaseCollector):
                 author=entry.get(author_field) if author_field else None,
                 raw_data=json.dumps(entry, ensure_ascii=False, default=str),
                 status=ContentStatus.PENDING.value,
-                media_type=source.media_type or MediaType.TEXT.value,
                 published_at=published_at,
             )
             try:

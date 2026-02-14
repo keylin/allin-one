@@ -9,7 +9,7 @@ import httpx
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models.content import SourceConfig, ContentItem, ContentStatus, MediaType
+from app.models.content import SourceConfig, ContentItem, ContentStatus
 from app.services.collectors.base import BaseCollector
 
 logger = logging.getLogger(__name__)
@@ -82,7 +82,6 @@ class BilibiliCollector(BaseCollector):
                 author=entry.get("author"),
                 raw_data=json.dumps(entry.get("raw", {}), ensure_ascii=False),
                 status=ContentStatus.PENDING.value,
-                media_type=entry.get("media_type", MediaType.VIDEO.value),
                 published_at=entry.get("published_at"),
             )
             try:
@@ -120,7 +119,6 @@ class BilibiliCollector(BaseCollector):
                 # 提取标题和链接
                 title = ""
                 url = ""
-                media_type = MediaType.TEXT.value
                 major_type = major.get("type", "")
                 author_name = author_info.get("name", "")
 
@@ -128,7 +126,6 @@ class BilibiliCollector(BaseCollector):
                     archive = major.get("archive", {})
                     title = archive.get("title", "")
                     url = f"https://www.bilibili.com/video/{archive.get('bvid', '')}"
-                    media_type = MediaType.VIDEO.value
                 elif major_type == "MAJOR_TYPE_ARTICLE":
                     article = major.get("article", {})
                     title = article.get("title", "")
@@ -139,7 +136,6 @@ class BilibiliCollector(BaseCollector):
                     desc_text = desc.get("text", "").strip() if desc else ""
                     title = desc_text[:200] if desc_text else f"{author_name}的图片动态"
                     url = f"https://t.bilibili.com/{item.get('id_str', '')}"
-                    media_type = MediaType.IMAGE.value
                 elif major_type == "MAJOR_TYPE_LIVE_RCMD":
                     live = major.get("live_rcmd", {})
                     try:
@@ -166,7 +162,6 @@ class BilibiliCollector(BaseCollector):
                     "external_id": hashlib.md5(f"bili_dynamic:{item.get('id_str', '')}".encode()).hexdigest(),
                     "url": url,
                     "author": author_info.get("name"),
-                    "media_type": media_type,
                     "published_at": datetime.fromtimestamp(
                         author_info.get("pub_ts", 0), tz=timezone.utc
                     ) if author_info.get("pub_ts") else None,
@@ -198,7 +193,6 @@ class BilibiliCollector(BaseCollector):
                     "external_id": hashlib.md5(f"bili_fav:{media.get('id', '')}".encode()).hexdigest(),
                     "url": f"https://www.bilibili.com/video/{media.get('bvid', '')}",
                     "author": media.get("upper", {}).get("name"),
-                    "media_type": MediaType.VIDEO.value,
                     "published_at": datetime.fromtimestamp(
                         media.get("ctime", 0), tz=timezone.utc
                     ) if media.get("ctime") else None,
@@ -225,7 +219,6 @@ class BilibiliCollector(BaseCollector):
                     "external_id": hashlib.md5(f"bili_history:{item.get('kid', '')}".encode()).hexdigest(),
                     "url": f"https://www.bilibili.com/video/{item.get('bvid', '')}",
                     "author": item.get("author_name"),
-                    "media_type": MediaType.VIDEO.value,
                     "published_at": datetime.fromtimestamp(
                         item.get("view_at", 0), tz=timezone.utc
                     ) if item.get("view_at") else None,

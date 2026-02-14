@@ -1,6 +1,6 @@
 # Allin-One 系统方案
 
-> 版本: v1.0 | 更新日期: 2026-02-12
+> 版本: v1.1 | 更新日期: 2026-02-14
 
 ---
 
@@ -91,11 +91,15 @@
 pipeline_templates 1─ ─ ─ ─ ┐ (绑定)
                              ▼
 source_configs 1───∞ content_items 1───∞ pipeline_executions 1───∞ pipeline_steps
-      │                                         │
-      └──1───∞ collection_records                └──── template_id → pipeline_templates
+      │                  │                       │
+      │                  └──1───∞ media_items     └──── template_id → pipeline_templates
+      │
+      └──1───∞ collection_records
 
 prompt_templates (独立, 被 step_config 引用)
 system_settings  (独立配置表)
+platform_credentials (平台凭证)
+finance_data_points (金融数据)
 ```
 
 **核心解耦关系**: `source_configs.pipeline_template_id → pipeline_templates.id`
@@ -114,11 +118,13 @@ CREATE TABLE source_configs (
     source_type     TEXT NOT NULL,              -- 来源渠道: rss.hub/rss.standard/web.scraper/api.akshare/...
     url             TEXT,                       -- 订阅/采集地址
     description     TEXT,
-    media_type      TEXT DEFAULT 'text',        -- 产出的媒体类型 (辅助前端筛选)
     schedule_enabled BOOLEAN DEFAULT TRUE,
     schedule_interval INTEGER DEFAULT 3600,
     pipeline_template_id TEXT,                  -- 绑定的流水线模板 (解耦关键!)
     config_json     TEXT,                       -- 渠道特定配置 (JSON)
+    credential_id   TEXT,                       -- 关联的平台凭证
+    auto_cleanup_enabled BOOLEAN DEFAULT FALSE, -- 启用自动清理
+    retention_days  INTEGER,                    -- 内容保留天数 (null=使用全局默认)
     last_collected_at DATETIME,
     consecutive_failures INTEGER DEFAULT 0,
     is_active       BOOLEAN DEFAULT TRUE,
@@ -153,14 +159,13 @@ CREATE TABLE content_items (
     id              TEXT PRIMARY KEY,           -- UUID
     source_id       TEXT NOT NULL,              -- 外键 -> source_configs
     title           TEXT NOT NULL,              -- 内容标题
-    external_id     TEXT NOT NULL,              -- 外部唯一标识 (URL)
+    external_id     TEXT NOT NULL,              -- 外部唯一标识 (URL hash)
     url             TEXT,                       -- 原始链接
     author          TEXT,                       -- 作者
     raw_data        TEXT,                       -- 原始数据 (JSON)
     processed_content TEXT,                     -- 清洗后全文
     analysis_result TEXT,                       -- LLM 分析结果 (JSON/Markdown/Text)
-    status          TEXT DEFAULT 'pending',     -- ContentStatus 枚举
-    media_type      TEXT DEFAULT 'text',        -- MediaType 枚举
+    status          TEXT DEFAULT 'pending',     -- ContentStatus 枚举 (pending/processing/ready/analyzed/failed)
     language        TEXT,                       -- 内容语言 (zh/en/ja...)
     published_at    DATETIME,                   -- 原始发布时间
     collected_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -180,6 +185,27 @@ CREATE INDEX idx_content_status ON content_items(status);
 CREATE INDEX idx_content_source ON content_items(source_id);
 CREATE INDEX idx_content_collected ON content_items(collected_at);
 CREATE INDEX idx_content_external ON content_items(external_id);
+```
+
+#### media_items (媒体项)
+
+ContentItem 一对多 MediaItem，由 `localize_media` 步骤创建。
+
+```sql
+CREATE TABLE media_items (
+    id              TEXT PRIMARY KEY,           -- UUID
+    content_id      TEXT NOT NULL,              -- 外键 -> content_items
+    media_type      TEXT NOT NULL,              -- MediaType: image/video/audio
+    original_url    TEXT NOT NULL,              -- 远程 URL
+    local_path      TEXT,                       -- 下载后的本地路径
+    filename        TEXT,                       -- 本地文件名
+    status          TEXT DEFAULT 'pending',     -- pending/downloaded/failed
+    metadata_json   TEXT,                       -- JSON: 类型特定元数据 (thumbnail_path, duration 等)
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (content_id) REFERENCES content_items(id)
+);
+
+CREATE INDEX ix_media_item_content_id ON media_items(content_id);
 ```
 
 #### pipeline_executions (流水线执行记录)
@@ -242,13 +268,11 @@ CREATE TABLE pipeline_templates (
 );
 ```
 
-`steps_config` JSON 结构 — 流水线不含 fetch, 从处理步骤开始:
+`steps_config` JSON 结构 — 用户模板只包含后置处理步骤，预处理 (enrich_content / localize_media) 由 Orchestrator 自动注入:
 ```json
 [
-  {"step_type": "enrich_content",  "is_critical": true,  "config": {"scrape_level": "auto"}},
-  {"step_type": "download_video",  "is_critical": false, "config": {"platform": "bilibili", "quality": "1080p"}},
-  {"step_type": "analyze_content", "is_critical": false, "config": {"model": "deepseek-chat", "prompt_template_id": "xxx"}},
-  {"step_type": "publish_content", "is_critical": false, "config": {"channel": "email", "frequency": "daily"}}
+  {"step_type": "analyze_content", "is_critical": true,  "config": {}},
+  {"step_type": "publish_content", "is_critical": false, "config": {"channel": "none"}}
 ]
 ```
 
@@ -291,7 +315,7 @@ CREATE TABLE system_settings (
 STEP_DEFINITIONS = {
     # 原子操作注册表 — 没有 fetch_content (抓取由定时器+Collector完成)
     "enrich_content":      StepDefinition(display_name="抓取全文",   config_schema={"scrape_level": "L1/L2/L3/auto"}),
-    "download_video":      StepDefinition(display_name="下载视频",   config_schema={"platform": "bilibili/youtube/auto", "quality": "1080p"}),
+    "localize_media":      StepDefinition(display_name="媒体本地化", description="检测并下载图片/视频/音频，创建 MediaItem"),
     "extract_audio":       StepDefinition(display_name="音频提取"),
     "transcribe_content":  StepDefinition(display_name="语音转文字"),
     "translate_content":   StepDefinition(display_name="文章翻译",   config_schema={"target_language": "zh"}),
@@ -299,12 +323,12 @@ STEP_DEFINITIONS = {
     "publish_content":     StepDefinition(display_name="消息推送",   config_schema={"channel": "email/dingtalk", "frequency": "immediate/daily"}),
 }
 
+# 用户模板只包含后置处理步骤，预处理由 Orchestrator 自动注入
 BUILTIN_TEMPLATES = [
-    # 流水线只做处理, 输入是已存在的 ContentItem
-    {"name": "文章分析",         "steps": ["enrich → analyze → publish"]},
-    {"name": "英文文章翻译分析", "steps": ["enrich → translate → analyze → publish"]},
-    {"name": "视频下载分析",     "steps": ["download_video → transcribe → analyze → publish"]},
-    {"name": "视频翻译分析",     "steps": ["download_video → transcribe → translate → analyze → publish"]},
+    {"name": "文章分析",         "steps": ["analyze → publish"]},
+    {"name": "英文文章翻译分析", "steps": ["translate → analyze → publish"]},
+    {"name": "视频下载分析",     "steps": ["transcribe → analyze → publish"]},
+    {"name": "视频翻译分析",     "steps": ["transcribe → translate → analyze → publish"]},
     {"name": "仅分析",          "steps": ["analyze → publish"]},
     {"name": "仅推送",          "steps": ["publish"]},
 ]
@@ -313,13 +337,22 @@ BUILTIN_TEMPLATES = [
 ```python
 # app/services/pipeline/orchestrator.py
 class PipelineOrchestrator:
-    """编排器 - 为已存在的 ContentItem 创建流水线执行"""
-    
+    """编排器 - 为已存在的 ContentItem 创建流水线执行
+
+    流水线分两阶段:
+      1. 预处理 (自动): 基于内容检测自动执行
+         - 文本量不足 → enrich_content (抓取全文)
+         - 始终 → localize_media (媒体检测+下载+URL改写, api.akshare 除外)
+      2. 后置处理 (用户模板): analyze / translate / publish 等
+    """
+
     def get_template_for_source(self, source: SourceConfig) -> PipelineTemplate | None:
         """获取源绑定的模板, 未绑定返回 None (纯采集场景)"""
-        
+
     def trigger_for_content(self, content: ContentItem, template_override_id=None, trigger=...) -> PipelineExecution | None:
-        """为一条已存在的 ContentItem 创建并启动流水线"""
+        """为一条已存在的 ContentItem 创建并启动流水线
+        自动注入预处理步骤, 然后拼接用户模板的后置步骤。
+        无模板时仍执行预处理; 无预处理也无模板则标记 READY。"""
 ```
 
 ```python
@@ -396,14 +429,16 @@ class BaseCollector(ABC):
 
 | Collector | 适用 SourceType | 采集方式 | 说明 |
 |-----------|-----------------|----------|------|
-| `RSSHubCollector` | `rsshub` | RSSHub 服务 → feedparser | 统一处理 B站/YouTube/微博等 |
-| `RSSStdCollector` | `rss_std` | feedparser 直接解析 | 标准 RSS/Atom |
-| `ScraperCollector` | `scraper` | L1/L2/L3 三级策略 | 通用网页抓取 |
-| `AkShareCollector` | `akshare` | AkShare API | 金融数据 |
-| `FileUploadCollector` | `file_upload` | 读取上传文件 | 文本/图片/文档 |
+| `RSSHubCollector` | `rss.hub` | RSSHub 服务 → feedparser | 统一处理 B站/YouTube/微博等 |
+| `RSSStdCollector` | `rss.standard` | feedparser 直接解析 | 标准 RSS/Atom |
+| `ScraperCollector` | `web.scraper` | L1/L2/L3 三级策略 | 通用网页抓取 |
+| `AkShareCollector` | `api.akshare` | AkShare API | 金融数据 |
+| `FileUploadCollector` | `file.upload` | 读取上传文件 | 文本/图片/文档 |
+| `BilibiliCollector` | `account.bilibili` | B站账号 API | 动态/收藏夹/历史 (需Cookie) |
+| `GenericAccountCollector` | `account.generic` | 平台特定 API | 其他需认证的平台 |
 
-注意: 没有 BilibiliCollector / YouTubeCollector。
-视频下载由流水线中的 `download_video` 步骤 (yt-dlp) 处理, 不是 Collector 的职责。
+注意: 没有 BilibiliVideoCollector / YouTubeVideoCollector。
+视频下载由流水线预处理阶段的 `localize_media` 步骤 (yt-dlp) 自动处理, 不是 Collector 的职责。
 
 ### 4.3 三级抓取策略实现
 
@@ -429,7 +464,7 @@ class ContentEnricher:
         return ""
     
     async def _http_fetch(self, url: str) -> str:
-        """L1: httpx + readability 提取"""
+        """L1: httpx + trafilatura 提取 (输出 Markdown)"""
         
     async def _browserless_fetch(self, url: str) -> str:
         """L2: Browserless Chrome 渲染 + 提取"""
@@ -537,8 +572,10 @@ POST   /api/sources                    → SourceConfig  (创建)
 GET    /api/sources/{id}               → SourceConfig
 PUT    /api/sources/{id}               → SourceConfig  (更新)
 DELETE /api/sources/{id}?cascade=false  → null          (cascade=true 关联删除)
+POST   /api/sources/batch-delete       → { deleted }   (批量删除, body: {ids}, ?cascade=false)
+POST   /api/sources/batch-collect      → { sources_collected, total_items_new, pipelines_started } (一键采集所有启用源)
 POST   /api/sources/{id}/collect       → PipelineExecution (触发采集)
-GET    /api/sources/{id}/history       → PaginatedResponse[PipelineExecution]
+GET    /api/sources/{id}/history       → PaginatedResponse[CollectionRecord]
 POST   /api/sources/import             → { imported: int } (OPML导入)
 GET    /api/sources/export             → OPML file
 ```
@@ -546,12 +583,14 @@ GET    /api/sources/export             → OPML file
 #### Content
 ```
 GET    /api/content                    → PaginatedResponse[ContentItem]
-       ?source_id=&status=&media_type=&q=&sort_by=&order=
-GET    /api/content/{id}               → ContentItem (含分析结果)
+       ?source_id=&status=&has_video=&q=&sort_by=&order=&is_favorited=&is_unread=&date_range=
+GET    /api/content/{id}               → ContentItem (含分析结果和 media_items)
+GET    /api/content/stats              → { total, today, pending, processing, ready, analyzed, failed }
 POST   /api/content/{id}/analyze       → PipelineExecution (重新分析)
 POST   /api/content/{id}/favorite      → null (切换收藏)
 PATCH  /api/content/{id}/note          → null (更新笔记)
-DELETE /api/content                    → null (批量删除, body: {ids: []})
+POST   /api/content/batch-delete       → { deleted } (批量删除, body: {ids})
+POST   /api/content/delete-all         → { deleted } (清空全部内容)
 ```
 
 #### Pipelines
@@ -583,17 +622,40 @@ DELETE /api/prompt-templates/{id}      → null
 ```
 GET    /api/settings                   → dict[str, Any]
 PUT    /api/settings                   → null  (批量更新)
-GET    /api/settings/{key}             → { key, value }
-PUT    /api/settings/{key}             → null
+POST   /api/settings/test-llm          → { model } (LLM 连接测试)
+POST   /api/settings/clear-executions  → { deleted } (手动清理执行记录)
+POST   /api/settings/clear-collections → { deleted } (手动清理采集记录)
 ```
 
 #### Video
 ```
 POST   /api/video/download             → { task_id } (提交下载任务)
        body: { url: string, quality?: string }
-GET    /api/video/downloads             → list[DownloadTask]
-GET    /api/video/{id}/stream           → video stream
+GET    /api/video/downloads             → PaginatedResponse[DownloadTask]
+GET    /api/video/{id}/stream           → video stream (Range 支持)
 GET    /api/video/{id}/thumbnail        → image file (封面图)
+```
+
+#### Media (通用媒体文件服务)
+```
+GET    /api/media/{content_id}/{file_path} → FileResponse (从 MEDIA_DIR 读取)
+```
+
+#### Credentials (平台凭证)
+```
+GET    /api/credentials                → list[PlatformCredential]
+POST   /api/credentials                → PlatformCredential (创建)
+DELETE /api/credentials/{id}           → null
+POST   /api/credentials/{id}/check     → { valid } (校验凭证)
+POST   /api/credentials/sync-rsshub    → { synced } (同步 RSSHub)
+POST   /api/credentials/bilibili-qrcode → { qr_url, token } (B站扫码登录)
+POST   /api/credentials/bilibili-poll   → { status } (轮询扫码结果)
+```
+
+#### Finance (金融数据)
+```
+GET    /api/finance/data               → PaginatedResponse[FinanceDataPoint]
+GET    /api/finance/chart-data/{source_id} → { labels, datasets } (图表数据)
 ```
 
 ---
@@ -622,11 +684,18 @@ scheduler.add_job(
     id="daily_report",
 )
 
-# 清理任务 - 每天 03:00
+# 内容清理 - 每天 03:00 (按 retention_days 清理过期内容)
 scheduler.add_job(
-    cleanup_old_data,
+    cleanup_expired_content,
     CronTrigger(hour=3, minute=0),
-    id="data_cleanup",
+    id="cleanup_expired_content",
+)
+
+# 记录清理 - 每天 03:30 (执行记录 + 采集记录)
+scheduler.add_job(
+    cleanup_records,
+    CronTrigger(hour=3, minute=30),
+    id="cleanup_records",
 )
 ```
 
@@ -769,9 +838,15 @@ EOF
 
 ### 9.1 日志体系
 
-- 应用日志: `data/logs/app.log` (结构化 JSON 格式)
-- 任务日志: `data/logs/worker.log`
-- 访问日志: uvicorn 标准输出
+结构化文件日志，由 `app/core/logging_config.py` 统一配置:
+
+| 文件 | 写入者 | 级别 | 用途 |
+|------|--------|------|------|
+| `data/logs/backend.log` | FastAPI 进程 | WARNING+ | API 服务的警告与异常 |
+| `data/logs/worker.log` | Huey Worker 进程 | WARNING+ | 任务执行的警告与异常 |
+| `data/logs/error.log` | 两个进程共写 | ERROR+ | 所有严重错误汇总 |
+
+日志格式: `时间 级别 [模块名] 消息`，含完整 traceback。控制台同时输出 INFO+ 级别。
 
 ### 9.2 健康检查
 

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import httpx
 from sqlalchemy.orm import Session
 
+from app.core.database import commit_with_retry
 from app.models.content import SourceConfig, ContentItem, CollectionRecord
 from app.services.collectors.rss import RSSCollector
 from app.services.collectors.web_scraper import ScraperCollector
@@ -59,7 +60,7 @@ async def collect_source(source: SourceConfig, db: Session) -> list[ContentItem]
             record.items_found = 0
             record.items_new = 0
             record.completed_at = datetime.now(timezone.utc)
-            db.commit()
+            commit_with_retry(db)
             return []
 
         new_items = await collector.collect(source, db)
@@ -68,7 +69,7 @@ async def collect_source(source: SourceConfig, db: Session) -> list[ContentItem]
         record.items_found = len(new_items)
         record.items_new = len(new_items)
         record.completed_at = datetime.now(timezone.utc)
-        db.commit()
+        commit_with_retry(db)
 
         logger.info(f"[collect] {source.name}: found {len(new_items)} new items")
         return new_items
@@ -77,7 +78,7 @@ async def collect_source(source: SourceConfig, db: Session) -> list[ContentItem]
         record.status = "failed"
         record.error_message = str(e)[:500]
         record.completed_at = datetime.now(timezone.utc)
-        db.commit()
+        commit_with_retry(db)
 
         # 暂时性网络/上游错误只记 WARNING，不打堆栈
         if isinstance(e, (httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException)):

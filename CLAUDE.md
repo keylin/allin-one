@@ -5,9 +5,12 @@
 ## 核心架构约束
 
 - **数据源与流水线解耦**: 数据源只管「从哪来」，流水线只管「怎么处理」，通过 `source.pipeline_template_id` FK 绑定
-- **没有** `video_bilibili` 等混合 SourceType，视频通过 rsshub 发现 + download_video 步骤处理
+- **没有** `video_bilibili` 等混合 SourceType，视频通过 rsshub 发现 + localize_media 步骤处理
 - **抓取与处理分离**: Collector 负责抓取产出 ContentItem，流水线只做处理，不含 fetch 步骤
+- **自动预处理**: 流水线分两阶段——系统自动注入预处理步骤 (enrich_content / localize_media)，然后拼接用户模板的后置步骤
+- **媒体项独立**: ContentItem 不再有 media_type 字段，媒体通过 MediaItem 一对多关联管理
 - **三级抓取**: L1 HTTP → L2 Browserless → L3 browser-use，按需升级
+- **数据目录**: `data/` 在项目根目录（非 backend/data/），backend 和 worker 共享同一挂载
 
 ## 技术栈
 

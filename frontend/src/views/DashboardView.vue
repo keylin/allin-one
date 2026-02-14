@@ -70,13 +70,10 @@ const triggerLabels = {
   scheduled: '定时', manual: '手动', api: 'API', webhook: 'Webhook',
 }
 
-const mediaTypeLabels = {
-  text: '文本', video: '视频', audio: '音频', image: '图片', mixed: '混合',
-}
-
 const contentStatusStyles = {
   pending: 'bg-slate-100 text-slate-500',
   processing: 'bg-indigo-50 text-indigo-600',
+  ready: 'bg-sky-50 text-sky-600',
   analyzed: 'bg-emerald-50 text-emerald-600',
   failed: 'bg-rose-50 text-rose-600',
 }
@@ -370,9 +367,6 @@ onUnmounted(() => {
                     :class="contentStatusStyles[item.status] || 'bg-slate-100 text-slate-500'"
                   >
                     {{ statusLabels[item.status] || item.status }}
-                  </span>
-                  <span v-if="item.media_type" class="text-[10px] text-slate-400">
-                    {{ mediaTypeLabels[item.media_type] || item.media_type }}
                   </span>
                   <span v-if="item.source_name" class="text-[10px] text-slate-300 truncate max-w-[100px]">
                     {{ item.source_name }}

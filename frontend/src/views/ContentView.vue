@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import dayjs from 'dayjs'
 import { useContentStore } from '@/stores/content'
 import { listSources } from '@/api/sources'
-import { analyzeContent, incrementView, getContentStats, batchMarkRead, batchFavorite } from '@/api/content'
+import { analyzeContent, incrementView, getContentStats, batchMarkRead, batchFavorite, deleteAllContent } from '@/api/content'
 import ContentDetailPanel from '@/components/content-detail-panel.vue'
 import DetailDrawer from '@/components/detail-drawer.vue'
 import ConfirmDialog from '@/components/confirm-dialog.vue'
@@ -16,7 +16,7 @@ const store = useContentStore()
 // Filters (from URL)
 const searchQuery = ref(route.query.q || '')
 const filterStatus = ref(route.query.status || '')
-const filterMediaType = ref(route.query.media_type || '')
+const filterHasVideo = ref(route.query.has_video === '1')
 const filterSourceId = ref(route.query.source_id || '')
 const sources = ref([])
 
@@ -48,27 +48,24 @@ const drawerVisible = ref(false)
 // Batch ops
 const selectedIds = ref([])
 const showBatchDeleteDialog = ref(false)
+const showDeleteAllDialog = ref(false)
+const deletingAll = ref(false)
 
 let searchTimer = null
 
 const statusLabels = {
   pending: '待处理',
   processing: '处理中',
+  ready: '已就绪',
   analyzed: '已分析',
   failed: '失败',
 }
 const statusStyles = {
   pending: 'bg-slate-100 text-slate-600',
   processing: 'bg-indigo-50 text-indigo-700',
+  ready: 'bg-sky-50 text-sky-700',
   analyzed: 'bg-emerald-50 text-emerald-700',
   failed: 'bg-rose-50 text-rose-700',
-}
-const mediaLabels = {
-  text: '文本',
-  image: '图片',
-  video: '视频',
-  audio: '音频',
-  mixed: '混合',
 }
 
 const totalPages = computed(() => Math.max(1, Math.ceil(store.total / store.pageSize)))
@@ -77,7 +74,7 @@ function syncQueryParams() {
   const query = {}
   if (searchQuery.value) query.q = searchQuery.value
   if (filterStatus.value) query.status = filterStatus.value
-  if (filterMediaType.value) query.media_type = filterMediaType.value
+  if (filterHasVideo.value) query.has_video = '1'
   if (filterSourceId.value) query.source_id = filterSourceId.value
   if (dateRange.value) query.date_range = dateRange.value
   if (showFavoritesOnly.value) query.favorites = '1'
@@ -122,7 +119,7 @@ function fetchWithFilters() {
   }
   if (searchQuery.value) params.q = searchQuery.value
   if (filterStatus.value) params.status = filterStatus.value
-  if (filterMediaType.value) params.media_type = filterMediaType.value
+  if (filterHasVideo.value) params.has_video = true
   if (filterSourceId.value) params.source_id = filterSourceId.value
   if (showFavoritesOnly.value) params.is_favorited = true
   if (showUnreadOnly.value) params.is_unread = true
@@ -213,6 +210,20 @@ async function handleBatchDelete() {
   showBatchDeleteDialog.value = false
   await store.batchDelete(selectedIds.value)
   selectedIds.value = []
+}
+
+async function handleDeleteAll() {
+  showDeleteAllDialog.value = false
+  deletingAll.value = true
+  try {
+    const res = await deleteAllContent()
+    if (res.code === 0) {
+      store.currentPage = 1
+      fetchWithFilters()
+    }
+  } finally {
+    deletingAll.value = false
+  }
 }
 
 async function handleBatchRead() {
@@ -333,7 +344,7 @@ onUnmounted(() => {
       </div>
 
       <!-- Stats cards -->
-      <div class="flex gap-2 overflow-x-auto p-0.5 scrollbar-hide">
+      <div class="flex gap-2 overflow-x-auto p-0.5 scrollbar-hide items-center">
         <button
           v-for="card in [
             { label: '全部', value: contentStats.total, filter: '', icon: 'M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z', color: 'text-slate-600 bg-slate-50', active: 'ring-slate-400' },
@@ -361,6 +372,14 @@ onUnmounted(() => {
             <p class="text-lg font-bold text-slate-900 leading-none tabular-nums">{{ card.value }}</p>
             <p class="text-[10px] text-slate-400 mt-0.5">{{ card.label }}</p>
           </div>
+        </button>
+        <button
+          v-if="contentStats.total > 0"
+          class="ml-auto px-3 py-1.5 text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg transition-all duration-200 shrink-0 disabled:opacity-50"
+          :disabled="deletingAll"
+          @click="showDeleteAllDialog = true"
+        >
+          {{ deletingAll ? '清空中...' : '清空全部' }}
         </button>
       </div>
 
@@ -394,14 +413,16 @@ onUnmounted(() => {
         <option value="">全部状态</option>
         <option v-for="(label, value) in statusLabels" :key="value" :value="value">{{ label }}</option>
       </select>
-      <select
-        v-model="filterMediaType"
-        @change="handleFilterChange"
-        class="bg-white text-sm text-slate-600 rounded-lg px-3 py-2 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all appearance-none cursor-pointer"
+      <button
+        class="p-2 rounded-lg border transition-all duration-200"
+        :class="filterHasVideo ? 'bg-violet-50 border-violet-300 text-violet-600' : 'bg-white border-slate-200 text-slate-400 hover:text-slate-600 hover:border-slate-300'"
+        :title="filterHasVideo ? '显示全部' : '仅看视频'"
+        @click="filterHasVideo = !filterHasVideo; handleFilterChange()"
       >
-        <option value="">全部类型</option>
-        <option v-for="(label, value) in mediaLabels" :key="value" :value="value">{{ label }}</option>
-      </select>
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z" />
+        </svg>
+      </button>
       <select
         v-model="dateRange"
         @change="handleFilterChange"
@@ -487,7 +508,7 @@ onUnmounted(() => {
               <th class="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">标题</th>
               <th class="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">来源</th>
               <th class="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">状态</th>
-              <th class="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">类型</th>
+              <th class="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">媒体</th>
               <th class="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">浏览</th>
               <th class="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">采集时间</th>
               <th class="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">操作</th>
@@ -531,7 +552,12 @@ onUnmounted(() => {
                   {{ statusLabels[item.status] || item.status }}
                 </span>
               </td>
-              <td class="px-4 py-3 text-sm text-slate-500">{{ mediaLabels[item.media_type] || item.media_type }}</td>
+              <td class="px-4 py-3 text-sm text-slate-400">
+                <span v-if="item.media_items?.some(m => m.media_type === 'video')" class="text-violet-500">视频</span>
+                <span v-else-if="item.media_items?.some(m => m.media_type === 'image')" class="text-emerald-500">图片</span>
+                <span v-else-if="item.media_items?.some(m => m.media_type === 'audio')" class="text-rose-500">音频</span>
+                <span v-else class="text-slate-300">-</span>
+              </td>
               <td class="px-4 py-3 text-sm text-slate-400 text-right tabular-nums">{{ item.view_count || 0 }}</td>
               <td class="px-4 py-3 text-sm text-slate-400">{{ formatTime(item.collected_at) }}</td>
               <td class="px-4 py-3 text-right" @click.stop>
@@ -583,7 +609,9 @@ onUnmounted(() => {
           <p v-if="item.summary_text" class="text-xs text-slate-400 line-clamp-1 mb-2">{{ item.summary_text }}</p>
           <div class="flex items-center gap-2 text-xs text-slate-400">
             <span class="truncate max-w-[120px]">{{ item.source_name || '-' }}</span>
-            <span v-if="item.media_type !== 'text'" class="text-slate-300">{{ mediaLabels[item.media_type] || item.media_type }}</span>
+            <span v-if="item.media_items?.length" class="text-slate-300">
+              {{ item.media_items.some(m => m.media_type === 'video') ? '视频' : item.media_items.some(m => m.media_type === 'image') ? '图片' : '音频' }}
+            </span>
             <span class="ml-auto shrink-0">{{ formatTime(item.collected_at) }}</span>
           </div>
         </div>
@@ -633,6 +661,16 @@ onUnmounted(() => {
       :danger="true"
       @confirm="handleBatchDelete"
       @cancel="showBatchDeleteDialog = false"
+    />
+
+    <ConfirmDialog
+      :visible="showDeleteAllDialog"
+      title="清空全部内容"
+      :message="`确定要删除全部 ${contentStats.total} 条内容吗？此操作将同时清除所有关联的流水线记录和媒体文件，不可恢复。`"
+      confirm-text="清空全部"
+      :danger="true"
+      @confirm="handleDeleteAll"
+      @cancel="showDeleteAllDialog = false"
     />
   </div>
 </template>

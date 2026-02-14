@@ -2,7 +2,7 @@ from app.schemas.base import APIResponse, PaginatedResponse, error_response
 from app.schemas.source import SourceCreate, SourceUpdate, SourceResponse, CollectionRecordResponse
 from app.schemas.pipeline_template import PipelineTemplateResponse
 from app.schemas.system_setting import SettingsUpdate, SettingItem
-from app.schemas.content import ContentResponse, ContentDetailResponse, ContentNoteUpdate, ContentBatchDelete
+from app.schemas.content import ContentResponse, ContentDetailResponse, ContentNoteUpdate, ContentBatchDelete, MediaItemSummary
 from app.schemas.pipeline import (
     PipelineStepResponse, PipelineResponse, PipelineDetailResponse,
     PipelineTemplateCreate, PipelineTemplateUpdate,
@@ -25,6 +25,7 @@ __all__ = [
     "ContentDetailResponse",
     "ContentNoteUpdate",
     "ContentBatchDelete",
+    "MediaItemSummary",
     "PipelineStepResponse",
     "PipelineResponse",
     "PipelineDetailResponse",

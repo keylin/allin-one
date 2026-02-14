@@ -2,6 +2,9 @@
 
 from huey import SqliteHuey
 
+from app.core.logging_config import setup_logging
+setup_logging("worker")
+
 huey = SqliteHuey(
     filename="data/db/huey.db",
     immediate=False,

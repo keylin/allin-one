@@ -65,8 +65,8 @@ maybe_restart_worker() {
 }
 
 # ---- 数据库安全 ----
-DB_DIR="$ROOT_DIR/backend/data/db"
-BACKUP_DIR="$ROOT_DIR/backend/data/backups"
+DB_DIR="$ROOT_DIR/data/db"
+BACKUP_DIR="$ROOT_DIR/data/backups"
 
 backup_db() {
     local db_file="$DB_DIR/allin.db"

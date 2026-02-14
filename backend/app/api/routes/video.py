@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.config import settings
 from app.models.pipeline import PipelineExecution, PipelineStep, PipelineTemplate, TriggerSource, StepStatus
-from app.models.content import ContentItem, ContentStatus, MediaType, SourceConfig
+from app.models.content import ContentItem, ContentStatus, MediaItem, SourceConfig
 from pydantic import BaseModel
 from app.schemas import VideoDownloadRequest, error_response
 
@@ -47,7 +47,6 @@ async def download_video(body: VideoDownloadRequest, db: Session = Depends(get_d
                 source_type="user.note",
                 description="手动提交的视频下载任务",
                 schedule_enabled=False,
-                media_type=MediaType.VIDEO.value,
             )
             db.add(source)
             db.flush()
@@ -61,7 +60,6 @@ async def download_video(body: VideoDownloadRequest, db: Session = Depends(get_d
         external_id=hashlib.md5(url.encode()).hexdigest(),
         url=url,
         status=ContentStatus.PROCESSING.value,
-        media_type=MediaType.VIDEO.value,
     )
     db.add(content)
     db.flush()
@@ -117,12 +115,14 @@ async def list_downloads(
     from sqlalchemy import func, asc, desc
 
     # 基础查询：始终 JOIN ContentItem 和 SourceConfig
+    # 查询 localize_media (has_video) 步骤
     query = (
         db.query(PipelineStep, ContentItem, SourceConfig)
         .join(PipelineExecution, PipelineStep.pipeline_id == PipelineExecution.id)
         .join(ContentItem, PipelineExecution.content_id == ContentItem.id)
         .outerjoin(SourceConfig, ContentItem.source_id == SourceConfig.id)
-        .filter(PipelineStep.step_type == "download_video")
+        .filter(PipelineStep.step_type == "localize_media")
+        .filter(func.json_extract(PipelineStep.output_data, "$.has_video") == True)
     )
 
     # 状态筛选
@@ -139,17 +139,19 @@ async def list_downloads(
             func.json_extract(PipelineStep.output_data, "$.platform") == platform
         )
 
-    # 关键词搜索 (json_extract)
+    # 关键词搜索 (json_extract + ContentItem.title fallback)
     if search:
-        query = query.filter(
-            func.json_extract(PipelineStep.output_data, "$.title").like(f"%{search}%")
-        )
+        from sqlalchemy import or_
+        query = query.filter(or_(
+            func.json_extract(PipelineStep.output_data, "$.title").like(f"%{search}%"),
+            ContentItem.title.like(f"%{search}%"),
+        ))
 
     # 获取平台列表（独立轻量查询）
     platforms_query = (
         db.query(func.distinct(func.json_extract(PipelineStep.output_data, "$.platform")))
         .filter(
-            PipelineStep.step_type == "download_video",
+            PipelineStep.step_type == "localize_media",
             PipelineStep.output_data.isnot(None),
         )
         .all()
@@ -164,7 +166,7 @@ async def list_downloads(
     sort_map = {
         "published_at": ContentItem.published_at,
         "collected_at": ContentItem.collected_at,
-        "title": func.json_extract(PipelineStep.output_data, "$.title"),
+        "title": func.coalesce(func.json_extract(PipelineStep.output_data, "$.title"), ContentItem.title),
         "duration": func.json_extract(PipelineStep.output_data, "$.duration"),
     }
     sort_column = sort_map.get(sort_by, PipelineStep.created_at)
@@ -181,7 +183,7 @@ async def list_downloads(
             try:
                 output = json.loads(step.output_data)
                 video_info = {
-                    "title": output.get("title", ""),
+                    "title": output.get("title") or content.title or "",
                     "duration": output.get("duration"),
                     "platform": output.get("platform", ""),
                     "file_path": output.get("file_path", ""),
@@ -190,7 +192,9 @@ async def list_downloads(
                     "height": output.get("height"),
                 }
             except (json.JSONDecodeError, TypeError):
-                pass
+                video_info = {"title": content.title or ""}
+        else:
+            video_info = {"title": content.title or ""}
 
         data.append({
             "id": step.id,
@@ -382,29 +386,37 @@ async def stream_video(
 
 
 def _get_video_path(content_id: str, db: Session) -> Optional[str]:
-    """获取视频文件路径"""
-    # 从 PipelineStep (download_video) 的输出中获取文件路径
+    """获取视频文件路径 — 从 MediaItem 或 PipelineStep 输出"""
+    # 1. 优先从 MediaItem 查找
+    media_item = db.query(MediaItem).filter(
+        MediaItem.content_id == content_id,
+        MediaItem.media_type == "video",
+        MediaItem.status == "downloaded",
+    ).first()
+    if media_item and media_item.local_path and os.path.exists(media_item.local_path):
+        return media_item.local_path
+
+    # 2. 回退: PipelineStep (localize_media) 输出
     step = (
         db.query(PipelineStep)
         .join(PipelineExecution, PipelineStep.pipeline_id == PipelineExecution.id)
         .filter(
             PipelineExecution.content_id == content_id,
-            PipelineStep.step_type == "download_video",
+            PipelineStep.step_type == "localize_media",
             PipelineStep.status == StepStatus.COMPLETED.value,
         )
         .first()
     )
-
     if step and step.output_data:
         try:
             output = json.loads(step.output_data)
             file_path = output.get("file_path")
-            if file_path:
+            if file_path and os.path.exists(file_path):
                 return file_path
         except (json.JSONDecodeError, TypeError):
             pass
 
-    # 兜底：尝试在 MEDIA_DIR/content_id/ 目录下查找视频文件
+    # 3. 兜底：尝试在 MEDIA_DIR/content_id/ 目录下查找视频文件
     content_dir = os.path.join(settings.MEDIA_DIR, content_id)
     if os.path.isdir(content_dir):
         for file in os.listdir(content_dir):
@@ -415,18 +427,32 @@ def _get_video_path(content_id: str, db: Session) -> Optional[str]:
 
 
 def _get_thumbnail_path(content_id: str, db: Session) -> Optional[str]:
-    """获取视频封面路径"""
+    """获取视频封面路径 — 从 MediaItem metadata 或 PipelineStep 输出"""
+    # 1. 优先从 MediaItem metadata 查找
+    media_item = db.query(MediaItem).filter(
+        MediaItem.content_id == content_id,
+        MediaItem.media_type == "video",
+    ).first()
+    if media_item and media_item.metadata_json:
+        try:
+            meta = json.loads(media_item.metadata_json)
+            path = meta.get("thumbnail_path")
+            if path and os.path.exists(path):
+                return path
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    # 2. 回退: PipelineStep 输出
     step = (
         db.query(PipelineStep)
         .join(PipelineExecution, PipelineStep.pipeline_id == PipelineExecution.id)
         .filter(
             PipelineExecution.content_id == content_id,
-            PipelineStep.step_type == "download_video",
+            PipelineStep.step_type == "localize_media",
             PipelineStep.status == StepStatus.COMPLETED.value,
         )
         .first()
     )
-
     if step and step.output_data:
         try:
             output = json.loads(step.output_data)
@@ -436,7 +462,7 @@ def _get_thumbnail_path(content_id: str, db: Session) -> Optional[str]:
         except (json.JSONDecodeError, TypeError):
             pass
 
-    # 兜底：在 MEDIA_DIR/content_id/ 目录下查找图片文件
+    # 3. 兜底：在 MEDIA_DIR/content_id/ 目录下查找图片文件
     content_dir = os.path.join(settings.MEDIA_DIR, content_id)
     if os.path.isdir(content_dir):
         for file in os.listdir(content_dir):

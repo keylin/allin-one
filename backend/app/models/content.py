@@ -50,19 +50,17 @@ class SourceType(str, Enum):
 
 
 class MediaType(str, Enum):
-    """媒体类型 — 描述内容本身的形态"""
-    TEXT = "text"
+    """媒体项类型"""
     IMAGE = "image"
     VIDEO = "video"
     AUDIO = "audio"
-    MIXED = "mixed"
-    DATA = "data"       # 数值型金融数据（CPI、K线、净值等）
 
 
 class ContentStatus(str, Enum):
     """内容处理状态"""
     PENDING = "pending"        # 已采集原始数据，尚未处理
     PROCESSING = "processing"  # 流水线处理中
+    READY = "ready"            # 预处理完成，无后置流水线
     ANALYZED = "analyzed"      # 分析完成
     FAILED = "failed"          # 处理失败
 
@@ -101,15 +99,12 @@ class SourceConfig(Base):
     source_type = Column(String, nullable=False)       # SourceType 枚举
     url = Column(String)                                # 订阅/采集地址
     description = Column(Text)
-    media_type = Column(String, default=MediaType.TEXT.value)  # 该源产出的媒体类型
-
     # 调度
     schedule_enabled = Column(Boolean, default=True)
     schedule_interval = Column(Integer, default=3600)   # 采集间隔 (秒)
 
     # 流水线绑定 — 解耦的关键
     pipeline_template_id = Column(String, ForeignKey("pipeline_templates.id"), nullable=True)
-    pipeline_routing = Column(Text, nullable=True)  # JSON: {"video": "tmpl_id", "text": "tmpl_id"}
 
     # 渠道特定配置 (JSON)
     config_json = Column(Text)
@@ -160,7 +155,6 @@ class ContentItem(Base):
     analysis_result = Column(Text)       # 最终内容 (LLM 分析结果 JSON)
 
     status = Column(String, default=ContentStatus.PENDING.value)
-    media_type = Column(String, default=MediaType.TEXT.value)
     language = Column(String)
 
     published_at = Column(DateTime, nullable=True)   # 发布时间
@@ -180,6 +174,7 @@ class ContentItem(Base):
     # Relationships
     source = relationship("SourceConfig", back_populates="content_items")
     pipeline_executions = relationship("PipelineExecution", back_populates="content", cascade="all, delete-orphan")
+    media_items = relationship("MediaItem", back_populates="content", cascade="all, delete-orphan")
 
     __table_args__ = (
         UniqueConstraint("source_id", "external_id", name="uq_source_external"),
@@ -205,3 +200,25 @@ class CollectionRecord(Base):
 
     # Relationships
     source = relationship("SourceConfig", back_populates="collection_records")
+
+
+class MediaItem(Base):
+    """内容关联的媒体项 — ContentItem 一对多 MediaItem"""
+    __tablename__ = "media_items"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    content_id = Column(String, ForeignKey("content_items.id"), nullable=False)
+    media_type = Column(String, nullable=False)    # MediaType 枚举值
+    original_url = Column(String, nullable=False)   # 远程 URL
+    local_path = Column(String, nullable=True)      # 下载后的本地路径
+    filename = Column(String, nullable=True)         # 本地文件名
+    status = Column(String, default="pending")       # pending / downloaded / failed
+    metadata_json = Column(Text, nullable=True)      # JSON: 类型特定元数据
+
+    created_at = Column(DateTime, default=_utcnow)
+
+    content = relationship("ContentItem", back_populates="media_items")
+
+    __table_args__ = (
+        Index("ix_media_item_content_id", "content_id"),
+    )

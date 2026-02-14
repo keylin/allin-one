@@ -2,7 +2,8 @@
 
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from typing import Optional
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -93,3 +94,63 @@ async def test_llm_connection(body: LLMTestRequest, db: Session = Depends(get_db
         return {"code": 0, "data": {"model": model_used}, "message": "连接成功"}
     except Exception as e:
         return error_response(400, f"连接失败: {str(e)}")
+
+
+class ClearRecordsRequest(BaseModel):
+    before_days: Optional[int] = None  # 清理 N 天前的记录；不传则清理全部已终态记录
+
+
+@router.post("/clear-executions")
+async def clear_executions(body: ClearRecordsRequest = ClearRecordsRequest(), db: Session = Depends(get_db)):
+    """手动清理执行记录 — 删除已终态的 PipelineExecution 及其 Steps"""
+    from app.models.pipeline import PipelineExecution, PipelineStep, PipelineStatus
+
+    terminal_statuses = [
+        PipelineStatus.COMPLETED.value,
+        PipelineStatus.FAILED.value,
+        PipelineStatus.CANCELLED.value,
+    ]
+
+    query = db.query(PipelineExecution).filter(
+        PipelineExecution.status.in_(terminal_statuses)
+    )
+    if body.before_days is not None and body.before_days > 0:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=body.before_days)
+        query = query.filter(PipelineExecution.created_at < cutoff)
+
+    execution_ids = [eid for (eid,) in query.with_entities(PipelineExecution.id).all()]
+    if not execution_ids:
+        return {"code": 0, "data": {"deleted": 0}, "message": "没有需要清理的执行记录"}
+
+    # 先删 steps，再删 executions
+    db.query(PipelineStep).filter(
+        PipelineStep.pipeline_id.in_(execution_ids)
+    ).delete(synchronize_session=False)
+    deleted = db.query(PipelineExecution).filter(
+        PipelineExecution.id.in_(execution_ids)
+    ).delete(synchronize_session=False)
+    db.commit()
+
+    logger.info(f"Manual cleanup: deleted {deleted} executions")
+    return {"code": 0, "data": {"deleted": deleted}, "message": f"已清理 {deleted} 条执行记录"}
+
+
+@router.post("/clear-collections")
+async def clear_collections(body: ClearRecordsRequest = ClearRecordsRequest(), db: Session = Depends(get_db)):
+    """手动清理采集记录 — 删除已终态的 CollectionRecord"""
+    from app.models.content import CollectionRecord
+
+    terminal_statuses = ["completed", "failed"]
+
+    query = db.query(CollectionRecord).filter(
+        CollectionRecord.status.in_(terminal_statuses)
+    )
+    if body.before_days is not None and body.before_days > 0:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=body.before_days)
+        query = query.filter(CollectionRecord.started_at < cutoff)
+
+    deleted = query.delete(synchronize_session=False)
+    db.commit()
+
+    logger.info(f"Manual cleanup: deleted {deleted} collection records")
+    return {"code": 0, "data": {"deleted": deleted}, "message": f"已清理 {deleted} 条采集记录"}

@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { listSources, createSource as apiCreate, updateSource as apiUpdate, deleteSource as apiDelete, collectSource as apiCollect } from '@/api/sources'
+import { listSources, createSource as apiCreate, updateSource as apiUpdate, deleteSource as apiDelete, batchDeleteSources as apiBatchDelete, collectSource as apiCollect, collectAllSources as apiCollectAll } from '@/api/sources'
 
 export const useSourcesStore = defineStore('sources', () => {
   const sources = ref([])
@@ -44,9 +44,21 @@ export const useSourcesStore = defineStore('sources', () => {
     return res
   }
 
+  async function batchDelete(ids, cascade = false) {
+    const res = await apiBatchDelete(ids, cascade)
+    if (res.code === 0) await fetchSources()
+    return res
+  }
+
   async function collectSource(id) {
     return await apiCollect(id)
   }
 
-  return { sources, total, loading, currentPage, pageSize, fetchSources, createSource, updateSource, deleteSource, collectSource }
+  async function collectAll() {
+    const res = await apiCollectAll()
+    if (res.code === 0) await fetchSources()
+    return res
+  }
+
+  return { sources, total, loading, currentPage, pageSize, fetchSources, createSource, updateSource, deleteSource, batchDelete, collectSource, collectAll }
 })

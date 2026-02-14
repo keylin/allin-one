@@ -17,15 +17,6 @@ const historyPage = ref(1)
 const historyPageSize = 10
 const historyTotal = ref(0)
 
-const mediaTypeLabels = {
-  text: '文本',
-  image: '图片',
-  video: '视频',
-  audio: '音频',
-  mixed: '混合',
-  data: '数据',
-}
-
 const typeLabels = {
   'rss.hub': 'RSSHub',
   'rss.standard': 'RSS/Atom',
@@ -135,12 +126,6 @@ function formatInterval(seconds) {
         <div class="bg-slate-50 rounded-xl p-4">
           <span class="text-xs text-slate-400 block mb-1">流水线模板</span>
           <span class="text-sm text-slate-700 font-medium">{{ source.pipeline_template_name || '未绑定' }}</span>
-          <div v-if="source.pipeline_routing_names && Object.keys(source.pipeline_routing_names).length" class="mt-2 space-y-1">
-            <div v-for="(name, mt) in source.pipeline_routing_names" :key="mt" class="flex items-center gap-2">
-              <span class="inline-flex px-1.5 py-0.5 text-[10px] font-medium rounded bg-indigo-50 text-indigo-600">{{ mediaTypeLabels[mt] || mt }}</span>
-              <span class="text-xs text-slate-500">{{ name }}</span>
-            </div>
-          </div>
         </div>
         <div class="bg-slate-50 rounded-xl p-4">
           <span class="text-xs text-slate-400 block mb-1">最近采集</span>

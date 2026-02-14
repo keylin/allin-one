@@ -6,6 +6,7 @@ import {
   toggleFavorite as apiFavorite,
   updateNote as apiNote,
   batchDeleteContent as apiBatchDelete,
+  deleteAllContent as apiDeleteAll,
 } from '@/api/content'
 
 export const useContentStore = defineStore('content', () => {
@@ -51,5 +52,11 @@ export const useContentStore = defineStore('content', () => {
     return res
   }
 
-  return { items, total, loading, currentPage, pageSize, fetchContent, toggleFavorite, updateNote, batchDelete }
+  async function deleteAll() {
+    const res = await apiDeleteAll()
+    if (res.code === 0) await fetchContent()
+    return res
+  }
+
+  return { items, total, loading, currentPage, pageSize, fetchContent, toggleFavorite, updateNote, batchDelete, deleteAll }
 })

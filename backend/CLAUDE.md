@@ -27,7 +27,9 @@ Huey worker 等非 FastAPI 入口必须在使用 ORM 前执行 `import app.model
 - 迁移: 必须通过 `alembic revision --autogenerate`，禁止手写 SQL
 - SQLite WAL 模式在连接时启用（见 `app/core/database.py`）
 - 外键通过 `PRAGMA foreign_keys=ON` 强制执行
+- `busy_timeout=30000`，并提供 `commit_with_retry()` 处理 "database is locked" 错误
 - LLM 配置: 存储在 `system_settings` 表（非环境变量），通过 `get_llm_config()` 读取
+- 数据目录: `data/` 在项目根目录（非 backend/data/），backend 和 worker 共享
 
 ## API 响应格式
 
@@ -80,6 +82,15 @@ class SourceResponse(BaseModel):     # 响应模型
 ## 枚举定义
 
 枚举值以代码为准，不要凭记忆：
-- `app/models/content.py` — SourceType, MediaType, ContentStatus
-- `app/models/pipeline.py` — StepType, PipelineStatus, StepStatus, TriggerSource
+- `app/models/content.py` — SourceType, MediaType (仅用于 MediaItem: image/video/audio), ContentStatus (含 ready)
+- `app/models/pipeline.py` — StepType (含 localize_media), PipelineStatus, StepStatus, TriggerSource
 - `app/models/prompt_template.py` — TemplateType
+
+注意: ContentItem 和 SourceConfig 不再有 `media_type` 字段。媒体类型通过 `MediaItem` 一对多关联管理。
+
+## 日志配置
+
+`app/core/logging_config.py` 统一配置结构化日志:
+- 调用 `setup_logging("backend")` 或 `setup_logging("worker")` 初始化
+- 文件日志写入 `data/logs/` (WARNING+)，错误汇总到 `error.log` (ERROR+)
+- 控制台同步输出 INFO+ 级别

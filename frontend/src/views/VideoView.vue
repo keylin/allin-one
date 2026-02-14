@@ -290,7 +290,7 @@ onMounted(async () => {
   fetchDownloads()
   try {
     const res = await listSources({ page_size: 100 })
-    if (res.code === 0) sources.value = res.data.filter(s => s.media_type === 'video')
+    if (res.code === 0) sources.value = res.data
   } catch { /* ignore */ }
   document.addEventListener('keydown', onKeydown)
 })

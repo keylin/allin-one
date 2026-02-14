@@ -47,7 +47,7 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./backend/data:/app/data
+      - ./data:/app/data
       - ./backend/.env:/app/.env
       - /var/run/docker.sock:/var/run/docker.sock
       - ./docker-compose.yml:/project/docker-compose.yml:ro
@@ -87,7 +87,7 @@ services:
     restart: unless-stopped
     command: ["huey_consumer", "app.tasks.huey_instance.huey", "-w", "4", "-k", "thread"]
     volumes:
-      - ./backend/data:/app/data
+      - ./data:/app/data
       - ./backend/.env:/app/.env:ro
     environment:
       TZ: Asia/Shanghai

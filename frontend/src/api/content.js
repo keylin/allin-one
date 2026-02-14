@@ -28,6 +28,10 @@ export function batchDeleteContent(ids) {
   return api.post('/content/batch-delete', { ids })
 }
 
+export function deleteAllContent() {
+  return api.post('/content/delete-all')
+}
+
 export function getContentStats() {
   return api.get('/content/stats')
 }

@@ -9,16 +9,12 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
+from app.core.logging_config import setup_logging
 from app.core.auth import APIKeyMiddleware
 from app.core.database import init_db
 from app.api.routes import dashboard, sources, content, pipelines, templates, video, system_settings, prompt_templates, finance, credentials
 
-# 配置根 logger，使 app.* 的日志正确输出到控制台
-logging.basicConfig(
-    level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),
-    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+setup_logging("backend")
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +104,26 @@ app.include_router(system_settings.router, prefix="/api/settings", tags=["settin
 app.include_router(prompt_templates.router, prefix="/api/prompt-templates", tags=["prompt-templates"])
 app.include_router(finance.router, prefix="/api/finance", tags=["finance"])
 app.include_router(credentials.router, prefix="/api/credentials", tags=["credentials"])
+
+# ---- 通用媒体文件服务 ----
+
+@app.get("/api/media/{content_id}/{file_path:path}", tags=["media"])
+async def serve_media(content_id: str, file_path: str):
+    """从 MEDIA_DIR/{content_id}/ 读取媒体文件"""
+    import mimetypes
+    from fastapi.responses import FileResponse
+
+    full_path = os.path.join(settings.MEDIA_DIR, content_id, file_path)
+    # 安全检查: 不能跳出 MEDIA_DIR
+    real_path = os.path.realpath(full_path)
+    real_media_dir = os.path.realpath(settings.MEDIA_DIR)
+    if not real_path.startswith(real_media_dir):
+        raise HTTPException(status_code=403, detail="Access denied")
+    if not os.path.isfile(real_path):
+        raise HTTPException(status_code=404, detail="File not found")
+
+    mime_type, _ = mimetypes.guess_type(real_path)
+    return FileResponse(real_path, media_type=mime_type or "application/octet-stream")
 
 # Static files (Vue frontend) — 必须最后注册，catch-all 会拦截未匹配路由
 if os.path.isdir("static"):

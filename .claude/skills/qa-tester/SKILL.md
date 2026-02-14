@@ -141,6 +141,21 @@ allowed-tools: Read, Grep, Glob, Bash
 (已测试和未测试的功能点)
 ```
 
+## 异常日志文件
+
+测试过程中可直接读取日志文件排查异常，无需依赖容器 stdout:
+
+| 文件 | 写入者 | 级别 | 用途 |
+|------|--------|------|------|
+| `data/logs/backend.log` | FastAPI 进程 | WARNING+ | API 服务的警告与异常 |
+| `data/logs/worker.log` | Huey Worker 进程 | WARNING+ | 任务执行的警告与异常 |
+| `data/logs/error.log` | 两个进程共写 | ERROR+ | 所有严重错误汇总，快速定位 |
+
+**排查步骤:**
+1. 先看 `data/logs/error.log` 快速定位 ERROR 级别问题
+2. 根据来源查看 `backend.log` 或 `worker.log` 获取 WARNING 级别上下文
+3. 日志格式: `时间 级别 [模块名] 消息`，含完整 traceback
+
 ## 测试策略优先级
 
 1. **先看接口契约**: 前后端是否对得上

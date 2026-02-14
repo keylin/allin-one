@@ -29,7 +29,7 @@ class StepType(str, Enum):
     数据抓取是定时器的职责, 不是流水线步骤。
     """
     ENRICH_CONTENT = "enrich_content"          # 抓取全文 (L1/L2/L3)
-    DOWNLOAD_VIDEO = "download_video"          # 下载视频 (bilibili/youtube)
+    LOCALIZE_MEDIA = "localize_media"          # 媒体本地化 (图片/视频/音频)
     EXTRACT_AUDIO = "extract_audio"            # 音频提取 (待实现)
     TRANSCRIBE_CONTENT = "transcribe_content"  # 语音转文字
     TRANSLATE_CONTENT = "translate_content"     # 文章翻译

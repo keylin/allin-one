@@ -65,7 +65,6 @@ function selectPreset(preset) {
     name: preset.label,
     schedule_interval: preset.schedule_interval || 3600,
     user_params: preset.user_params || [],
-    media_type: 'data',
   })
 }
 
@@ -84,7 +83,6 @@ function selectCustom() {
     name: '',
     schedule_interval: 3600,
     user_params: [],
-    media_type: 'data',
     isCustom: true,
   })
 }

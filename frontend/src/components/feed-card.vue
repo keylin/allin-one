@@ -12,6 +12,7 @@ const emit = defineEmits(['click', 'favorite'])
 const statusConfig = {
   pending: { label: '待处理', class: 'bg-slate-100 text-slate-500' },
   processing: { label: '处理中', class: 'bg-indigo-50 text-indigo-600' },
+  ready: { label: '已就绪', class: 'bg-sky-50 text-sky-600' },
   analyzed: { label: '已分析', class: 'bg-emerald-50 text-emerald-600' },
   failed: { label: '失败', class: 'bg-rose-50 text-rose-600' },
 }
@@ -40,8 +41,17 @@ const relTime = computed(() => {
 const summaryText = computed(() => props.item.summary_text || '')
 const tags = computed(() => props.item.tags?.slice(0, 3) || [])
 const currentStatus = computed(() => statusConfig[props.item.status] || statusConfig.pending)
-const mediaIcon = computed(() => mediaIcons[props.item.media_type] || mediaIcons.text)
-const mediaColor = computed(() => mediaColors[props.item.media_type] || mediaColors.text)
+
+// 从 media_items 派生媒体类型
+const derivedMediaType = computed(() => {
+  const items = props.item.media_items || []
+  if (items.some(m => m.media_type === 'video')) return 'video'
+  if (items.some(m => m.media_type === 'audio')) return 'audio'
+  if (items.some(m => m.media_type === 'image')) return 'image'
+  return 'text'
+})
+const mediaIcon = computed(() => mediaIcons[derivedMediaType.value] || mediaIcons.text)
+const mediaColor = computed(() => mediaColors[derivedMediaType.value] || mediaColors.text)
 
 const sentimentColor = computed(() => {
   const s = props.item.sentiment
@@ -51,7 +61,7 @@ const sentimentColor = computed(() => {
   return 'bg-slate-300'
 })
 
-const showThumbnail = computed(() => props.item.media_type === 'video' && props.item.has_thumbnail)
+const showThumbnail = computed(() => props.item.has_thumbnail || (derivedMediaType.value === 'video' && props.item.has_thumbnail))
 const thumbnailUrl = computed(() => showThumbnail.value ? `/api/video/${props.item.id}/thumbnail` : null)
 
 function onThumbError(e) {

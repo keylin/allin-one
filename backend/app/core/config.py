@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     DATA_DIR: str = "data"
     MEDIA_DIR: str = "data/media"
     REPORTS_DIR: str = "data/reports"
+    LOG_DIR: str = "data/logs"
 
     class Config:
         env_file = ".env"

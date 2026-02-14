@@ -1,6 +1,6 @@
 # Allin-One 产品方案 (PRD)
 
-> 版本: v1.0 | 更新日期: 2026-02-12
+> 版本: v1.1 | 更新日期: 2026-02-14
 
 ---
 
@@ -30,7 +30,7 @@
 信息流是用户的主要内容消费界面，类似 RSS 阅读器但增强了 AI 分析能力。
 
 **导航与筛选**
-- 顶部导航栏按数据源类型和媒体类型筛选 (全部 / 文章 / 视频 / 图片)
+- 顶部导航栏按数据源筛选，支持「仅看视频」快捷开关
 - 支持按数据源分组浏览
 - 支持时间排序 (最新 / 最早)
 
@@ -56,6 +56,8 @@
 - **删除**: 提供两种删除模式
   - 关联内容删除: 删除数据源及其所有采集内容
   - 只删除数据源: 保留已采集内容，仅移除订阅配置
+- **批量操作**: 支持多选后批量删除数据源（含级联确认）
+- **一键采集**: 批量触发所有启用的数据源立即采集
 - **批量导入/导出**: 支持 OPML 格式批量导入导出 RSS 订阅
 
 #### 2.2.1 数据源类型矩阵
@@ -74,7 +76,7 @@
 | 记录 | `user_note` | 日常笔记 | 用户手动输入 |
 | 记录 | `user_message` | 用户消息 | 系统通知 |
 
-**关键设计**: 没有 `video_bilibili` / `video_youtube` 等类型。B站/YouTube 视频通过 `rsshub` 数据源发现新内容，再由流水线中的 `download_video` 步骤处理。
+**关键设计**: 没有 `video_bilibili` / `video_youtube` 等类型。B站/YouTube 视频通过 `rsshub` 数据源发现新内容，再由流水线预处理阶段的 `localize_media` 步骤自动处理。
 
 **组合示例**:
 | 场景 | 数据源 | 绑定的流水线模板 |
@@ -88,10 +90,11 @@
 ### 2.3 内容管理 (Content)
 
 以表格形式管理所有采集到的内容条目，提供:
-- **筛选**: 按数据源、状态 (pending/analyzed/failed)、媒体类型、时间范围
+- **筛选**: 按数据源、状态 (pending/ready/analyzed/failed)、是否含视频、时间范围、收藏、未读
 - **排序**: 按发布时间、采集时间、标题
 - **去重**: 基于 `external_id` (URL) 的自动去重，支持手动去重
 - **批量操作**: 选中多条内容执行批量删除或批量 AI 分析
+- **清空全部**: 一键删除所有内容（级联删除关联流水线和媒体）
 
 ### 2.4 仪表盘 (Dashboard)
 
@@ -117,20 +120,25 @@
 
 ### 2.6 视频管理 (Video)
 
-- **视频下载**: 通过 yt-dlp 下载 Bilibili / YouTube 视频到本地
+- **视频下载**: 通过 yt-dlp 下载 Bilibili / YouTube 视频到本地，由 `localize_media` 步骤自动处理
 - **视频播放**: 内嵌 Artplayer 播放器，支持本地视频播放
 - **元数据展示**: 视频标题、作者、时长、清晰度
 - **视频封面**: 下载时自动获取封面图（yt-dlp 优先，ffmpeg 回退）
+- **媒体查找**: 优先从 MediaItem 查找视频/封面路径，回退到 PipelineStep 输出
 
-### 2.7 账号管理 (Accounts)
+### 2.7 凭证管理 (Credentials)
 
 管理需要登录凭证的平台账号:
-- B站账号 (Cookie / 登录态)
+- B站账号 (Cookie / 扫码登录)
+- RSSHub 自部署实例同步
 - 其他需要认证的平台账号
+- 凭证值展示时掩码处理，更新时空值不覆盖已有密钥
 
 ### 2.8 系统配置 (Settings)
 
-- **大模型 API**: API Key、Base URL、模型名称
+- **大模型 API**: API Key、Base URL、模型名称，支持连接测试
+- **数据保留**: 默认保留天数、执行记录/采集记录保留策略 (天数+数量上限)
+- **手动清理**: 手动清理已终态的执行记录和采集记录
 - **通知配置**: 邮件、Webhook
 
 ---
@@ -157,11 +165,12 @@
 - **实现**: 调用 LLM 进行翻译，保留原文格式
 - **触发条件**: 源内容语言 ≠ 目标语言时自动插入此步骤
 
-### 3.3 下载视频 (download_video)
+### 3.3 媒体本地化 (localize_media)
 
-- **支持平台**: Bilibili、YouTube
-- **实现**: yt-dlp 命令行调用
-- **配置项**: 清晰度偏好、是否下载字幕、存储路径
+- **功能**: 检测内容中的图片/视频/音频，下载到本地，创建 MediaItem 记录，改写URL为本地引用
+- **视频**: 通过 yt-dlp 下载 Bilibili/YouTube 视频，同时获取封面和字幕
+- **图片/音频**: 直接 HTTP 下载
+- **输出**: MediaItem 记录 (含 local_path、metadata_json)，步骤 output_data 含 has_video 标记
 
 ### 3.4 音频提取 (transcribe_content)
 
@@ -202,6 +211,8 @@
 | 数据抓取 | 退避策略 | 连续失败时指数退避 (15min → 30min → 1h → 2h) |
 | 信息流抓取 | 批量轮询 | 每轮随机选取一批源进行抓取，避免突发流量 |
 | 周期任务 | 定时执行 | 日报 (每天 22:00)、周报 (每周日)、月报 (每月 1 日) |
+| 内容清理 | 每天 03:00 | 按数据源 retention_days 清理过期内容 |
+| 记录清理 | 每天 03:30 | 按保留天数/数量上限清理执行记录和采集记录 |
 
 ### 4.2 流水线层 (Huey)
 
@@ -223,7 +234,20 @@
 | 发布时间 (`published_at`) | 原始内容的发布时间 |
 | 采集时间 (`collected_at`) | 系统采集该内容的时间 |
 
-### 5.2 分析结果结构 (LLM 输出)
+ContentItem 不再有 `media_type` 字段。媒体通过 `MediaItem` 一对多关联管理。
+
+### 5.2 媒体项 (MediaItem)
+
+| 字段 | 说明 |
+|------|------|
+| `content_id` | 关联的 ContentItem |
+| `media_type` | 媒体类型: image / video / audio |
+| `original_url` | 远程 URL |
+| `local_path` | 下载后的本地路径 |
+| `status` | pending / downloaded / failed |
+| `metadata_json` | 类型特定元数据 (如 thumbnail_path、duration 等) |
+
+### 5.3 分析结果结构 (LLM 输出)
 
 **JSON 格式 (标准结构化输出)**:
 ```json
@@ -253,7 +277,7 @@
 }
 ```
 
-### 5.3 用户记录 (User Records)
+### 5.4 用户记录 (User Records)
 
 - **日常笔记**: 用户可对内容添加个人笔记
 - **用户消息**: 系统通知与推送记录
@@ -262,13 +286,16 @@
 
 ## 6. 文件存储
 
+所有运行时数据存放在项目根目录 `data/`（非 backend/data/），backend 和 worker 共享同一挂载。
+
 | 类型 | 存储路径 | 说明 |
 |------|----------|------|
-| 视频文件 | `data/media/videos/` | yt-dlp 下载的视频 |
-| 音频文件 | `data/media/audio/` | 提取的音频 (规划中) |
-| 其他文件 | `data/media/files/` | 用户上传的文档等 |
+| 媒体文件 | `data/media/{content_id}/` | 按内容 ID 分目录存放视频/图片/音频 |
 | 分析报告 | `data/reports/` | LLM 生成的分析报告 |
 | 数据库 | `data/db/allin.db` | SQLite 主数据库 |
+| 任务队列 | `data/db/huey.db` | Huey 任务队列数据库 |
+| 日志文件 | `data/logs/` | backend.log, worker.log, error.log |
+| 数据备份 | `data/backups/` | 数据库自动/手动备份 |
 
 ---
 
@@ -295,10 +322,17 @@
 - [x] 信息流阅读界面
 - [x] Docker 一键部署
 
-### v1.1 — 视频能力增强
+### v1.1 — 视频能力 + 媒体管理
 - [x] Bilibili / YouTube 视频下载
 - [x] 视频字幕提取与分析
 - [x] 内嵌视频播放器
+- [x] MediaItem 独立媒体管理 (localize_media 取代 download_video)
+- [x] 自动预处理: enrich_content + localize_media 由 Orchestrator 注入
+- [x] 凭证管理 (B站扫码、RSSHub 同步)
+- [x] 金融数据源 (AkShare 集成)
+- [x] 数据保留策略 (执行记录/采集记录清理)
+- [x] 结构化日志系统 (backend.log / worker.log / error.log)
+- [x] 批量操作 (源批量删除、一键采集、内容清空)
 
 ### v1.2 — 智能调度与推送
 - [ ] 智能抓取频率调整

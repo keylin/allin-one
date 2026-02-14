@@ -7,14 +7,15 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, noload
 from sqlalchemy import func
 
 from app.core.database import get_db
-from app.models.content import SourceConfig, ContentItem
+from app.models.content import SourceConfig, ContentItem, MediaItem
 from app.models.pipeline import PipelineExecution, PipelineStep
 from app.schemas import (
-    ContentResponse, ContentDetailResponse, ContentNoteUpdate, ContentBatchDelete, error_response,
+    ContentResponse, ContentDetailResponse, ContentNoteUpdate, ContentBatchDelete,
+    MediaItemSummary, error_response,
 )
 
 logger = logging.getLogger(__name__)
@@ -59,12 +60,34 @@ def _extract_summary_fields(item: ContentItem) -> dict:
     return result
 
 
+def _build_media_summaries(media_items) -> list[dict]:
+    """构建媒体项轻量摘要列表"""
+    summaries = []
+    for mi in media_items:
+        thumbnail = None
+        if mi.metadata_json:
+            try:
+                meta = json.loads(mi.metadata_json)
+                thumbnail = meta.get("thumbnail_path")
+            except (json.JSONDecodeError, TypeError):
+                pass
+        summaries.append(MediaItemSummary(
+            id=mi.id,
+            media_type=mi.media_type,
+            local_path=mi.local_path,
+            thumbnail_path=thumbnail,
+            status=mi.status,
+        ).model_dump())
+    return summaries
+
+
 def _content_to_response(item: ContentItem, db: Session) -> dict:
     """将 ORM 对象转为响应 dict，解析 source_name 和摘要字段"""
-    data = ContentResponse.model_validate(item).model_dump()
+    data = ContentResponse.model_validate(item).model_dump(exclude={"media_items"})
     source = db.get(SourceConfig, item.source_id)
     data["source_name"] = source.name if source else None
     data.update(_extract_summary_fields(item))
+    data["media_items"] = _build_media_summaries(item.media_items)
     return data
 
 
@@ -86,7 +109,7 @@ async def list_content(
     page_size: int = Query(20, ge=1, le=100),
     source_id: str | None = Query(None),
     status: str | None = Query(None),
-    media_type: str | None = Query(None),
+    has_video: bool | None = Query(None, description="筛选包含视频的内容"),
     q: str | None = Query(None, description="搜索标题"),
     is_favorited: bool | None = Query(None),
     is_unread: bool | None = Query(None, description="未读过滤: true=未读, false=已读"),
@@ -107,8 +130,14 @@ async def list_content(
             query = query.filter(ContentItem.source_id.in_(ids))
     if status:
         query = query.filter(ContentItem.status == status)
-    if media_type:
-        query = query.filter(ContentItem.media_type == media_type)
+    if has_video:
+        from sqlalchemy import exists as sa_exists
+        query = query.filter(
+            sa_exists().where(
+                (MediaItem.content_id == ContentItem.id) &
+                (MediaItem.media_type == "video")
+            )
+        )
     if q:
         pattern = f"%{q}%"
         query = query.filter(ContentItem.title.ilike(pattern))
@@ -140,7 +169,8 @@ async def list_content(
 
     total = query.count()
     items = (
-        query.order_by(order_expr)
+        query.options(noload(ContentItem.media_items))
+        .order_by(order_expr)
         .offset((page - 1) * page_size)
         .limit(page_size)
         .all()
@@ -155,30 +185,27 @@ async def list_content(
         ).all()
         source_map = {s.id: s.name for s in sources}
 
-    # 批量查询 has_thumbnail：video 类型且有已完成的 download_video 步骤
-    video_item_ids = [item.id for item in items if item.media_type == "video"]
-    thumbnail_set = set()
-    if video_item_ids:
-        thumb_rows = (
-            db.query(PipelineExecution.content_id)
-            .join(PipelineStep, PipelineStep.pipeline_id == PipelineExecution.id)
-            .filter(
-                PipelineExecution.content_id.in_(video_item_ids),
-                PipelineStep.step_type == "download_video",
-                PipelineStep.status == "completed",
-            )
-            .distinct()
-            .all()
-        )
-        thumbnail_set = {row[0] for row in thumb_rows}
+    # 批量查询 media_items
+    item_ids = [item.id for item in items]
+    media_items_map: dict[str, list] = {iid: [] for iid in item_ids}
+    if item_ids:
+        all_media = db.query(MediaItem).filter(MediaItem.content_id.in_(item_ids)).all()
+        for mi in all_media:
+            media_items_map[mi.content_id].append(mi)
 
     # 组装响应
     result_list = []
     for item in items:
-        data = ContentResponse.model_validate(item).model_dump()
+        data = ContentResponse.model_validate(item).model_dump(exclude={"media_items"})
         data["source_name"] = source_map.get(item.source_id)
         data.update(_extract_summary_fields(item))
-        data["has_thumbnail"] = item.id in thumbnail_set
+        mi_list = media_items_map.get(item.id, [])
+        data["media_items"] = _build_media_summaries(mi_list)
+        # has_thumbnail: 存在已下载的 video MediaItem 且有 thumbnail
+        data["has_thumbnail"] = any(
+            mi.media_type == "video" and mi.status == "downloaded"
+            for mi in mi_list
+        )
         result_list.append(data)
 
     return {
@@ -189,6 +216,35 @@ async def list_content(
         "page_size": page_size,
         "message": "ok",
     }
+
+
+@router.post("/delete-all")
+async def delete_all_content(db: Session = Depends(get_db)):
+    """删除全部内容（级联删除关联流水线和媒体）"""
+    total = db.query(func.count(ContentItem.id)).scalar()
+    if total == 0:
+        return {"code": 0, "data": {"deleted": 0}, "message": "没有内容可删除"}
+
+    # 级联删除关联 pipeline executions 及其 steps
+    execution_ids = [
+        eid for (eid,) in db.query(PipelineExecution.id)
+        .filter(PipelineExecution.content_id.isnot(None)).all()
+    ]
+    if execution_ids:
+        db.query(PipelineStep).filter(
+            PipelineStep.pipeline_id.in_(execution_ids)
+        ).delete(synchronize_session=False)
+        db.query(PipelineExecution).filter(
+            PipelineExecution.id.in_(execution_ids)
+        ).delete(synchronize_session=False)
+
+    # 删除所有媒体和内容
+    db.query(MediaItem).delete(synchronize_session=False)
+    deleted = db.query(ContentItem).delete(synchronize_session=False)
+    db.commit()
+
+    logger.info(f"Deleted all content: {deleted} items")
+    return {"code": 0, "data": {"deleted": deleted}, "message": f"已删除全部 {deleted} 条内容"}
 
 
 @router.post("/batch-delete")
@@ -208,6 +264,11 @@ async def batch_delete(body: ContentBatchDelete, db: Session = Depends(get_db)):
         db.query(PipelineExecution).filter(
             PipelineExecution.id.in_(execution_ids)
         ).delete(synchronize_session=False)
+
+    # 删除关联的 MediaItem（bulk delete 不触发 ORM cascade）
+    db.query(MediaItem).filter(
+        MediaItem.content_id.in_(body.ids)
+    ).delete(synchronize_session=False)
 
     deleted = (
         db.query(ContentItem)
@@ -263,6 +324,7 @@ async def content_stats(db: Session = Depends(get_db)):
             "today": today_count,
             "pending": status_counts.get("pending", 0),
             "processing": status_counts.get("processing", 0),
+            "ready": status_counts.get("ready", 0),
             "analyzed": status_counts.get("analyzed", 0),
             "failed": status_counts.get("failed", 0),
         },
@@ -275,13 +337,20 @@ async def content_stats(db: Session = Depends(get_db)):
 @router.get("/{content_id}")
 async def get_content(content_id: str, db: Session = Depends(get_db)):
     """获取内容详情（含三层内容）"""
-    item = db.get(ContentItem, content_id)
+    item = db.query(ContentItem).options(
+        noload(ContentItem.media_items)
+    ).filter(ContentItem.id == content_id).first()
+
     if not item:
         return error_response(404, "Content not found")
 
-    data = ContentDetailResponse.model_validate(item).model_dump()
+    # 手动查询 media_items，避免 lazy loading
+    media_items = db.query(MediaItem).filter(MediaItem.content_id == content_id).all()
+
+    data = ContentDetailResponse.model_validate(item).model_dump(exclude={"media_items"})
     source = db.get(SourceConfig, item.source_id)
     data["source_name"] = source.name if source else None
+    data["media_items"] = _build_media_summaries(media_items)
     return {"code": 0, "data": data, "message": "ok"}
 
 

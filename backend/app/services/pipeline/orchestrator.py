@@ -5,10 +5,9 @@
     → 对每条调用 Orchestrator.trigger_for_content(content) → 创建 PipelineExecution
 
 流水线分两阶段:
-  1. 预处理 (自动): 按 media_type 确定性注入, 让内容变得"可分析"
-     - video/audio → download_video
-     - text (摘要) → enrich_content
-     - text (全文) → 直接填充 processed_content, 无需步骤
+  1. 预处理 (自动): 基于内容检测自动执行，让内容变得"可分析"
+     - 文本量不足 → enrich_content (抓取全文)
+     - 始终 → localize_media (媒体检测+下载+URL改写)
   2. 后置处理 (用户模板): analyze / translate / publish 等, 由用户配置
 """
 
@@ -19,7 +18,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from app.models.content import SourceConfig, ContentItem, MediaType, ContentStatus
+from app.models.content import SourceConfig, ContentItem, ContentStatus
 from app.models.pipeline import (
     PipelineTemplate, PipelineExecution, PipelineStep,
     PipelineStatus, TriggerSource,
@@ -28,7 +27,7 @@ from app.models.pipeline import (
 logger = logging.getLogger(__name__)
 
 # 预处理步骤类型 — 由系统自动注入, 从用户模板中去重
-PREPROCESSING_STEP_TYPES = {"enrich_content", "download_video"}
+PREPROCESSING_STEP_TYPES = {"enrich_content", "localize_media"}
 
 # 全文判定阈值 (纯文本字符数)
 _FULL_TEXT_THRESHOLD = 500
@@ -49,25 +48,6 @@ class PipelineOrchestrator:
         if template and template.is_active:
             return template
         return None
-
-    def get_template_for_content(self, source: SourceConfig, content: ContentItem) -> PipelineTemplate | None:
-        """按内容的 media_type 路由到对应模板，无匹配则回退到源默认模板"""
-        if source.pipeline_routing:
-            try:
-                routing = json.loads(source.pipeline_routing)
-                if isinstance(routing, dict) and content.media_type in routing:
-                    template_id = routing[content.media_type]
-                    template = self.db.query(PipelineTemplate).get(template_id)
-                    if template and template.is_active:
-                        logger.info(
-                            f"Routed content {content.id} (media_type={content.media_type}) "
-                            f"to template '{template.name}'"
-                        )
-                        return template
-                    logger.warning(f"Routed template {template_id} not found/inactive, falling back")
-            except (json.JSONDecodeError, TypeError):
-                logger.warning(f"Invalid pipeline_routing for source {source.id}")
-        return self.get_template_for_source(source)
 
     # ---- 自动预处理 ----
 
@@ -104,29 +84,27 @@ class PipelineOrchestrator:
         return len(cls._strip_html(text)) >= _FULL_TEXT_THRESHOLD
 
     def _compute_preprocessing_steps(self, content: ContentItem) -> list[dict]:
-        """按 media_type 计算自动预处理步骤"""
-        mt = content.media_type
+        """基于内容检测计算自动预处理步骤"""
+        steps = []
 
-        if mt in (MediaType.VIDEO.value, MediaType.AUDIO.value):
-            return [
-                {"step_type": "download_video", "is_critical": True, "config": {"quality": "1080p"}},
-            ]
+        # 1. 全文检测: raw_data 文本量不足 → 需要抓取全文
+        if not self._has_full_text(content.raw_data):
+            steps.append({"step_type": "enrich_content", "is_critical": False,
+                          "config": {"scrape_level": "auto"}})
+        else:
+            # 已有全文 → 直接填充 processed_content
+            if not content.processed_content:
+                content.processed_content = self._extract_raw_text(content.raw_data)
+                self.db.flush()
+                logger.info(f"Full text populated from raw_data for content {content.id}")
 
-        if mt == MediaType.TEXT.value:
-            if self._has_full_text(content.raw_data):
-                # RSS 已输出全文 — 直接填充 processed_content, 不需要步骤
-                if not content.processed_content:
-                    raw_text = self._extract_raw_text(content.raw_data)
-                    content.processed_content = raw_text
-                    self.db.flush()
-                    logger.info(f"Full text populated from raw_data for content {content.id}")
-                return []
-            return [
-                {"step_type": "enrich_content", "is_critical": True, "config": {"scrape_level": "auto"}},
-            ]
+        # 2. 媒体本地化: 始终添加（步骤内部检测是否有媒体需处理）
+        #    纯数据源 (api.akshare) 跳过
+        source = self.db.query(SourceConfig).get(content.source_id)
+        if source and source.source_type != "api.akshare":
+            steps.append({"step_type": "localize_media", "is_critical": False, "config": {}})
 
-        # image, data 等 — 无需预处理
-        return []
+        return steps
 
     @staticmethod
     def _build_steps(pre_steps: list[dict], template_steps: list[dict]) -> list[dict]:
@@ -144,8 +122,8 @@ class PipelineOrchestrator:
     ) -> PipelineExecution | None:
         """为一条已存在的 ContentItem 创建并启动流水线
 
-        自动注入预处理步骤 (按 media_type), 然后拼接用户模板的后置步骤。
-        无模板时仍执行预处理 (如视频下载); 无预处理也无模板则返回 None。
+        自动注入预处理步骤 (基于内容检测), 然后拼接用户模板的后置步骤。
+        无模板时仍执行预处理; 无预处理也无模板则标记 READY。
 
         Args:
             content: 已经由 Collector 创建的内容项
@@ -166,7 +144,7 @@ class PipelineOrchestrator:
             source = self.db.query(SourceConfig).get(content.source_id)
             if not source:
                 raise ValueError(f"Source not found: {content.source_id}")
-            template = self.get_template_for_content(source, content)
+            template = self.get_template_for_source(source)
 
         if template:
             template_steps = json.loads(template.steps_config) or []
@@ -176,7 +154,7 @@ class PipelineOrchestrator:
         if not all_steps:
             # 无预处理也无后置处理 — 标记为终态，避免补偿循环反复扫描
             if content.status == ContentStatus.PENDING.value:
-                content.status = ContentStatus.ANALYZED.value
+                content.status = ContentStatus.READY.value
                 self.db.flush()
             return None
 
@@ -230,10 +208,11 @@ class PipelineOrchestrator:
 
 
 def seed_builtin_templates(db: Session) -> None:
-    """将内置模板写入数据库 (首次启动时调用)"""
+    """将内置模板写入数据库 (首次启动时调用), 并更新已有内置模板的步骤配置"""
     from app.services.pipeline.registry import BUILTIN_TEMPLATES
 
     created = 0
+    updated = 0
     for tmpl_data in BUILTIN_TEMPLATES:
         existing = (
             db.query(PipelineTemplate)
@@ -250,10 +229,14 @@ def seed_builtin_templates(db: Session) -> None:
             )
             db.add(template)
             created += 1
+        elif existing.is_builtin and existing.steps_config != tmpl_data["steps_config"]:
+            existing.steps_config = tmpl_data["steps_config"]
+            existing.description = tmpl_data.get("description", existing.description)
+            updated += 1
 
     db.commit()
-    if created:
-        logger.info(f"Seeded {created} builtin pipeline templates")
+    if created or updated:
+        logger.info(f"Seeded {created} new, updated {updated} builtin pipeline templates")
 
     # Seed builtin prompt templates
     from app.models.prompt_template import PromptTemplate

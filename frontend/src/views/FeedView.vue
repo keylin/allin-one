@@ -19,7 +19,7 @@ const loadingMore = ref(false)
 const page = ref(1)
 const pageSize = 20
 const hasMore = ref(true)
-const activeMediaType = ref(route.query.media_type || '')
+const activeMediaType = ref(route.query.has_video === '1' ? 'video' : '')
 const sortBy = ref(route.query.sort_by || 'published_at')
 
 // 搜索 & 筛选
@@ -38,10 +38,7 @@ const rightPanelRef = ref(null)
 
 const mediaTypes = [
   { value: '', label: '全部' },
-  { value: 'text', label: '文本' },
-  { value: 'video', label: '视频' },
-  { value: 'audio', label: '音频' },
-  { value: 'image', label: '图片' },
+  { value: 'video', label: '有视频' },
 ]
 
 const sortOptions = [
@@ -63,6 +60,7 @@ const detailContent = ref(null)
 const detailLoading = ref(false)
 const analyzing = ref(false)
 const contentViewMode = ref('best') // 'best' | 'processed' | 'raw'
+let detailRequestId = 0 // 防止快速切换时竞态覆盖
 
 // --- Chat state ---
 const chatMessages = ref([])
@@ -238,12 +236,14 @@ const urlHostname = computed(() => {
 const statusLabels = {
   pending: '待处理',
   processing: '处理中',
+  ready: '已就绪',
   analyzed: '已分析',
   failed: '失败',
 }
 const statusStyles = {
   pending: 'bg-slate-100 text-slate-600',
   processing: 'bg-indigo-50 text-indigo-700',
+  ready: 'bg-sky-50 text-sky-700',
   analyzed: 'bg-emerald-50 text-emerald-700',
   failed: 'bg-rose-50 text-rose-700',
 }
@@ -257,7 +257,7 @@ function syncQueryParams() {
   if (searchQuery.value) query.q = searchQuery.value
   if (filterSources.value.length) query.source_id = filterSources.value.join(',')
   if (filterStatus.value) query.status = filterStatus.value
-  if (activeMediaType.value) query.media_type = activeMediaType.value
+  if (activeMediaType.value === 'video') query.has_video = '1'
   if (sortBy.value !== 'published_at') query.sort_by = sortBy.value
   if (showFavoritesOnly.value) query.favorites = '1'
   if (!showUnreadOnly.value) query.unread = '0'
@@ -281,7 +281,7 @@ async function fetchItems(reset = false) {
       sort_by: sortBy.value,
       sort_order: 'desc',
     }
-    if (activeMediaType.value) params.media_type = activeMediaType.value
+    if (activeMediaType.value === 'video') params.has_video = true
     if (searchQuery.value.trim()) params.q = searchQuery.value.trim()
     if (filterSources.value.length) params.source_id = filterSources.value.join(',')
     if (filterStatus.value) params.status = filterStatus.value
@@ -357,12 +357,17 @@ function clearAllFilters() {
 // --- Detail methods ---
 async function loadDetail(id) {
   if (!id) return
+  const requestId = ++detailRequestId
   detailLoading.value = true
   try {
     const res = await getContent(id)
+    // 仅当仍是最新请求时才更新，防止快速切换时旧请求覆盖新数据
+    if (requestId !== detailRequestId) return
     if (res.code === 0) detailContent.value = res.data
   } finally {
-    detailLoading.value = false
+    if (requestId === detailRequestId) {
+      detailLoading.value = false
+    }
   }
 }
 
@@ -898,7 +903,7 @@ onUnmounted(() => {
 
             <!-- 视频播放器 -->
             <VideoPlayer
-              v-if="detailContent.media_type === 'video'"
+              v-if="detailContent.media_items?.some(m => m.media_type === 'video')"
               :key="'vp-' + detailContent.id"
               :content-id="detailContent.id"
               :title="detailContent.title || '视频播放'"
@@ -1104,7 +1109,7 @@ onUnmounted(() => {
 
               <!-- 视频播放器 -->
               <VideoPlayer
-                v-if="detailContent.media_type === 'video'"
+                v-if="detailContent.media_items?.some(m => m.media_type === 'video')"
                 :key="'m-vp-' + detailContent.id"
                 :content-id="detailContent.id"
                 :title="detailContent.title || '视频播放'"

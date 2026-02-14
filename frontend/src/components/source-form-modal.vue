@@ -26,26 +26,7 @@ const sourceTypes = [
   { value: 'system.notification', label: '系统通知' },
 ]
 
-const mediaTypeLabels = {
-  text: '文本',
-  image: '图片',
-  video: '视频',
-  audio: '音频',
-  mixed: '混合',
-  data: '数据',
-}
-
-// 路由可选的媒体类型（排除 mixed/data，它们不适合做路由 key）
-const routableMediaTypes = [
-  { value: 'text', label: '文本' },
-  { value: 'video', label: '视频' },
-  { value: 'image', label: '图片' },
-  { value: 'audio', label: '音频' },
-]
-
 const templates = ref([])
-const routingEnabled = ref(false)
-const routingMap = ref({})
 const form = ref(getDefaultForm())
 
 // 结构化配置（替代 config_json 文本框）
@@ -178,19 +159,6 @@ watch(() => props.visible, async (val) => {
         credential_id: props.source.credential_id || '',
       }
       configForm.value = deserializeConfig(props.source.config_json, props.source.source_type)
-      // 恢复路由配置
-      if (props.source.pipeline_routing) {
-        try {
-          routingMap.value = JSON.parse(props.source.pipeline_routing)
-          routingEnabled.value = Object.keys(routingMap.value).length > 0
-        } catch {
-          routingMap.value = {}
-          routingEnabled.value = false
-        }
-      } else {
-        routingMap.value = {}
-        routingEnabled.value = false
-      }
       // 已有 akshare 配置时标记为已选预设
       if (props.source.source_type === 'api.akshare' && configForm.value.indicator) {
         aksharePresetSelected.value = true
@@ -203,8 +171,6 @@ watch(() => props.visible, async (val) => {
     } else {
       form.value = getDefaultForm()
       configForm.value = getDefaultConfig(form.value.source_type)
-      routingEnabled.value = false
-      routingMap.value = {}
       aksharePresetSelected.value = false
       akshareUserParams.value = []
       akshareAlerts.value = []
@@ -244,16 +210,6 @@ function handleSubmit() {
   if (!data.url) data.url = null
   if (!data.description) data.description = null
   if (!data.retention_days) data.retention_days = null
-  // 序列化路由配置
-  if (routingEnabled.value) {
-    const filtered = {}
-    for (const [mt, tid] of Object.entries(routingMap.value)) {
-      if (tid) filtered[mt] = tid
-    }
-    data.pipeline_routing = Object.keys(filtered).length ? JSON.stringify(filtered) : null
-  } else {
-    data.pipeline_routing = null
-  }
   // 序列化结构化配置
   if (hasStructuredConfig.value) {
     data.config_json = serializeConfig()
@@ -261,11 +217,6 @@ function handleSubmit() {
     if (!data.config_json) data.config_json = null
   }
   emit('submit', data)
-}
-
-function clearRouting() {
-  routingEnabled.value = false
-  routingMap.value = {}
 }
 
 // ---- AkShare 预设选择 ----
@@ -363,46 +314,6 @@ const sectionClass = 'space-y-4 p-4 bg-slate-50/50 rounded-xl border border-slat
             <option v-for="t in templates" :key="t.id" :value="t.id">{{ t.name }}</option>
           </select>
           <p class="mt-1 text-xs text-slate-400">预处理（抓取全文/下载视频）按内容类型自动执行，此处配置后续的分析、翻译、推送等</p>
-        </div>
-
-        <!-- 内容路由配置 -->
-        <div>
-          <button
-            v-if="!routingEnabled"
-            type="button"
-            class="text-sm text-indigo-600 hover:text-indigo-700 font-medium transition-colors"
-            @click="routingEnabled = true"
-          >
-            + 按内容类型配置不同后置流水线
-          </button>
-          <div v-else :class="sectionClass">
-            <div class="flex items-center justify-between">
-              <div>
-                <h4 class="text-sm font-semibold text-slate-800">内容路由规则</h4>
-                <p class="text-xs text-slate-400 mt-0.5">不同媒体类型的内容可使用不同流水线处理</p>
-              </div>
-              <button
-                type="button"
-                class="text-xs text-slate-400 hover:text-rose-500 transition-colors"
-                @click="clearRouting"
-              >
-                移除路由
-              </button>
-            </div>
-            <div class="space-y-3 mt-3">
-              <div v-for="mt in routableMediaTypes" :key="mt.value" class="flex items-center gap-3">
-                <span class="text-sm text-slate-600 w-12 shrink-0">{{ mt.label }}</span>
-                <select
-                  :value="routingMap[mt.value] || ''"
-                  @change="routingMap[mt.value] = $event.target.value || undefined; if (!$event.target.value) delete routingMap[mt.value]"
-                  :class="selectClass"
-                >
-                  <option value="">使用默认模板</option>
-                  <option v-for="t in templates" :key="t.id" :value="t.id">{{ t.name }}</option>
-                </select>
-              </div>
-            </div>
-          </div>
         </div>
 
         <!-- 定时采集 -->

@@ -11,8 +11,9 @@
 | **流水线模板 (Template)** | `PipelineTemplate` | 预定义的一组有序原子步骤，定义「怎么处理」。可绑定到任意数据源。 |
 | **流水线执行 (Execution)** | `PipelineExecution` | 一次具体的流水线运行实例。 |
 | **步骤 (Step)** | `PipelineStep` | 流水线中的原子操作执行记录。 |
-| **原子操作类型 (StepType)** | `StepType` 枚举 | 步骤的操作类型，如"抓取全文"、"下载视频"、"模型分析"。 |
+| **原子操作类型 (StepType)** | `StepType` 枚举 | 步骤的操作类型，如"抓取全文"、"媒体本地化"、"模型分析"。 |
 | **提示词 (Prompt)** | `PromptTemplate` | 指导 LLM 进行分析的指令模板。 |
+| **媒体项 (MediaItem)** | `MediaItem` | 内容关联的媒体文件 (图片/视频/音频)，ContentItem 一对多 MediaItem。由 localize_media 步骤创建。 |
 | **采集记录** | `CollectionRecord` | 每次数据源采集的执行记录，独立于流水线。 |
 
 ## 2. 专有名词
@@ -51,27 +52,30 @@
 
 定义在 `app/models/pipeline.py`。对照脑图「原子操作」。
 
-| 枚举值 | 显示名 | 配置项 |
-| :--- | :--- | :--- |
-| `enrich_content` | 抓取全文 | `scrape_level`: L1/L2/L3/auto |
-| `download_video` | 下载视频 | `platform`: bilibili/youtube/auto, `quality` |
-| `extract_audio` | 音频提取 | (待实现) |
-| `transcribe_content` | 语音转文字 | — |
-| `translate_content` | 文章翻译 | `target_language`: zh/en/ja... |
-| `analyze_content` | 模型分析 | `model`: 下拉枚举, `prompt_template_id`: 关联, `output_format`: json/markdown/text |
-| `publish_content` | 消息推送 | `channel`: email/dingtalk/webhook, `frequency`: immediate/daily |
+| 枚举值 | 显示名 | 配置项 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `enrich_content` | 抓取全文 | `scrape_level`: L1/L2/L3/auto | 预处理步骤，系统自动注入 |
+| `localize_media` | 媒体本地化 | — | 预处理步骤，检测并下载图片/视频/音频，创建 MediaItem |
+| `extract_audio` | 音频提取 | (待实现) | |
+| `transcribe_content` | 语音转文字 | — | |
+| `translate_content` | 文章翻译 | `target_language`: zh/en/ja... | |
+| `analyze_content` | 模型分析 | `model`: 下拉枚举, `prompt_template_id`: 关联, `output_format`: json/markdown/text | |
+| `publish_content` | 消息推送 | `channel`: email/dingtalk/webhook, `frequency`: immediate/daily | |
 
-注意: 没有 `fetch_content`。数据抓取由定时器 + Collector 完成, 不是流水线步骤。
+注意:
+- 没有 `fetch_content`。数据抓取由定时器 + Collector 完成，不是流水线步骤。
+- `enrich_content` 和 `localize_media` 是预处理步骤，由 Orchestrator 自动注入，用户模板中无需包含。
+- 原 `download_video` 已被 `localize_media` 取代，后者统一处理所有媒体类型。
 
-### 3.3 MediaType (媒体类型)
+### 3.3 MediaType (媒体项类型)
+
+MediaType 现在仅用于 `MediaItem`（媒体项），不再是 ContentItem 或 SourceConfig 的属性。
 
 | 枚举值 | 描述 |
 | :--- | :--- |
-| `text` | 文本 |
 | `image` | 图片 |
 | `video` | 视频 |
 | `audio` | 音频 |
-| `mixed` | 混合媒体 |
 
 ### 3.4 ContentStatus (内容状态)
 
@@ -79,6 +83,7 @@
 | :--- | :--- |
 | `pending` | 待处理 |
 | `processing` | 处理中 |
+| `ready` | 已就绪 (预处理完成，无后置流水线) |
 | `analyzed` | 已分析 |
 | `failed` | 失败 |
 
@@ -133,16 +138,16 @@
 
 定义在 `app/services/pipeline/registry.py`，首次启动写入数据库。
 
-| 模板名称 | 包含步骤 | 适用场景 |
+| 模板名称 | 包含步骤 (用户模板部分) | 适用场景 |
 | :--- | :--- | :--- |
-| 文章分析 | enrich → analyze → publish | 中文新闻/博客 |
-| 英文文章翻译分析 | enrich → translate → analyze → publish | 英文站点 |
-| 视频下载分析 | download → transcribe → analyze → publish | B站视频 |
-| 视频翻译分析 | download → transcribe → translate → analyze → publish | YouTube 视频 |
+| 文章分析 | analyze → publish | 中文新闻/博客 |
+| 英文文章翻译分析 | translate → analyze → publish | 英文站点 |
+| 视频下载分析 | transcribe → analyze → publish | B站视频 |
+| 视频翻译分析 | transcribe → translate → analyze → publish | YouTube 视频 |
 | 仅分析 | analyze → publish | RSS 全文输出的源 |
 | 仅推送 | publish | 纯通知, 不做分析 |
 
-流水线不含 fetch 步骤。数据抓取由定时器 + Collector 完成, 流水线的输入是已存在的 ContentItem。
+**关键变更**: 用户模板不再包含预处理步骤 (enrich_content / localize_media)。Orchestrator 会根据内容检测自动注入预处理步骤，然后拼接用户模板的后置步骤。启动时会自动更新内置模板的 steps_config。
 
 ## 5. 术语使用规范
 

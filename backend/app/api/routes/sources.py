@@ -10,58 +10,23 @@ from sqlalchemy import func
 import xml.etree.ElementTree as ET
 
 from app.core.database import get_db
-from app.models.content import SourceConfig, ContentItem, CollectionRecord, SourceType
+from app.models.content import SourceConfig, ContentItem, CollectionRecord, SourceType, MediaItem
 from app.models.finance import FinanceDataPoint
 from app.models.pipeline import PipelineTemplate, PipelineExecution, PipelineStep
 from app.schemas import (
-    SourceCreate, SourceUpdate, SourceResponse, CollectionRecordResponse, error_response,
+    SourceCreate, SourceUpdate, SourceResponse, CollectionRecordResponse, ContentBatchDelete, error_response,
 )
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# 按数据源类型推断默认媒体类型
-_SOURCE_TYPE_DEFAULT_MEDIA = {
-    "account.bilibili": "mixed",
-    "api.akshare": "data",
-}
-
-
-def _validate_pipeline_routing(routing_json: str | None, db: Session) -> str | None:
-    """校验 pipeline_routing JSON 中的 template_id，返回错误信息或 None"""
-    if not routing_json:
-        return None
-    try:
-        routing = json.loads(routing_json)
-    except (json.JSONDecodeError, TypeError):
-        return "pipeline_routing 格式错误，需为 JSON 对象"
-    if not isinstance(routing, dict):
-        return "pipeline_routing 需为 JSON 对象"
-    for media_type, template_id in routing.items():
-        if not template_id:
-            continue
-        tpl = db.get(PipelineTemplate, template_id)
-        if not tpl:
-            return f"pipeline_routing 中模板 '{template_id}' (media_type={media_type}) 不存在"
-    return None
-
 
 def _source_to_response(source: SourceConfig, db: Session) -> dict:
-    """将 ORM 对象转为响应 dict，解析 pipeline_template_name 和 routing_names"""
+    """将 ORM 对象转为响应 dict，解析 pipeline_template_name"""
     data = SourceResponse.model_validate(source).model_dump()
     if source.pipeline_template_id:
         tpl = db.get(PipelineTemplate, source.pipeline_template_id)
         data["pipeline_template_name"] = tpl.name if tpl else None
-    if source.pipeline_routing:
-        try:
-            routing = json.loads(source.pipeline_routing)
-            names = {}
-            for mt, tid in routing.items():
-                tpl = db.get(PipelineTemplate, tid)
-                names[mt] = tpl.name if tpl else "未知模板"
-            data["pipeline_routing_names"] = names
-        except (json.JSONDecodeError, TypeError):
-            pass
     return data
 
 
@@ -124,17 +89,7 @@ async def create_source(body: SourceCreate, db: Session = Depends(get_db)):
         if not tpl:
             return error_response(400, f"Pipeline template '{body.pipeline_template_id}' not found")
 
-    # 校验 pipeline_routing
-    err = _validate_pipeline_routing(body.pipeline_routing, db)
-    if err:
-        return error_response(400, err)
-
-    # 自动推断 media_type
-    source_data = body.model_dump()
-    if not source_data.get("media_type") or source_data["media_type"] == "text":
-        source_data["media_type"] = _SOURCE_TYPE_DEFAULT_MEDIA.get(body.source_type, "text")
-
-    source = SourceConfig(**source_data)
+    source = SourceConfig(**body.model_dump())
     db.add(source)
     db.commit()
     db.refresh(source)
@@ -312,12 +267,6 @@ async def update_source(source_id: str, body: SourceUpdate, db: Session = Depend
         if not tpl:
             return error_response(400, f"Pipeline template '{update_data['pipeline_template_id']}' not found")
 
-    # 校验 pipeline_routing
-    if "pipeline_routing" in update_data:
-        err = _validate_pipeline_routing(update_data["pipeline_routing"], db)
-        if err:
-            return error_response(400, err)
-
     for key, value in update_data.items():
         setattr(source, key, value)
 
@@ -327,6 +276,139 @@ async def update_source(source_id: str, body: SourceUpdate, db: Session = Depend
 
     logger.info(f"Source updated: {source_id} (fields={list(update_data.keys())})")
     return {"code": 0, "data": _source_to_response(source, db), "message": "ok"}
+
+
+@router.post("/batch-collect")
+async def batch_collect_all(db: Session = Depends(get_db)):
+    """一键采集所有启用的数据源"""
+    from app.services.collectors import collect_source
+    from app.services.pipeline.orchestrator import PipelineOrchestrator
+    from app.models.pipeline import TriggerSource
+
+    active_sources = db.query(SourceConfig).filter(SourceConfig.is_active == True).all()
+    if not active_sources:
+        return {
+            "code": 0,
+            "data": {"sources_collected": 0, "total_items_new": 0, "pipelines_started": 0, "errors": []},
+            "message": "没有启用的数据源",
+        }
+
+    orchestrator = PipelineOrchestrator(db)
+    sources_collected = 0
+    total_items_new = 0
+    pipelines_started = 0
+    errors = []
+
+    for source in active_sources:
+        try:
+            new_items = await collect_source(source, db)
+            sources_collected += 1
+            total_items_new += len(new_items)
+
+            source.last_collected_at = datetime.now(timezone.utc)
+            source.consecutive_failures = 0
+            db.flush()
+
+            for item in new_items:
+                execution = orchestrator.trigger_for_content(
+                    content=item,
+                    trigger=TriggerSource.MANUAL,
+                )
+                if execution:
+                    orchestrator.start_execution(execution.id)
+                    pipelines_started += 1
+        except Exception as e:
+            logger.warning(f"Batch collect failed for source {source.id} ({source.name}): {e}")
+            errors.append(f"{source.name}: {str(e)}")
+
+    db.commit()
+
+    return {
+        "code": 0,
+        "data": {
+            "sources_collected": sources_collected,
+            "total_items_new": total_items_new,
+            "pipelines_started": pipelines_started,
+            "errors": errors,
+        },
+        "message": f"采集完成: {sources_collected} 个源，{total_items_new} 条新内容",
+    }
+
+
+@router.post("/batch-delete")
+async def batch_delete_sources(
+    body: ContentBatchDelete,
+    cascade: bool = Query(False, description="是否同时删除关联内容"),
+    db: Session = Depends(get_db),
+):
+    """批量删除数据源"""
+    sources = db.query(SourceConfig).filter(SourceConfig.id.in_(body.ids)).all()
+    if not sources:
+        return {"code": 0, "data": {"deleted": 0}, "message": "ok"}
+
+    source_ids = [s.id for s in sources]
+
+    # 检查关联内容
+    content_count = db.query(func.count(ContentItem.id)).filter(
+        ContentItem.source_id.in_(source_ids)
+    ).scalar()
+
+    if content_count > 0 and not cascade:
+        return {
+            "code": 1,
+            "data": {"content_count": content_count},
+            "message": f"选中的数据源共关联 {content_count} 条内容，请确认是否级联删除",
+        }
+
+    # 级联删除关联数据
+    if cascade and content_count > 0:
+        content_ids = [
+            cid for (cid,) in db.query(ContentItem.id)
+            .filter(ContentItem.source_id.in_(source_ids)).all()
+        ]
+        execution_ids = [
+            eid for (eid,) in db.query(PipelineExecution.id)
+            .filter(PipelineExecution.content_id.in_(content_ids)).all()
+        ]
+        if execution_ids:
+            db.query(PipelineStep).filter(
+                PipelineStep.pipeline_id.in_(execution_ids)
+            ).delete(synchronize_session=False)
+            db.query(PipelineExecution).filter(
+                PipelineExecution.id.in_(execution_ids)
+            ).delete(synchronize_session=False)
+        db.query(ContentItem).filter(
+            ContentItem.source_id.in_(source_ids)
+        ).delete(synchronize_session=False)
+
+    # 清理 CollectionRecord 和 FinanceDataPoint
+    db.query(CollectionRecord).filter(
+        CollectionRecord.source_id.in_(source_ids)
+    ).delete(synchronize_session=False)
+    db.query(FinanceDataPoint).filter(
+        FinanceDataPoint.source_id.in_(source_ids)
+    ).delete(synchronize_session=False)
+
+    # 清理以 source_id 关联的 pipeline_executions
+    orphan_exec_ids = [
+        eid for (eid,) in db.query(PipelineExecution.id)
+        .filter(PipelineExecution.source_id.in_(source_ids)).all()
+    ]
+    if orphan_exec_ids:
+        db.query(PipelineStep).filter(
+            PipelineStep.pipeline_id.in_(orphan_exec_ids)
+        ).delete(synchronize_session=False)
+        db.query(PipelineExecution).filter(
+            PipelineExecution.id.in_(orphan_exec_ids)
+        ).delete(synchronize_session=False)
+
+    deleted = db.query(SourceConfig).filter(
+        SourceConfig.id.in_(source_ids)
+    ).delete(synchronize_session=False)
+    db.commit()
+
+    logger.info(f"Batch deleted {deleted} sources (cascade={cascade})")
+    return {"code": 0, "data": {"deleted": deleted}, "message": "ok"}
 
 
 @router.delete("/{source_id}")

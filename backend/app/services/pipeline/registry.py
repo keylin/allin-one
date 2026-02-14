@@ -45,31 +45,10 @@ STEP_DEFINITIONS: dict[str, StepDefinition] = {
             },
         },
     ),
-    "download_video": StepDefinition(
-        step_type="download_video",
-        display_name="下载视频",
-        description="通过 yt-dlp 下载 Bilibili/YouTube 视频",
-        max_retries=2,
-        retry_delay=60,
-        config_schema={
-            "type": "object",
-            "properties": {
-                "platform": {
-                    "type": "string",
-                    "enum": ["bilibili", "youtube", "auto"],
-                    "default": "auto",
-                },
-                "quality": {
-                    "type": "string",
-                    "enum": ["360p", "720p", "1080p", "best"],
-                    "default": "1080p",
-                },
-                "download_subtitle": {
-                    "type": "boolean",
-                    "default": True,
-                },
-            },
-        },
+    "localize_media": StepDefinition(
+        step_type="localize_media",
+        display_name="媒体本地化",
+        description="检测并下载内容中的图片/视频/音频，创建 MediaItem，改写URL为本地引用",
     ),
     "extract_audio": StepDefinition(
         step_type="extract_audio",
@@ -142,39 +121,35 @@ STEP_DEFINITIONS: dict[str, StepDefinition] = {
 BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     {
         "name": "文章分析",
-        "description": "抓取全文 → LLM分析 → 推送",
+        "description": "LLM分析 → 推送（预处理自动完成全文抓取和媒体本地化）",
         "steps_config": json.dumps([
-            {"step_type": "enrich_content",  "is_critical": True,  "config": {"scrape_level": "auto"}},
-            {"step_type": "analyze_content", "is_critical": False, "config": {}},
+            {"step_type": "analyze_content", "is_critical": True,  "config": {}},
             {"step_type": "publish_content", "is_critical": False, "config": {"channel": "none"}},
         ], ensure_ascii=False),
     },
     {
         "name": "英文文章翻译分析",
-        "description": "抓取全文 → 翻译 → 分析 → 推送",
+        "description": "翻译 → 分析 → 推送（预处理自动完成全文抓取和媒体本地化）",
         "steps_config": json.dumps([
-            {"step_type": "enrich_content",     "is_critical": True,  "config": {"scrape_level": "auto"}},
-            {"step_type": "translate_content",  "is_critical": False, "config": {"target_language": "zh"}},
+            {"step_type": "translate_content",  "is_critical": True,  "config": {"target_language": "zh"}},
             {"step_type": "analyze_content",    "is_critical": False, "config": {}},
             {"step_type": "publish_content",    "is_critical": False, "config": {"channel": "none"}},
         ], ensure_ascii=False),
     },
     {
         "name": "视频下载分析",
-        "description": "下载视频 → 字幕提取 → 分析 → 推送",
+        "description": "字幕提取 → 分析 → 推送（预处理自动完成视频下载和媒体本地化）",
         "steps_config": json.dumps([
-            {"step_type": "download_video",      "is_critical": True,  "config": {"quality": "1080p"}},
-            {"step_type": "transcribe_content",  "is_critical": False, "config": {}},
+            {"step_type": "transcribe_content",  "is_critical": True,  "config": {}},
             {"step_type": "analyze_content",     "is_critical": False, "config": {}},
             {"step_type": "publish_content",     "is_critical": False, "config": {"channel": "none"}},
         ], ensure_ascii=False),
     },
     {
         "name": "视频翻译分析",
-        "description": "下载视频 → 字幕 → 翻译 → 分析 → 推送 (YouTube等外语视频)",
+        "description": "字幕 → 翻译 → 分析 → 推送（预处理自动完成视频下载和媒体本地化）",
         "steps_config": json.dumps([
-            {"step_type": "download_video",      "is_critical": True,  "config": {"quality": "1080p"}},
-            {"step_type": "transcribe_content",  "is_critical": False, "config": {}},
+            {"step_type": "transcribe_content",  "is_critical": True,  "config": {}},
             {"step_type": "translate_content",   "is_critical": False, "config": {"target_language": "zh"}},
             {"step_type": "analyze_content",     "is_critical": False, "config": {}},
             {"step_type": "publish_content",     "is_critical": False, "config": {"channel": "none"}},
@@ -182,7 +157,7 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "name": "仅分析",
-        "description": "直接 LLM 分析 → 推送 (适合 RSS 全文输出的源, 无需全文提取)",
+        "description": "直接 LLM 分析 → 推送",
         "steps_config": json.dumps([
             {"step_type": "analyze_content", "is_critical": True,  "config": {}},
             {"step_type": "publish_content", "is_critical": False, "config": {"channel": "none"}},

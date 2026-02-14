@@ -41,7 +41,7 @@ venv/
 .env.*.local
 
 # Runtime data
-backend/data/
+data/
 
 # Node/Vue
 node_modules/

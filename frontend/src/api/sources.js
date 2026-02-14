@@ -20,8 +20,16 @@ export function deleteSource(id, cascade = false) {
   return api.delete(`/sources/${id}`, { params: { cascade } })
 }
 
+export function batchDeleteSources(ids, cascade = false) {
+  return api.post('/sources/batch-delete', { ids }, { params: { cascade } })
+}
+
 export function collectSource(id) {
   return api.post(`/sources/${id}/collect`)
+}
+
+export function collectAllSources() {
+  return api.post('/sources/batch-collect')
 }
 
 export function getCollectionHistory(id, params = {}) {

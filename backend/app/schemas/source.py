@@ -10,11 +10,9 @@ class SourceCreate(BaseModel):
     source_type: str
     url: Optional[str] = None
     description: Optional[str] = None
-    media_type: Optional[str] = "text"
     schedule_enabled: Optional[bool] = True
     schedule_interval: Optional[int] = 3600
     pipeline_template_id: Optional[str] = None
-    pipeline_routing: Optional[str] = None
     config_json: Optional[str] = None
     credential_id: Optional[str] = None
     auto_cleanup_enabled: Optional[bool] = False
@@ -26,11 +24,9 @@ class SourceUpdate(BaseModel):
     source_type: Optional[str] = None
     url: Optional[str] = None
     description: Optional[str] = None
-    media_type: Optional[str] = None
     schedule_enabled: Optional[bool] = None
     schedule_interval: Optional[int] = None
     pipeline_template_id: Optional[str] = None
-    pipeline_routing: Optional[str] = None
     config_json: Optional[str] = None
     credential_id: Optional[str] = None
     is_active: Optional[bool] = None
@@ -46,13 +42,10 @@ class SourceResponse(BaseModel):
     source_type: str
     url: Optional[str] = None
     description: Optional[str] = None
-    media_type: Optional[str] = "text"
     schedule_enabled: bool = True
     schedule_interval: int = 3600
     pipeline_template_id: Optional[str] = None
     pipeline_template_name: Optional[str] = None
-    pipeline_routing: Optional[str] = None
-    pipeline_routing_names: Optional[dict] = None
     config_json: Optional[str] = None
     credential_id: Optional[str] = None
     auto_cleanup_enabled: bool = False

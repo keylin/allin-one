@@ -8,7 +8,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from app.core.database import SessionLocal
+from app.core.database import SessionLocal, commit_with_retry as _commit_with_retry
 from app.models.pipeline import (
     PipelineExecution, PipelineStep,
     PipelineStatus, StepStatus,
@@ -56,7 +56,7 @@ class PipelineExecutor:
             from app.models.content import ContentItem
             content = db.get(ContentItem, execution.content_id)
 
-            db.commit()
+            _commit_with_retry(db)
 
             return {
                 "execution_id": execution_id,
@@ -100,7 +100,7 @@ class PipelineExecutor:
                         execution.error_message = f"关键步骤 '{step.step_type}' 失败: {error}"
                         execution.completed_at = now
                     logger.error(f"Pipeline {execution_id} 在关键步骤 {step.step_type} 失败")
-                    db.commit()
+                    _commit_with_retry(db)
                     return  # 关键步骤失败，不推进
                 else:
                     step.status = StepStatus.SKIPPED.value
@@ -114,7 +114,7 @@ class PipelineExecutor:
             # ---- 推进流水线 ----
             execution = db.get(PipelineExecution, execution_id)
             if not execution or execution.status == PipelineStatus.FAILED.value:
-                db.commit()
+                _commit_with_retry(db)
                 return
 
             next_index = execution.current_step + 1
@@ -124,18 +124,21 @@ class PipelineExecutor:
                 execution.current_step = execution.total_steps
                 execution.completed_at = now
 
-                # 更新内容状态为已分析
+                # 更新内容状态: 有用户模板 → ANALYZED, 仅预处理 → READY
                 from app.models.content import ContentItem, ContentStatus
                 content = db.get(ContentItem, execution.content_id)
                 if content:
-                    content.status = ContentStatus.ANALYZED.value
+                    if execution.template_id:
+                        content.status = ContentStatus.ANALYZED.value
+                    else:
+                        content.status = ContentStatus.READY.value
 
-                db.commit()
+                _commit_with_retry(db)
                 logger.info(f"Pipeline {execution_id} ({execution.template_name}) 完成")
                 return
 
             execution.current_step = next_index
-            db.commit()
+            _commit_with_retry(db)
 
             logger.info(f"Pipeline {execution_id} advancing to step {next_index}")
             from app.tasks.pipeline_tasks import execute_pipeline_step

@@ -60,6 +60,7 @@ services:
       - "8000:8000"
     volumes:
       - ./backend:/app
+      - ./data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
       - ./docker-compose.local.yml:/project/docker-compose.yml:ro
       - ./backend/.env:/project/backend/.env
@@ -107,6 +108,7 @@ services:
     command: ["python", "dev_worker.py"]
     volumes:
       - ./backend:/app
+      - ./data:/app/data
     env_file:
       - ./backend/.env
     environment:

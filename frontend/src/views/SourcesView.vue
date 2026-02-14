@@ -27,6 +27,13 @@ const togglingId = ref(null)
 const showCascadeDialog = ref(false)
 const cascadeCount = ref(0)
 const collectingId = ref(null)
+const collectingAll = ref(false)
+
+// Batch ops
+const selectedIds = ref([])
+const showBatchDeleteDialog = ref(false)
+const batchCascadeCount = ref(0)
+const showBatchCascadeDialog = ref(false)
 
 // Detail drawer
 const selectedSource = ref(null)
@@ -197,6 +204,62 @@ async function handleCollect(source) {
   }
 }
 
+async function handleCollectAll() {
+  collectingAll.value = true
+  try {
+    const res = await store.collectAll()
+    if (res.code === 0) {
+      const d = res.data
+      let msg = `${d.sources_collected} 个源，${d.total_items_new} 条新内容`
+      if (d.pipelines_started > 0) msg += `，${d.pipelines_started} 条流水线已启动`
+      if (d.errors.length > 0) msg += `，${d.errors.length} 个失败`
+      toast.success(msg, { title: '一键采集完成' })
+    } else {
+      toast.error(res.message || '采集失败')
+    }
+  } catch {
+    toast.error('采集请求失败')
+  } finally {
+    collectingAll.value = false
+  }
+}
+
+function toggleSelect(id, event) {
+  if (event) event.stopPropagation()
+  const idx = selectedIds.value.indexOf(id)
+  if (idx > -1) selectedIds.value.splice(idx, 1)
+  else selectedIds.value.push(id)
+}
+
+function toggleSelectAll() {
+  if (selectedIds.value.length === store.sources.length) {
+    selectedIds.value = []
+  } else {
+    selectedIds.value = store.sources.map(s => s.id)
+  }
+}
+
+async function handleBatchDelete() {
+  showBatchDeleteDialog.value = false
+  const res = await store.batchDelete(selectedIds.value)
+  if (res.code === 0) {
+    toast.success(`已删除 ${res.data.deleted} 个数据源`)
+    selectedIds.value = []
+  } else if (res.code === 1) {
+    batchCascadeCount.value = res.data.content_count
+    showBatchCascadeDialog.value = true
+  }
+}
+
+async function handleBatchCascadeDelete() {
+  showBatchCascadeDialog.value = false
+  const res = await store.batchDelete(selectedIds.value, true)
+  if (res.code === 0) {
+    toast.success(`已删除 ${res.data.deleted} 个数据源及关联内容`)
+    selectedIds.value = []
+  }
+}
+
 function formatTime(t) {
   return t ? dayjs.utc(t).local().format('MM-DD HH:mm') : '-'
 }
@@ -254,6 +317,20 @@ function handleExport() {
         <p class="text-xs text-slate-400">{{ store.total }} 个数据源</p>
         <div class="flex items-center gap-2">
           <button
+            class="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all disabled:opacity-50"
+            title="一键采集全部"
+            :disabled="collectingAll"
+            @click="handleCollectAll"
+          >
+            <svg v-if="collectingAll" class="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
+            <svg v-else class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182" />
+            </svg>
+          </button>
+          <button
             class="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-all"
             title="导入 OPML"
             @click="triggerFileImport"
@@ -283,8 +360,21 @@ function handleExport() {
         </div>
       </div>
 
+      <!-- Batch action bar -->
+      <div v-if="selectedIds.length > 0" class="flex items-center gap-2">
+        <span class="text-sm text-slate-500">已选 {{ selectedIds.length }}</span>
+        <button
+          class="px-3 py-1.5 text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-all duration-200"
+          @click="showBatchDeleteDialog = true"
+        >批量删除</button>
+        <button
+          class="px-3 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-100 rounded-lg transition-all duration-200"
+          @click="selectedIds = []"
+        >取消</button>
+      </div>
+
       <!-- Filter bar -->
-      <div class="flex flex-wrap items-center gap-3">
+      <div v-else class="flex flex-wrap items-center gap-3">
       <div class="relative flex-1 min-w-[200px] max-w-sm">
         <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
@@ -342,6 +432,14 @@ function handleExport() {
         <table class="w-full">
           <thead class="bg-slate-50/80">
             <tr>
+              <th class="w-10 px-4 py-3">
+                <input
+                  type="checkbox"
+                  class="h-3.5 w-3.5 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"
+                  :checked="selectedIds.length === store.sources.length && store.sources.length > 0"
+                  @change="toggleSelectAll"
+                />
+              </th>
               <th class="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">名称</th>
               <th class="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">类型</th>
               <th class="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">URL</th>
@@ -363,6 +461,14 @@ function handleExport() {
               ]"
               @click="selectSource(source)"
             >
+              <td class="w-10 px-4 py-3" @click.stop>
+                <input
+                  type="checkbox"
+                  class="h-3.5 w-3.5 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"
+                  :checked="selectedIds.includes(source.id)"
+                  @change="toggleSelect(source.id, $event)"
+                />
+              </td>
               <td class="px-4 py-3 text-sm font-medium text-slate-800 max-w-[180px] truncate">{{ source.name }}</td>
               <td class="px-4 py-3">
                 <span
@@ -493,6 +599,26 @@ function handleExport() {
       :danger="true"
       @confirm="handleCascadeDelete"
       @cancel="showCascadeDialog = false"
+    />
+
+    <ConfirmDialog
+      :visible="showBatchDeleteDialog"
+      title="批量删除"
+      :message="`确定要删除选中的 ${selectedIds.length} 个数据源吗？`"
+      confirm-text="删除"
+      :danger="true"
+      @confirm="handleBatchDelete"
+      @cancel="showBatchDeleteDialog = false"
+    />
+
+    <ConfirmDialog
+      :visible="showBatchCascadeDialog"
+      title="批量删除"
+      :message="`选中的数据源共关联 ${batchCascadeCount} 条内容及处理记录，删除将同时清除所有关联数据，此操作不可恢复。`"
+      confirm-text="删除全部"
+      :danger="true"
+      @confirm="handleBatchCascadeDelete"
+      @cancel="showBatchCascadeDialog = false"
     />
   </div>
 </template>
