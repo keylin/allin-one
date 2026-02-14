@@ -15,10 +15,7 @@ class Settings(BaseSettings):
     # External Services
     RSSHUB_URL: str = "http://rsshub:1200"
     BROWSERLESS_URL: str = "http://browserless:3000"
-
-    # Miniflux
-    MINIFLUX_URL: str = "http://miniflux:8080"
-    MINIFLUX_API_KEY: str = ""
+    CRAWL4AI_CDP_URL: str = "ws://browserless:3000/chromium/playwright"
 
     # Security
     API_KEY: str = ""
@@ -28,7 +25,6 @@ class Settings(BaseSettings):
     APP_PORT: int = 8000
     WORKER_CONCURRENCY: int = 4
     LOG_LEVEL: str = "INFO"
-    SCHEDULER_ENABLED: bool = True
 
     # File Storage
     DATA_DIR: str = "data"

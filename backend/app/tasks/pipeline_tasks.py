@@ -16,7 +16,9 @@ import logging
 import os
 import re
 
-from app.tasks.huey_instance import huey
+import procrastinate
+
+from app.tasks.procrastinate_app import proc_app
 import app.models  # noqa: F401 — 确保所有 ORM 模型注册，避免 relationship 解析失败
 from app.services.pipeline.executor import PipelineExecutor
 
@@ -27,7 +29,7 @@ executor = PipelineExecutor()
 def _run_async(coro):
     """Run an async coroutine from sync code.
 
-    Uses asyncio.run() in Huey worker (no running loop).
+    Uses asyncio.run() in worker (no running loop).
     Falls back to a thread pool when called from FastAPI test endpoint
     (event loop already running).
     """
@@ -65,7 +67,10 @@ async def _llm_analyze(text, prompt_tpl):
         await analyzer.client.close()
 
 
-@huey.task(retries=3, retry_delay=30)
+@proc_app.task(
+    retry=procrastinate.RetryStrategy(max_attempts=4, wait=30),
+    queue="pipeline",
+)
 def execute_pipeline_step(execution_id: str, step_index: int):
     """通用步骤执行入口 — 根据 step_type 分派
 
@@ -99,9 +104,54 @@ def execute_pipeline_step(execution_id: str, step_index: int):
 # 所有函数的输入都是已存在的 ContentItem, 通过 context 获取
 
 
-def _handle_enrich_content(context: dict) -> dict:
-    """抓取全文 — L1 HTTP + trafilatura，失败时降级到 L2 Browserless
+async def _extract_with_crawl4ai(url: str) -> str | None:
+    """用 Crawl4AI 提取网页正文，通过 CDP 连接 Browserless，返回 fit_markdown"""
+    try:
+        from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig
+    except ImportError:
+        logger.warning("[crawl4ai] crawl4ai not installed, skipping")
+        return None
 
+    from app.core.config import settings
+
+    browser_config = BrowserConfig(cdp_url=settings.CRAWL4AI_CDP_URL)
+    run_config = CrawlerRunConfig(
+        word_count_threshold=100,
+    )
+
+    try:
+        async with AsyncWebCrawler(config=browser_config) as crawler:
+            result = await asyncio.wait_for(
+                crawler.arun(url=url, config=run_config),
+                timeout=45,
+            )
+            if result and result.success:
+                md = None
+                # fit_markdown: 噪声过滤后的 Markdown
+                if result.markdown and hasattr(result.markdown, "fit_markdown"):
+                    md = result.markdown.fit_markdown
+                # fallback to raw_markdown
+                if not md and result.markdown and hasattr(result.markdown, "raw_markdown"):
+                    md = result.markdown.raw_markdown
+                # fallback: markdown may be a string directly
+                if not md and isinstance(result.markdown, str):
+                    md = result.markdown
+                return md
+            else:
+                logger.warning(f"[crawl4ai] Crawl failed for {url}: {getattr(result, 'error_message', 'unknown')}")
+                return None
+    except asyncio.TimeoutError:
+        logger.warning(f"[crawl4ai] Timeout (45s) for {url}")
+        return None
+    except Exception as e:
+        logger.warning(f"[crawl4ai] Failed for {url}: {e}")
+        return None
+
+
+def _handle_enrich_content(context: dict) -> dict:
+    """抓取全文 — Crawl4AI 主力 + L1/L2 trafilatura 兜底
+
+    提取流程：Crawl4AI → L1 HTTP+trafilatura → L2 Browserless+trafilatura → 原始内容回退。
     输出 Markdown 格式。质量保障：反爬检测 + enriched vs original 对比 + 自动回退。
     此函数永远不 raise，失败时 fallback 到原始内容。
     """
@@ -126,42 +176,56 @@ def _handle_enrich_content(context: dict) -> dict:
     original_text = PipelineOrchestrator._strip_html(original_html) if original_html else ""
 
     enriched_md = ""
-    method = "L1_HTTP"
+    method = ""
     anti_scraping_info = None
 
-    # 2. L1: 尝试普通 HTTP 抓取
+    # 2. 主力：Crawl4AI（通过 CDP 连接 Browserless）
     try:
-        with httpx.Client(timeout=30, follow_redirects=True) as client:
-            resp = client.get(url)
-            resp.raise_for_status()
-            html = resp.text
-
-        # 反爬检测（用原始 HTML 的纯文本）
-        soup = BeautifulSoup(html, "lxml")
-        plain_text = soup.get_text(separator="\n", strip=True)
-
-        block_reason = _detect_anti_scraping(html, plain_text)
-        if block_reason:
-            logger.warning(f"[enrich_content] L1 anti-scraping detected: {block_reason}, trying L2")
-            anti_scraping_info = {"level": "L1", "reason": block_reason}
+        crawl4ai_result = _run_async(_extract_with_crawl4ai(url))
+        if crawl4ai_result and len(crawl4ai_result.strip()) >= 100:
+            enriched_md = crawl4ai_result
+            method = "crawl4ai"
+            logger.info(f"[enrich_content] Crawl4AI succeeded, md_length={len(enriched_md)}")
         else:
-            # trafilatura 提取 Markdown
-            result = _extract_with_trafilatura(html, url=url)
-            if result and len(result.strip()) >= 100:
-                enriched_md = result
-            else:
-                logger.warning(f"[enrich_content] L1 trafilatura content too short ({len(result) if result else 0} chars), trying L2")
-
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 403:
-            logger.warning(f"[enrich_content] L1 got 403, trying L2")
-            anti_scraping_info = {"level": "L1", "reason": "http_403"}
-        else:
-            logger.warning(f"[enrich_content] L1 HTTP error {e.response.status_code}, trying L2")
+            logger.info(f"[enrich_content] Crawl4AI result too short ({len(crawl4ai_result.strip()) if crawl4ai_result else 0} chars), trying L1")
     except Exception as e:
-        logger.warning(f"[enrich_content] L1 failed: {e}, trying L2")
+        logger.warning(f"[enrich_content] Crawl4AI failed: {e}, trying L1")
 
-    # 3. L2: Browserless 渲染
+    # 3. 兜底 L1: 普通 HTTP + trafilatura
+    if not enriched_md:
+        try:
+            with httpx.Client(timeout=30, follow_redirects=True) as client:
+                resp = client.get(url)
+                resp.raise_for_status()
+                html = resp.text
+
+            # 反爬检测（用原始 HTML 的纯文本）
+            soup = BeautifulSoup(html, "lxml")
+            plain_text = soup.get_text(separator="\n", strip=True)
+
+            block_reason = _detect_anti_scraping(html, plain_text)
+            if block_reason:
+                logger.warning(f"[enrich_content] L1 anti-scraping detected: {block_reason}, trying L2")
+                anti_scraping_info = {"level": "L1", "reason": block_reason}
+            else:
+                # trafilatura 提取 Markdown
+                result = _extract_with_trafilatura(html, url=url)
+                if result and len(result.strip()) >= 100:
+                    enriched_md = result
+                    method = "L1_HTTP"
+                else:
+                    logger.warning(f"[enrich_content] L1 trafilatura content too short ({len(result) if result else 0} chars), trying L2")
+
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 403:
+                logger.warning(f"[enrich_content] L1 got 403, trying L2")
+                anti_scraping_info = {"level": "L1", "reason": "http_403"}
+            else:
+                logger.warning(f"[enrich_content] L1 HTTP error {e.response.status_code}, trying L2")
+        except Exception as e:
+            logger.warning(f"[enrich_content] L1 failed: {e}, trying L2")
+
+    # 4. 兜底 L2: Browserless 渲染 + trafilatura
     if not enriched_md:
         try:
             from app.core.config import settings
@@ -186,7 +250,7 @@ def _handle_enrich_content(context: dict) -> dict:
         except Exception as e:
             logger.error(f"[enrich_content] L2 also failed: {e}")
 
-    # 4. 质量对比：enriched vs original
+    # 5. 质量对比：enriched vs original
     if enriched_md:
         quality = _compare_quality(enriched_md, original_text)
         logger.info(f"[enrich_content] quality check: {quality}")
@@ -221,7 +285,7 @@ def _handle_enrich_content(context: dict) -> dict:
             "quality": quality,
         }
 
-    # 5. 抓取完全失败，回退到原始内容
+    # 6. 抓取完全失败，回退到原始内容
     if original_html:
         logger.warning(f"[enrich_content] all fetch failed, fallback to original ({len(original_text)} chars)")
         with SessionLocal() as db:
