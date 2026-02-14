@@ -18,6 +18,7 @@ import re
 
 from app.tasks.huey_instance import huey
 import app.models  # noqa: F401 — 确保所有 ORM 模型注册，避免 relationship 解析失败
+from app.core.database import commit_with_retry as _commit_with_retry
 from app.services.pipeline.executor import PipelineExecutor
 
 logger = logging.getLogger(__name__)
@@ -100,8 +101,11 @@ def execute_pipeline_step(execution_id: str, step_index: int):
 
 
 def _handle_enrich_content(context: dict) -> dict:
-    """抓取全文 — L1 HTTP + readability，失败时降级到 L2 Browserless"""
-    config = context["step_config"]
+    """抓取全文 — L1 HTTP + trafilatura，失败时降级到 L2 Browserless
+
+    输出 Markdown 格式。质量保障：反爬检测 + enriched vs original 对比 + 自动回退。
+    此函数永远不 raise，失败时 fallback 到原始内容。
+    """
     url = context["content_url"]
     if not url:
         return {"status": "skipped", "reason": "no url"}
@@ -109,56 +113,136 @@ def _handle_enrich_content(context: dict) -> dict:
     logger.info(f"[enrich_content] url={url}")
 
     import httpx
-    from readability import Document
     from bs4 import BeautifulSoup
+    from app.services.pipeline.orchestrator import PipelineOrchestrator
 
-    clean_html = ""
+    # 1. 提取原始文本（用于对比和回退）
+    from app.core.database import SessionLocal
+    from app.models.content import ContentItem
+    with SessionLocal() as db:
+        content = db.get(ContentItem, context["content_id"])
+        raw_data_json = content.raw_data if content else None
+
+    original_html = PipelineOrchestrator._extract_raw_text(raw_data_json)
+    original_text = PipelineOrchestrator._strip_html(original_html) if original_html else ""
+
+    enriched_md = ""
     method = "L1_HTTP"
+    anti_scraping_info = None
 
-    # L1: 尝试普通 HTTP 抓取
+    # 2. L1: 尝试普通 HTTP 抓取
     try:
         with httpx.Client(timeout=30, follow_redirects=True) as client:
             resp = client.get(url)
             resp.raise_for_status()
             html = resp.text
 
-        doc = Document(html)
-        readable_html = doc.summary()
-
-        # 检查内容是否太短（可能是 JS 渲染页面）
-        soup = BeautifulSoup(readable_html, "lxml")
+        # 反爬检测（用原始 HTML 的纯文本）
+        soup = BeautifulSoup(html, "lxml")
         plain_text = soup.get_text(separator="\n", strip=True)
-        if len(plain_text.strip()) < 100:
-            logger.warning(f"[enrich_content] L1 content too short ({len(plain_text)} chars), trying L2")
-            clean_html = ""  # 清空，准备升级到 L2
+
+        block_reason = _detect_anti_scraping(html, plain_text)
+        if block_reason:
+            logger.warning(f"[enrich_content] L1 anti-scraping detected: {block_reason}, trying L2")
+            anti_scraping_info = {"level": "L1", "reason": block_reason}
         else:
-            clean_html = _sanitize_html(readable_html)
+            # trafilatura 提取 Markdown
+            result = _extract_with_trafilatura(html, url=url)
+            if result and len(result.strip()) >= 100:
+                enriched_md = result
+            else:
+                logger.warning(f"[enrich_content] L1 trafilatura content too short ({len(result) if result else 0} chars), trying L2")
+
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 403:
+            logger.warning(f"[enrich_content] L1 got 403, trying L2")
+            anti_scraping_info = {"level": "L1", "reason": "http_403"}
+        else:
+            logger.warning(f"[enrich_content] L1 HTTP error {e.response.status_code}, trying L2")
     except Exception as e:
         logger.warning(f"[enrich_content] L1 failed: {e}, trying L2")
-        clean_html = ""
 
-    # L2: 如果 L1 失败或内容太短，使用 Browserless 渲染
-    if not clean_html:
+    # 3. L2: Browserless 渲染
+    if not enriched_md:
         try:
             from app.core.config import settings
-            clean_html = _fetch_with_browserless(url, settings.BROWSERLESS_URL)
-            method = "L2_Browserless"
-            logger.info(f"[enrich_content] L2 succeeded, html_length={len(clean_html)}")
+            l2_html = _fetch_with_browserless(url, settings.BROWSERLESS_URL)
+
+            # L2 反爬检测
+            soup = BeautifulSoup(l2_html, "lxml")
+            l2_plain = soup.get_text(separator="\n", strip=True)
+            block_reason = _detect_anti_scraping(l2_html, l2_plain)
+            if block_reason:
+                logger.warning(f"[enrich_content] L2 anti-scraping detected: {block_reason}")
+                anti_scraping_info = {"level": "L2", "reason": block_reason}
+            else:
+                result = _extract_with_trafilatura(l2_html, url=url)
+                if result and len(result.strip()) >= 100:
+                    enriched_md = result
+                    method = "L2_Browserless"
+                    logger.info(f"[enrich_content] L2 succeeded, md_length={len(enriched_md)}")
+                else:
+                    logger.warning(f"[enrich_content] L2 trafilatura content too short ({len(result) if result else 0} chars)")
+
         except Exception as e:
             logger.error(f"[enrich_content] L2 also failed: {e}")
-            if not clean_html:
-                raise Exception(f"Both L1 and L2 failed for {url}")
 
-    # 更新 content.processed_content（存储清理后的 HTML）
-    from app.core.database import SessionLocal
-    from app.models.content import ContentItem
-    with SessionLocal() as db:
-        content = db.get(ContentItem, context["content_id"])
-        if content:
-            content.processed_content = clean_html
-            db.commit()
+    # 4. 质量对比：enriched vs original
+    if enriched_md:
+        quality = _compare_quality(enriched_md, original_text)
+        logger.info(f"[enrich_content] quality check: {quality}")
 
-    return {"status": "enriched", "text_length": len(clean_html), "method": method}
+        if not quality["use_enriched"]:
+            logger.warning(f"[enrich_content] enriched rejected: {quality['reason']}, fallback to original")
+            with SessionLocal() as db:
+                content = db.get(ContentItem, context["content_id"])
+                if content and original_html:
+                    content.processed_content = original_html
+                    _commit_with_retry(db)
+            return {
+                "status": "fallback_to_original",
+                "reason": quality["reason"],
+                "method": method,
+                "quality": quality,
+                "anti_scraping_detected": anti_scraping_info,
+            }
+
+        # 质量通过，存储 Markdown
+        with SessionLocal() as db:
+            content = db.get(ContentItem, context["content_id"])
+            if content:
+                content.processed_content = enriched_md
+                _commit_with_retry(db)
+
+        return {
+            "status": "enriched",
+            "text_length": len(enriched_md),
+            "method": method,
+            "format": "markdown",
+            "quality": quality,
+        }
+
+    # 5. 抓取完全失败，回退到原始内容
+    if original_html:
+        logger.warning(f"[enrich_content] all fetch failed, fallback to original ({len(original_text)} chars)")
+        with SessionLocal() as db:
+            content = db.get(ContentItem, context["content_id"])
+            if content:
+                content.processed_content = original_html
+                _commit_with_retry(db)
+        return {
+            "status": "fallback_to_original",
+            "reason": "all fetch methods failed",
+            "original_len": len(original_text),
+            "anti_scraping_detected": anti_scraping_info,
+        }
+
+    logger.error(f"[enrich_content] no enriched content and no original to fallback")
+    return {
+        "status": "failed_no_content",
+        "reason": "no enriched content and no original fallback",
+        "anti_scraping_detected": anti_scraping_info,
+    }
 
 
 _SANITIZE_ALLOWED_TAGS = frozenset([
@@ -193,10 +277,145 @@ def _sanitize_html(html: str) -> str:
     return str(soup)
 
 
+_LAZY_ATTRS = ["data-src", "data-original", "data-lazy-src", "data-lazy", "data-echo", "data-url"]
+_PLACEHOLDER_PATTERNS = re.compile(
+    r"data:image/|placeholder|spacer|blank\.(gif|png)|1x1|loading.*\.(gif|png|svg)", re.I
+)
+
+
+def _parse_srcset_best(srcset: str) -> str | None:
+    """从 srcset 中提取最大分辨率的 URL"""
+    best_url, best_w = None, 0
+    for part in srcset.split(","):
+        part = part.strip()
+        tokens = part.split()
+        if len(tokens) >= 2:
+            url = tokens[0]
+            descriptor = tokens[-1]
+            try:
+                w = int(descriptor.rstrip("wx"))
+                if w > best_w:
+                    best_url, best_w = url, w
+            except ValueError:
+                pass
+        elif len(tokens) == 1 and tokens[0].startswith("http"):
+            best_url = tokens[0]
+    return best_url
+
+
+def _fix_lazy_images(html: str) -> str:
+    """在正文提取前，将懒加载图片的真实 URL 写入 src"""
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "lxml")
+
+    for img in soup.find_all("img"):
+        src = img.get("src", "")
+        is_placeholder = not src or _PLACEHOLDER_PATTERNS.search(src)
+
+        if is_placeholder:
+            for attr in _LAZY_ATTRS:
+                val = img.get(attr, "")
+                if val and val.startswith("http"):
+                    img["src"] = val
+                    break
+
+            if not img.get("src") or _PLACEHOLDER_PATTERNS.search(img.get("src", "")):
+                srcset = img.get("srcset", "")
+                if srcset:
+                    best = _parse_srcset_best(srcset)
+                    if best:
+                        img["src"] = best
+
+    for noscript in soup.find_all("noscript"):
+        noscript_img = noscript.find("img")
+        if noscript_img and noscript_img.get("src"):
+            prev = noscript.find_previous_sibling("img")
+            if prev:
+                prev["src"] = noscript_img["src"]
+                noscript.decompose()
+
+    return str(soup)
+
+
+def _extract_with_trafilatura(html: str, url: str | None = None) -> str | None:
+    """用 trafilatura 提取正文，输出 Markdown"""
+    import trafilatura
+
+    html = _fix_lazy_images(html)
+
+    result = trafilatura.extract(
+        html,
+        url=url,
+        output_format="markdown",
+        include_images=True,
+        include_links=True,
+        include_tables=True,
+        include_comments=False,
+        include_formatting=True,
+        favor_recall=True,
+    )
+    return result
+
+
+_BLOCKED_PAGE_PATTERNS = [
+    # Cloudflare
+    (re.compile(r"cf-browser-verification|cf-challenge|checking your browser", re.I), "cloudflare_challenge"),
+    (re.compile(r"ray\s*id|cloudflare", re.I), "cloudflare_block"),
+    # HTTP 错误页
+    (re.compile(r"403\s*forbidden|access\s*denied|you don'?t have permission", re.I), "403_forbidden"),
+    (re.compile(r"401\s*unauthorized", re.I), "401_unauthorized"),
+    # 验证码 / 人机验证
+    (re.compile(r"captcha|recaptcha|hcaptcha|verify you are human|are you a robot", re.I), "captcha"),
+    # 付费墙
+    (re.compile(r"subscribe to (read|continue|access)|paywall|premium content|sign in to read", re.I), "paywall"),
+    # 通用拦截
+    (re.compile(r"please enable (javascript|cookies)|browser.*not supported", re.I), "browser_requirement"),
+]
+
+
+def _detect_anti_scraping(html: str, plain_text: str) -> str | None:
+    """检测反爬/拦截页面，返回原因字符串或 None（正常）"""
+    # 纯文本太短，高度可疑
+    if len(plain_text.strip()) < 50:
+        return "content_too_short"
+
+    for pattern, reason in _BLOCKED_PAGE_PATTERNS:
+        if pattern.search(html) or pattern.search(plain_text):
+            return reason
+
+    return None
+
+
+def _compare_quality(enriched_text: str, original_text: str) -> dict:
+    """对比 enriched 与 original 内容质量，决定是否采用 enriched"""
+    enriched_len = len(enriched_text.strip())
+    original_len = len(original_text.strip())
+    result = {"enriched_len": enriched_len, "original_len": original_len}
+
+    if enriched_len < 100:
+        result["use_enriched"] = False
+        result["reason"] = f"enriched too short ({enriched_len} chars)"
+        return result
+
+    if original_len < 100:
+        result["use_enriched"] = True
+        result["reason"] = f"original too short ({original_len} chars), prefer enriched"
+        return result
+
+    if enriched_len < original_len * 0.5:
+        result["use_enriched"] = False
+        result["reason"] = f"enriched shrunk to {enriched_len}/{original_len} ({enriched_len*100//original_len}%)"
+        return result
+
+    result["use_enriched"] = True
+    result["reason"] = "enriched passed quality check"
+    return result
+
+
 def _fetch_with_browserless(url: str, browserless_url: str, timeout: int = 60) -> str:
-    """使用 Browserless 渲染 JS 页面并提取清理后的 HTML"""
+    """使用 Browserless 渲染 JS 页面，返回原始 HTML（由调用方统一提取）"""
     import httpx
-    from readability import Document
 
     # Browserless API: POST /content with JSON {url}
     endpoint = f"{browserless_url.rstrip('/')}/content"
@@ -208,101 +427,7 @@ def _fetch_with_browserless(url: str, browserless_url: str, timeout: int = 60) -
             params={"waitFor": "networkidle0"},  # 等待网络空闲
         )
         resp.raise_for_status()
-        html = resp.text
-
-    # 用 Readability 提取正文，再用白名单清理
-    doc = Document(html)
-    readable_html = doc.summary()
-    return _sanitize_html(readable_html)
-
-
-def _handle_download_video(context: dict) -> dict:
-    """下载视频 — yt-dlp"""
-    config = context["step_config"]
-    quality = config.get("quality", "1080p")
-    url = context["content_url"]
-    if not url:
-        raise ValueError("No URL for video download")
-
-    logger.info(f"[download_video] quality={quality}, url={url}")
-
-    from app.core.config import settings
-    import yt_dlp
-
-    output_dir = os.path.join(settings.MEDIA_DIR, context["content_id"])
-    os.makedirs(output_dir, exist_ok=True)
-
-    quality_map = {
-        "360p": "bestvideo[height<=360]+bestaudio/best[height<=360]/best",
-        "720p": "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
-        "1080p": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
-        "best": "bestvideo+bestaudio/best",
-    }
-
-    ydl_opts = {
-        "outtmpl": os.path.join(output_dir, "%(title)s.%(ext)s"),
-        "format": quality_map.get(quality, quality_map["1080p"]),
-        "writesubtitles": True,
-        "writeautomaticsub": True,
-        "subtitleslangs": ["zh", "en", "zh-Hans", "zh-Hant"],
-        "writethumbnail": True,
-        "merge_output_format": "mp4",
-        "quiet": True,
-        "no_warnings": True,
-    }
-
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-
-    # 查找下载的文件
-    video_path = None
-    subtitle_path = None
-    thumbnail_path = None
-    for f in os.listdir(output_dir):
-        full = os.path.join(output_dir, f)
-        if f.endswith((".mp4", ".webm", ".mkv")):
-            video_path = full
-        elif f.endswith((".srt", ".vtt", ".ass")):
-            if subtitle_path is None:
-                subtitle_path = full
-        elif f.endswith((".jpg", ".jpeg", ".png", ".webp")):
-            thumbnail_path = full
-
-    # 封面兜底: yt-dlp 未下载到封面时，用 ffmpeg 从视频截取
-    if not thumbnail_path and video_path:
-        thumbnail_path = _extract_thumbnail_ffmpeg(video_path, output_dir)
-
-    platform = "youtube" if "youtube" in url or "youtu.be" in url else "bilibili" if "bilibili" in url else "other"
-
-    # 回写 ContentItem 的标题和发布时间
-    upload_date = info.get("upload_date")  # yt-dlp 返回 "YYYYMMDD" 格式
-    from app.core.database import SessionLocal
-    from app.models.content import ContentItem
-    from datetime import datetime, timezone
-    with SessionLocal() as db:
-        content = db.get(ContentItem, context["content_id"])
-        if content:
-            if info.get("title"):
-                content.title = info["title"]
-            if upload_date and not content.published_at:
-                try:
-                    content.published_at = datetime.strptime(upload_date, "%Y%m%d").replace(tzinfo=timezone.utc)
-                except ValueError:
-                    pass
-            db.commit()
-
-    return {
-        "status": "downloaded",
-        "platform": platform,
-        "file_path": video_path or "",
-        "subtitle_path": subtitle_path or "",
-        "thumbnail_path": thumbnail_path or "",
-        "title": info.get("title", ""),
-        "duration": info.get("duration"),
-        "width": info.get("width"),
-        "height": info.get("height"),
-        "upload_date": upload_date or "",
-    }
+        return resp.text
 
 
 def _extract_thumbnail_ffmpeg(video_path: str, output_dir: str) -> str | None:
@@ -323,16 +448,16 @@ def _extract_thumbnail_ffmpeg(video_path: str, output_dir: str) -> str | None:
             capture_output=True, timeout=30,
         )
         if os.path.exists(thumbnail_path) and os.path.getsize(thumbnail_path) > 0:
-            logger.info(f"[download_video] Thumbnail extracted via ffmpeg: {thumbnail_path}")
+            logger.info(f"[localize_media] Thumbnail extracted via ffmpeg: {thumbnail_path}")
             return thumbnail_path
     except Exception as e:
-        logger.warning(f"[download_video] ffmpeg thumbnail extraction failed: {e}")
+        logger.warning(f"[localize_media] ffmpeg thumbnail extraction failed: {e}")
     return None
 
 
 def _handle_extract_audio(context: dict) -> dict:
     """音频提取 — FFmpeg"""
-    video_path = context["previous_steps"].get("download_video", {}).get("file_path", "")
+    video_path = context["previous_steps"].get("localize_media", {}).get("file_path", "")
     if not video_path or not os.path.exists(video_path):
         return {"status": "skipped", "reason": "no video file"}
 
@@ -401,7 +526,7 @@ def _handle_extract_audio(context: dict) -> dict:
 
 def _handle_transcribe_content(context: dict) -> dict:
     """字幕提取 — 优先字幕文件，降级到 Whisper ASR"""
-    download_output = context["previous_steps"].get("download_video", {})
+    download_output = context["previous_steps"].get("localize_media", {})
     subtitle_path = download_output.get("subtitle_path", "")
 
     # 策略 1: 读取 yt-dlp 下载的字幕文件
@@ -417,7 +542,7 @@ def _handle_transcribe_content(context: dict) -> dict:
             content = db.get(ContentItem, context["content_id"])
             if content:
                 content.processed_content = text
-                db.commit()
+                _commit_with_retry(db)
 
         return {"status": "transcribed", "text_length": len(text), "source": "subtitle_file"}
 
@@ -448,7 +573,7 @@ def _handle_transcribe_content(context: dict) -> dict:
             content = db.get(ContentItem, context["content_id"])
             if content:
                 content.processed_content = text
-                db.commit()
+                _commit_with_retry(db)
 
         return {"status": "transcribed", "text_length": len(text), "source": "whisper_asr"}
 
@@ -569,7 +694,7 @@ def _handle_translate_content(context: dict) -> dict:
         content = db.get(ContentItem, content_id)
         if content:
             content.processed_content = translated
-            db.commit()
+            _commit_with_retry(db)
 
     return {"status": "translated", "target_language": target_lang, "text_length": len(translated)}
 
@@ -636,7 +761,7 @@ def _handle_analyze_content(context: dict) -> dict:
         content = db.get(ContentItem, content_id)
         if content:
             content.analysis_result = json.dumps(result, ensure_ascii=False)
-            db.commit()
+            _commit_with_retry(db)
 
     return {"status": "analyzed", "result_keys": list(result.keys()) if isinstance(result, dict) else []}
 
@@ -758,13 +883,278 @@ def _handle_publish_content(context: dict) -> dict:
     return {"status": "skipped", "reason": f"channel '{channel}' not implemented"}
 
 
+def _handle_localize_media(context: dict) -> dict:
+    """媒体本地化 — 检测并下载内容中的图片/视频/音频，创建 MediaItem，改写URL
+
+    处理流程:
+    1. 检测内容 URL 是否为视频页面 (bilibili/youtube)
+       - 是 → yt-dlp 下载视频+字幕+封面 → 创建 video MediaItem
+       - 否 → 扫描 HTML 中的媒体标签
+    2. 扫描 <img> → 创建 image MediaItem, 下载, 改写 src
+    3. 更新 processed_content
+    """
+    import hashlib
+    import httpx
+    from urllib.parse import urlparse
+    from bs4 import BeautifulSoup
+
+    from app.core.config import settings
+    from app.core.database import SessionLocal
+    from app.models.content import ContentItem, MediaItem, MediaType
+
+    content_id = context["content_id"]
+    content_url = context.get("content_url", "")
+
+    VIDEO_URL_PATTERNS = [
+        r'bilibili\.com/video/', r'youtube\.com/watch',
+        r'youtu\.be/', r'b23\.tv/',
+    ]
+
+    # Load content
+    with SessionLocal() as db:
+        content = db.get(ContentItem, content_id)
+        if not content:
+            return {"status": "skipped", "reason": "content not found"}
+        html_content = content.processed_content or ""
+        raw_data_json = content.raw_data
+
+    # Check: is the content URL a video page?
+    is_video_url = False
+    if content_url:
+        for pattern in VIDEO_URL_PATTERNS:
+            if re.search(pattern, content_url):
+                is_video_url = True
+                break
+
+    result = {
+        "status": "done",
+        "media_items_created": 0,
+        "has_video": False,
+        "file_path": "",
+        "subtitle_path": "",
+        "thumbnail_path": "",
+        "duration": None,
+    }
+
+    media_dir = os.path.join(settings.MEDIA_DIR, content_id)
+    os.makedirs(media_dir, exist_ok=True)
+
+    # ---- 1. Video URL → yt-dlp download ----
+    if is_video_url:
+        logger.info(f"[localize_media] Video URL detected: {content_url}")
+        try:
+            import yt_dlp
+
+            quality_map = {
+                "360p": "bestvideo[height<=360]+bestaudio/best[height<=360]/best",
+                "720p": "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
+                "1080p": "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
+                "best": "bestvideo+bestaudio/best",
+            }
+
+            ydl_opts = {
+                "outtmpl": os.path.join(media_dir, "%(title)s.%(ext)s"),
+                "format": quality_map["1080p"],
+                "writesubtitles": True,
+                "writeautomaticsub": True,
+                "subtitleslangs": ["zh", "en", "zh-Hans", "zh-Hant"],
+                "writethumbnail": True,
+                "merge_output_format": "mp4",
+                "quiet": True,
+                "no_warnings": True,
+            }
+
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(content_url, download=True)
+
+            # Find downloaded files
+            video_path = None
+            subtitle_path = None
+            thumbnail_path = None
+            for f in os.listdir(media_dir):
+                full = os.path.join(media_dir, f)
+                if f.endswith((".mp4", ".webm", ".mkv")):
+                    video_path = full
+                elif f.endswith((".srt", ".vtt", ".ass")):
+                    if subtitle_path is None:
+                        subtitle_path = full
+                elif f.endswith((".jpg", ".jpeg", ".png", ".webp")):
+                    thumbnail_path = full
+
+            # Fallback thumbnail via ffmpeg
+            if not thumbnail_path and video_path:
+                thumbnail_path = _extract_thumbnail_ffmpeg(video_path, media_dir)
+
+            platform = "youtube" if "youtube" in content_url or "youtu.be" in content_url else "bilibili" if "bilibili" in content_url else "other"
+
+            # Create video MediaItem
+            metadata = {
+                "duration": info.get("duration"),
+                "width": info.get("width"),
+                "height": info.get("height"),
+                "platform": platform,
+                "subtitle_path": subtitle_path or "",
+                "thumbnail_path": thumbnail_path or "",
+            }
+
+            with SessionLocal() as db:
+                media_item = MediaItem(
+                    content_id=content_id,
+                    media_type=MediaType.VIDEO.value,
+                    original_url=content_url,
+                    local_path=video_path,
+                    filename=os.path.basename(video_path) if video_path else None,
+                    status="downloaded" if video_path else "failed",
+                    metadata_json=json.dumps(metadata, ensure_ascii=False),
+                )
+                db.add(media_item)
+
+                # Update content title and published_at from video info
+                content = db.get(ContentItem, content_id)
+                if content:
+                    if info.get("title"):
+                        content.title = info["title"]
+                    upload_date = info.get("upload_date")
+                    if upload_date and not content.published_at:
+                        try:
+                            from datetime import datetime, timezone
+                            content.published_at = datetime.strptime(upload_date, "%Y%m%d").replace(tzinfo=timezone.utc)
+                        except ValueError:
+                            pass
+                    # Set processed_content to video description
+                    desc = info.get("description", "")
+                    if desc:
+                        content.processed_content = desc
+
+                _commit_with_retry(db)
+
+            result["has_video"] = True
+            result["file_path"] = video_path or ""
+            result["subtitle_path"] = subtitle_path or ""
+            result["thumbnail_path"] = thumbnail_path or ""
+            result["duration"] = info.get("duration")
+            result["title"] = info.get("title", "")
+            result["platform"] = platform
+            result["width"] = info.get("width")
+            result["height"] = info.get("height")
+            result["media_items_created"] += 1
+
+        except Exception as e:
+            logger.error(f"[localize_media] Video download failed: {e}")
+            # Create failed MediaItem for tracking
+            with SessionLocal() as db:
+                media_item = MediaItem(
+                    content_id=content_id,
+                    media_type=MediaType.VIDEO.value,
+                    original_url=content_url,
+                    status="failed",
+                    metadata_json=json.dumps({"error": str(e)[:200]}),
+                )
+                db.add(media_item)
+                _commit_with_retry(db)
+            result["media_items_created"] += 1
+
+        return result
+
+    # ---- 2. Non-video: scan HTML for images ----
+    # Get HTML content to scan
+    if not html_content:
+        # Try extracting from raw_data
+        if raw_data_json:
+            try:
+                raw = json.loads(raw_data_json)
+                contents = raw.get("content", [])
+                if isinstance(contents, list) and contents:
+                    html_content = contents[0].get("value", "")
+                if not html_content:
+                    html_content = raw.get("summary", "")
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+    if not html_content:
+        logger.info(f"[localize_media] No HTML content to scan for {content_id}")
+        return result
+
+    soup = BeautifulSoup(html_content, "lxml")
+    images_dir = os.path.join(media_dir, "images")
+    images_downloaded = 0
+
+    # Scan <img> tags
+    for img in soup.find_all("img"):
+        src = img.get("src", "")
+        if not src or src.startswith("data:") or src.startswith("/api/media/"):
+            continue
+
+        # Skip very small images (likely icons/trackers)
+        width = img.get("width", "")
+        height = img.get("height", "")
+        try:
+            if width and int(width) < 32:
+                continue
+            if height and int(height) < 32:
+                continue
+        except (ValueError, TypeError):
+            pass
+
+        try:
+            os.makedirs(images_dir, exist_ok=True)
+            url_hash = hashlib.md5(src.encode()).hexdigest()[:12]
+            parsed = urlparse(src)
+            ext = os.path.splitext(parsed.path)[1] or ".jpg"
+            if ext not in (".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg"):
+                ext = ".jpg"
+            filename = f"{url_hash}{ext}"
+            local_path = os.path.join(images_dir, filename)
+
+            # Download image
+            with httpx.Client(timeout=15, follow_redirects=True) as client:
+                resp = client.get(src)
+                resp.raise_for_status()
+                with open(local_path, "wb") as f:
+                    f.write(resp.content)
+
+            # Create MediaItem
+            with SessionLocal() as db:
+                media_item = MediaItem(
+                    content_id=content_id,
+                    media_type=MediaType.IMAGE.value,
+                    original_url=src,
+                    local_path=local_path,
+                    filename=filename,
+                    status="downloaded",
+                    metadata_json=json.dumps({"alt": img.get("alt", "")}),
+                )
+                db.add(media_item)
+                _commit_with_retry(db)
+
+            # Rewrite URL in HTML
+            img["src"] = f"/api/media/{content_id}/images/{filename}"
+            images_downloaded += 1
+            result["media_items_created"] += 1
+
+        except Exception as e:
+            logger.warning(f"[localize_media] Failed to download image {src[:80]}: {e}")
+            continue
+
+    # Update processed_content with rewritten HTML
+    if images_downloaded > 0:
+        with SessionLocal() as db:
+            content = db.get(ContentItem, content_id)
+            if content:
+                content.processed_content = str(soup)
+                _commit_with_retry(db)
+
+    logger.info(f"[localize_media] content={content_id}: {images_downloaded} images downloaded")
+    return result
+
+
 # step_type → handler
 STEP_HANDLERS = {
     "enrich_content": _handle_enrich_content,
-    "download_video": _handle_download_video,
     "extract_audio": _handle_extract_audio,
     "transcribe_content": _handle_transcribe_content,
     "translate_content": _handle_translate_content,
     "analyze_content": _handle_analyze_content,
     "publish_content": _handle_publish_content,
+    "localize_media": _handle_localize_media,
 }
