@@ -1,15 +1,15 @@
 """Migrate RSSHub routes from url to config_json
 
-Revision ID: 0010
-Revises: 0009
+Revision ID: 0010_migrate_rsshub_routes
+Revises: 0009_error_retry_config
 Create Date: 2026-02-15
 """
 from alembic import op
 from sqlalchemy import text
 import json
 
-revision = '0010'
-down_revision = '0009'
+revision = '0010_migrate_rsshub_routes'
+down_revision = '0009_error_retry_config'
 branch_labels = None
 depends_on = None
 
