@@ -238,11 +238,24 @@ alembic downgrade -1  # 回滚一个版本
 
 ## 🐛 已知问题 / 注意事项
 
-1. **迁移脚本仅处理非 HTTP URL**：如果某个 RSSHub 源的 `url` 字段已经是完整 HTTP URL（如 `http://rsshub:1200/bilibili/user/video/12345`），迁移脚本会跳过，需要手动编辑改为路由路径。
+1. **自动修正错误配置**：迁移脚本会自动识别并修正错误配置的数据源。如果某个 `rss.hub` 类型的源使用完整 HTTP URL（如 `https://v2ex.com/index.xml`），会自动改为 `rss.standard` 类型。
 
 2. **OPML 导出包含内部 URL**：导出的 OPML 中 RSSHub 源的 `xmlUrl` 包含内部服务地址（如 `http://rsshub:1200`），如果导入到外部 RSS 阅读器需要修改为公开的 RSSHub 实例地址。
 
 3. **前端验证仅为提示**：HTML5 `required` 属性可被绕过，真正的验证在后端。前端验证主要提升用户体验。
+
+## 🔧 部署后的修复记录
+
+### 2026-02-15 修复错误配置的数据源
+
+**问题**: v2ex 数据源配置错误
+- `source_type`: `rss.hub`（错误）
+- `url`: `https://v2ex.com/index.xml`（标准 RSS feed）
+- `config_json`: 空
+
+**修复**:
+- 手动将 source_type 改为 `rss.standard`
+- 更新迁移脚本，自动处理此类错误配置
 
 ---
 

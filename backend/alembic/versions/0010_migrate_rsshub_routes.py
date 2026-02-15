@@ -26,6 +26,7 @@ def upgrade():
     """)).fetchall()
 
     migrated_count = 0
+    fixed_misconfig_count = 0
 
     for source in sources:
         config = json.loads(source.config_json or '{}')
@@ -34,9 +35,19 @@ def upgrade():
         if config.get('rsshub_route'):
             continue
 
-        # 如果 url 看起来像路由（不是完整 HTTP URL），迁移到 config_json
         url = source.url.strip()
-        if not url.startswith(('http://', 'https://')):
+
+        # 如果 url 是完整的 HTTP URL，这是一个错误配置的数据源
+        # 应该改为 rss.standard 类型
+        if url.startswith(('http://', 'https://')):
+            conn.execute(text("""
+                UPDATE source_configs
+                SET source_type = 'rss.standard'
+                WHERE id = :id
+            """), {"id": source.id})
+            fixed_misconfig_count += 1
+        else:
+            # 如果 url 看起来像路由路径，迁移到 config_json
             config['rsshub_route'] = url
             conn.execute(text("""
                 UPDATE source_configs
@@ -46,6 +57,8 @@ def upgrade():
             migrated_count += 1
 
     print(f"Migrated {migrated_count} RSSHub sources from url to config_json.rsshub_route")
+    if fixed_misconfig_count > 0:
+        print(f"Fixed {fixed_misconfig_count} misconfigured sources (changed rss.hub with HTTP URL to rss.standard)")
 
 
 def downgrade():
