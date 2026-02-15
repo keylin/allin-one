@@ -42,6 +42,7 @@ docker compose up -d --build
 - Vue: `<script setup>` Composition API
 - 命名: snake_case (Python), camelCase (JS), kebab-case (文件名)
 - Git: `feat:`, `fix:`, `refactor:`, `docs:`, `chore:` 前缀
+- **时间戳**: 全项目使用 `from app.core.time import utcnow`，禁止 `datetime.now(timezone.utc)`（详见 `backend/CLAUDE.md` 时间戳陷阱章节）
 
 ## 关键决策
 

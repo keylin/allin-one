@@ -3,11 +3,12 @@
 import json
 import logging
 import os
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 
 from openai import AsyncOpenAI
 
 from app.core.config import settings, get_llm_config
+from app.core.time import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +18,7 @@ async def generate_daily_report():
     from app.core.database import SessionLocal
     from app.models.content import ContentItem, SourceConfig
 
-    now = datetime.now(timezone.utc)
+    now = utcnow()
     since = now - timedelta(hours=24)
 
     with SessionLocal() as db:
@@ -91,7 +92,7 @@ async def generate_weekly_report():
     from app.core.database import SessionLocal
     from app.models.content import ContentItem, SourceConfig
 
-    now = datetime.now(timezone.utc)
+    now = utcnow()
     since = now - timedelta(days=7)
 
     with SessionLocal() as db:

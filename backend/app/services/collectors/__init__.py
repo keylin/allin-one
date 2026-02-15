@@ -1,10 +1,10 @@
 """采集服务 — 调度分发"""
 
 import logging
-from datetime import datetime, timezone
 
 import httpx
 from sqlalchemy.orm import Session
+from app.core.time import utcnow
 from app.models.content import SourceConfig, ContentItem, CollectionRecord
 from app.services.collectors.rss import RSSCollector
 from app.services.collectors.web_scraper import ScraperCollector
@@ -57,7 +57,7 @@ async def collect_source(source: SourceConfig, db: Session) -> list[ContentItem]
             record.status = "completed"
             record.items_found = 0
             record.items_new = 0
-            record.completed_at = datetime.now(timezone.utc)
+            record.completed_at = utcnow()
             db.commit()
             return []
 
@@ -66,7 +66,7 @@ async def collect_source(source: SourceConfig, db: Session) -> list[ContentItem]
         record.status = "completed"
         record.items_found = len(new_items)
         record.items_new = len(new_items)
-        record.completed_at = datetime.now(timezone.utc)
+        record.completed_at = utcnow()
         db.commit()
 
         logger.info(f"[collect] {source.name}: found {len(new_items)} new items")
@@ -75,7 +75,7 @@ async def collect_source(source: SourceConfig, db: Session) -> list[ContentItem]
     except Exception as e:
         record.status = "failed"
         record.error_message = str(e)[:500]
-        record.completed_at = datetime.now(timezone.utc)
+        record.completed_at = utcnow()
         db.commit()
 
         # 暂时性网络/上游错误只记 WARNING，不打堆栈

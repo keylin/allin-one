@@ -1,12 +1,12 @@
 """提示词模板模型"""
 
 import uuid
-from datetime import datetime, timezone
 from enum import Enum
 
 from sqlalchemy import Column, String, Boolean, DateTime, Text
 
 from app.core.database import Base
+from app.core.time import utcnow
 
 
 class TemplateType(str, Enum):
@@ -33,6 +33,5 @@ class PromptTemplate(Base):
     user_prompt = Column(Text, nullable=False)
     output_format = Column(Text)
     is_default = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
-                        onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    created_at = Column(DateTime, default=utcnow)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)

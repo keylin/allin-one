@@ -4,10 +4,10 @@ import { useRoute, useRouter } from 'vue-router'
 import dayjs from 'dayjs'
 import { useSourcesStore } from '@/stores/sources'
 import { useToast } from '@/composables/useToast'
+import { useScrollLock } from '@/composables/useScrollLock'
 import SourceFormModal from '@/components/source-form-modal.vue'
 import SourceDetailPanel from '@/components/source-detail-panel.vue'
 import DetailDrawer from '@/components/detail-drawer.vue'
-import ConfirmDialog from '@/components/confirm-dialog.vue'
 import { importOPML, exportOPML } from '@/api/sources'
 
 const route = useRoute()
@@ -19,21 +19,26 @@ const fileInputRef = ref(null)
 
 const searchQuery = ref(route.query.q || '')
 const filterType = ref(route.query.type || '')
+const sortBy = ref(route.query.sort_by || 'created_at')
+const sortOrder = ref(route.query.sort_order || 'desc')
 
 const showFormModal = ref(false)
 const editingSource = ref(null)
 const deletingSource = ref(null)
 const togglingId = ref(null)
-const showCascadeDialog = ref(false)
-const cascadeCount = ref(0)
+const showDeleteDialog = ref(false)
+const deleteContentChecked = ref(false)
 const collectingId = ref(null)
 const collectingAll = ref(false)
 
 // Batch ops
 const selectedIds = ref([])
 const showBatchDeleteDialog = ref(false)
-const batchCascadeCount = ref(0)
-const showBatchCascadeDialog = ref(false)
+const batchDeleteContentChecked = ref(false)
+const batchContentCount = ref(0)
+
+useScrollLock(showDeleteDialog)
+useScrollLock(showBatchDeleteDialog)
 
 // Detail drawer
 const selectedSource = ref(null)
@@ -69,6 +74,8 @@ function syncQueryParams() {
   const query = {}
   if (searchQuery.value) query.q = searchQuery.value
   if (filterType.value) query.type = filterType.value
+  if (sortBy.value !== 'created_at') query.sort_by = sortBy.value
+  if (sortOrder.value !== 'desc') query.sort_order = sortOrder.value
   if (store.currentPage > 1) query.page = String(store.currentPage)
   router.replace({ query }).catch(() => {})
 }
@@ -77,12 +84,16 @@ function fetchWithFilters() {
   const params = {}
   if (searchQuery.value) params.q = searchQuery.value
   if (filterType.value) params.source_type = filterType.value
+  if (sortBy.value) params.sort_by = sortBy.value
+  if (sortOrder.value) params.sort_order = sortOrder.value
   store.fetchSources(params)
   syncQueryParams()
 }
 
 onMounted(() => {
   if (route.query.page) store.currentPage = parseInt(route.query.page) || 1
+  if (route.query.sort_by) sortBy.value = route.query.sort_by
+  if (route.query.sort_order) sortOrder.value = route.query.sort_order
   fetchWithFilters()
 })
 
@@ -92,6 +103,17 @@ function handleSearch() {
 }
 
 function handleFilterChange() {
+  store.currentPage = 1
+  fetchWithFilters()
+}
+
+function handleSort(field) {
+  if (sortBy.value === field) {
+    sortOrder.value = sortOrder.value === 'asc' ? 'desc' : 'asc'
+  } else {
+    sortBy.value = field
+    sortOrder.value = 'desc'
+  }
   store.currentPage = 1
   fetchWithFilters()
 }
@@ -143,26 +165,19 @@ async function handleFormSubmit(formData) {
   }
 }
 
-async function handleDelete(source) {
+function handleDelete(source) {
   deletingSource.value = source
-  const res = await store.deleteSource(source.id)
-  if (res.code === 0) {
-    toast.success('已删除', { title: source.name })
-    if (selectedSource.value?.id === source.id) {
-      selectedSource.value = null
-      drawerVisible.value = false
-    }
-  } else if (res.code === 1) {
-    cascadeCount.value = res.data.content_count
-    showCascadeDialog.value = true
-  }
+  deleteContentChecked.value = false
+  showDeleteDialog.value = true
 }
 
-async function handleCascadeDelete() {
-  showCascadeDialog.value = false
-  const res = await store.deleteSource(deletingSource.value.id, true)
+async function confirmDelete() {
+  showDeleteDialog.value = false
+  const cascade = deleteContentChecked.value
+  const res = await store.deleteSource(deletingSource.value.id, cascade)
   if (res.code === 0) {
-    toast.success('已删除数据源及关联内容', { title: deletingSource.value.name })
+    const msg = cascade ? '已删除数据源及关联内容' : '已删除数据源'
+    toast.success(msg, { title: deletingSource.value.name })
     if (selectedSource.value?.id === deletingSource.value.id) {
       selectedSource.value = null
       drawerVisible.value = false
@@ -239,23 +254,23 @@ function toggleSelectAll() {
   }
 }
 
-async function handleBatchDelete() {
-  showBatchDeleteDialog.value = false
-  const res = await store.batchDelete(selectedIds.value)
-  if (res.code === 0) {
-    toast.success(`已删除 ${res.data.deleted} 个数据源`)
-    selectedIds.value = []
-  } else if (res.code === 1) {
-    batchCascadeCount.value = res.data.content_count
-    showBatchCascadeDialog.value = true
-  }
+function openBatchDeleteDialog() {
+  batchDeleteContentChecked.value = false
+  batchContentCount.value = store.sources
+    .filter(s => selectedIds.value.includes(s.id))
+    .reduce((sum, s) => sum + (s.content_count || 0), 0)
+  showBatchDeleteDialog.value = true
 }
 
-async function handleBatchCascadeDelete() {
-  showBatchCascadeDialog.value = false
-  const res = await store.batchDelete(selectedIds.value, true)
+async function confirmBatchDelete() {
+  showBatchDeleteDialog.value = false
+  const cascade = batchDeleteContentChecked.value
+  const res = await store.batchDelete(selectedIds.value, cascade)
   if (res.code === 0) {
-    toast.success(`已删除 ${res.data.deleted} 个数据源及关联内容`)
+    const msg = cascade
+      ? `已删除 ${res.data.deleted} 个数据源及关联内容`
+      : `已删除 ${res.data.deleted} 个数据源`
+    toast.success(msg)
     selectedIds.value = []
   }
 }
@@ -268,6 +283,11 @@ function formatInterval(seconds) {
   if (seconds < 60) return `${seconds}秒`
   if (seconds < 3600) return `${Math.round(seconds / 60)}分钟`
   return `${Math.round(seconds / 3600)}小时`
+}
+
+function isOverdue(nextCollectionAt) {
+  if (!nextCollectionAt) return false
+  return dayjs.utc(nextCollectionAt).local().isBefore(dayjs())
 }
 
 // OPML import/export
@@ -365,7 +385,7 @@ function handleExport() {
         <span class="text-sm text-slate-500">已选 {{ selectedIds.length }}</span>
         <button
           class="px-3 py-1.5 text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-lg transition-all duration-200"
-          @click="showBatchDeleteDialog = true"
+          @click="openBatchDeleteDialog"
         >批量删除</button>
         <button
           class="px-3 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-100 rounded-lg transition-all duration-200"
@@ -440,12 +460,53 @@ function handleExport() {
                   @change="toggleSelectAll"
                 />
               </th>
-              <th class="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">名称</th>
+              <th
+                class="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer hover:bg-slate-100/80 transition-colors select-none"
+                @click="handleSort('name')"
+              >
+                <div class="flex items-center gap-1.5">
+                  <span>名称</span>
+                  <svg v-if="sortBy === 'name'" class="w-3.5 h-3.5 shrink-0" :class="sortOrder === 'asc' ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+                  </svg>
+                </div>
+              </th>
               <th class="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">类型</th>
               <th class="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">URL</th>
               <th class="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">流水线</th>
-              <th class="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">调度</th>
-              <th class="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">最近采集</th>
+              <th
+                class="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer hover:bg-slate-100/80 transition-colors select-none"
+                @click="handleSort('calculated_interval')"
+              >
+                <div class="flex items-center gap-1.5">
+                  <span>调度</span>
+                  <svg v-if="sortBy === 'calculated_interval'" class="w-3.5 h-3.5 shrink-0" :class="sortOrder === 'asc' ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+                  </svg>
+                </div>
+              </th>
+              <th
+                class="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer hover:bg-slate-100/80 transition-colors select-none"
+                @click="handleSort('last_collected_at')"
+              >
+                <div class="flex items-center gap-1.5">
+                  <span>最近采集</span>
+                  <svg v-if="sortBy === 'last_collected_at'" class="w-3.5 h-3.5 shrink-0" :class="sortOrder === 'asc' ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+                  </svg>
+                </div>
+              </th>
+              <th
+                class="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer hover:bg-slate-100/80 transition-colors select-none"
+                @click="handleSort('next_collection_at')"
+              >
+                <div class="flex items-center gap-1.5">
+                  <span>下次采集</span>
+                  <svg v-if="sortBy === 'next_collection_at'" class="w-3.5 h-3.5 shrink-0" :class="sortOrder === 'asc' ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+                  </svg>
+                </div>
+              </th>
               <th class="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wider">状态</th>
               <th class="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">操作</th>
             </tr>
@@ -481,10 +542,23 @@ function handleExport() {
               <td class="px-4 py-3 text-sm text-slate-400 max-w-[200px] truncate">{{ source.url || '-' }}</td>
               <td class="px-4 py-3 text-sm text-slate-500 truncate max-w-[120px]">{{ source.pipeline_template_name || '-' }}</td>
               <td class="px-4 py-3 text-sm text-slate-500">
-                <span v-if="source.schedule_enabled">每{{ formatInterval(source.schedule_interval) }}</span>
-                <span v-else class="text-slate-300">禁用</span>
+                <span v-if="!source.schedule_enabled" class="text-slate-300">禁用</span>
+                <span v-else-if="source.schedule_mode === 'manual'" class="text-slate-400">手动</span>
+                <span v-else-if="source.schedule_mode === 'fixed' && source.schedule_interval_override">
+                  每{{ formatInterval(source.schedule_interval_override) }}
+                </span>
+                <span v-else-if="source.schedule_mode === 'auto' && source.calculated_interval" class="text-indigo-600">
+                  智能 {{ formatInterval(source.calculated_interval) }}
+                </span>
+                <span v-else class="text-slate-300">-</span>
               </td>
               <td class="px-4 py-3 text-sm text-slate-400">{{ formatTime(source.last_collected_at) }}</td>
+              <td class="px-4 py-3 text-sm text-slate-400">
+                <span v-if="source.next_collection_at" :class="{ 'text-amber-600 font-medium': isOverdue(source.next_collection_at) }">
+                  {{ formatTime(source.next_collection_at) }}
+                </span>
+                <span v-else class="text-slate-300">-</span>
+              </td>
               <td class="px-4 py-3 text-center">
                 <span
                   class="inline-flex w-2 h-2 rounded-full"
@@ -536,8 +610,15 @@ function handleExport() {
           </div>
           <div v-if="source.url" class="text-xs text-slate-400 truncate mb-1">{{ source.url }}</div>
           <div class="flex items-center gap-3 text-xs text-slate-400">
-            <span v-if="source.schedule_enabled">每{{ formatInterval(source.schedule_interval) }}</span>
-            <span v-else class="text-slate-300">调度禁用</span>
+            <span v-if="!source.schedule_enabled" class="text-slate-300">调度禁用</span>
+            <span v-else-if="source.schedule_mode === 'manual'" class="text-slate-400">手动</span>
+            <span v-else-if="source.schedule_mode === 'fixed' && source.schedule_interval_override">
+              每{{ formatInterval(source.schedule_interval_override) }}
+            </span>
+            <span v-else-if="source.schedule_mode === 'auto' && source.calculated_interval" class="text-indigo-600">
+              智能 {{ formatInterval(source.calculated_interval) }}
+            </span>
+            <span v-else class="text-slate-300">-</span>
             <span class="text-slate-200">|</span>
             <span>{{ formatTime(source.last_collected_at) }}</span>
             <span
@@ -591,34 +672,96 @@ function handleExport() {
       @cancel="showFormModal = false"
     />
 
-    <ConfirmDialog
-      :visible="showCascadeDialog"
-      title="删除数据源"
-      :message="`「${deletingSource?.name}」关联了 ${cascadeCount} 条历史内容及处理记录，删除数据源将同时清除所有关联数据，此操作不可恢复。`"
-      confirm-text="删除全部"
-      :danger="true"
-      @confirm="handleCascadeDelete"
-      @cancel="showCascadeDialog = false"
-    />
+    <!-- 单个删除确认 -->
+    <Transition name="modal">
+      <div v-if="showDeleteDialog" class="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm" @click="showDeleteDialog = false"></div>
+        <div class="relative bg-white rounded-2xl shadow-xl w-full max-w-md p-6 transform transition-all">
+          <div class="flex items-start gap-4">
+            <div class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 bg-rose-50">
+              <svg class="w-5 h-5 text-rose-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+            </div>
+            <div class="flex-1">
+              <h3 class="text-base font-semibold text-slate-900 tracking-tight">删除数据源</h3>
+              <p class="text-sm text-slate-500 mt-1.5 leading-relaxed">
+                确定要删除「{{ deletingSource?.name }}」吗？
+              </p>
+              <label
+                v-if="deletingSource?.content_count > 0"
+                class="flex items-center gap-2 mt-3 px-3 py-2.5 rounded-xl bg-slate-50 cursor-pointer select-none group"
+              >
+                <input
+                  v-model="deleteContentChecked"
+                  type="checkbox"
+                  class="w-4 h-4 rounded border-slate-300 text-rose-600 focus:ring-rose-500"
+                />
+                <span class="text-sm text-slate-600 group-hover:text-slate-800">
+                  同时删除 {{ deletingSource.content_count }} 条关联内容
+                  <span class="text-xs text-slate-400">（不可恢复）</span>
+                </span>
+              </label>
+            </div>
+          </div>
+          <div class="flex justify-end gap-3 mt-6">
+            <button
+              class="px-4 py-2.5 text-sm font-medium text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-all duration-200"
+              @click="showDeleteDialog = false"
+            >取消</button>
+            <button
+              class="px-4 py-2.5 text-sm font-medium text-white rounded-xl shadow-sm transition-all duration-200 bg-rose-600 hover:bg-rose-700 active:bg-rose-800 shadow-rose-200"
+              @click="confirmDelete"
+            >删除</button>
+          </div>
+        </div>
+      </div>
+    </Transition>
 
-    <ConfirmDialog
-      :visible="showBatchDeleteDialog"
-      title="批量删除"
-      :message="`确定要删除选中的 ${selectedIds.length} 个数据源吗？`"
-      confirm-text="删除"
-      :danger="true"
-      @confirm="handleBatchDelete"
-      @cancel="showBatchDeleteDialog = false"
-    />
-
-    <ConfirmDialog
-      :visible="showBatchCascadeDialog"
-      title="批量删除"
-      :message="`选中的数据源共关联 ${batchCascadeCount} 条内容及处理记录，删除将同时清除所有关联数据，此操作不可恢复。`"
-      confirm-text="删除全部"
-      :danger="true"
-      @confirm="handleBatchCascadeDelete"
-      @cancel="showBatchCascadeDialog = false"
-    />
+    <!-- 批量删除确认 -->
+    <Transition name="modal">
+      <div v-if="showBatchDeleteDialog" class="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm" @click="showBatchDeleteDialog = false"></div>
+        <div class="relative bg-white rounded-2xl shadow-xl w-full max-w-md p-6 transform transition-all">
+          <div class="flex items-start gap-4">
+            <div class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 bg-rose-50">
+              <svg class="w-5 h-5 text-rose-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+            </div>
+            <div class="flex-1">
+              <h3 class="text-base font-semibold text-slate-900 tracking-tight">批量删除</h3>
+              <p class="text-sm text-slate-500 mt-1.5 leading-relaxed">
+                确定要删除选中的 {{ selectedIds.length }} 个数据源吗？
+              </p>
+              <label
+                v-if="batchContentCount > 0"
+                class="flex items-center gap-2 mt-3 px-3 py-2.5 rounded-xl bg-slate-50 cursor-pointer select-none group"
+              >
+                <input
+                  v-model="batchDeleteContentChecked"
+                  type="checkbox"
+                  class="w-4 h-4 rounded border-slate-300 text-rose-600 focus:ring-rose-500"
+                />
+                <span class="text-sm text-slate-600 group-hover:text-slate-800">
+                  同时删除 {{ batchContentCount }} 条关联内容
+                  <span class="text-xs text-slate-400">（不可恢复）</span>
+                </span>
+              </label>
+            </div>
+          </div>
+          <div class="flex justify-end gap-3 mt-6">
+            <button
+              class="px-4 py-2.5 text-sm font-medium text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-all duration-200"
+              @click="showBatchDeleteDialog = false"
+            >取消</button>
+            <button
+              class="px-4 py-2.5 text-sm font-medium text-white rounded-xl shadow-sm transition-all duration-200 bg-rose-600 hover:bg-rose-700 active:bg-rose-800 shadow-rose-200"
+              @click="confirmBatchDelete"
+            >删除</button>
+          </div>
+        </div>
+      </div>
+    </Transition>
   </div>
 </template>

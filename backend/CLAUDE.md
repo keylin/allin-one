@@ -24,7 +24,29 @@ Procrastinate worker 等非 FastAPI 入口必须在使用 ORM 前执行 `import 
 - **PostgreSQL** 为主数据库，单一 PG 实例单一 database (`allinone`)
 - Procrastinate 任务队列使用同一 PG database（自动创建 `procrastinate_*` 表）
 - 主键: `Column(String, primary_key=True, default=lambda: uuid.uuid4().hex)`
-- 时间戳: 一律 **naive UTC** (`datetime.now(timezone.utc).replace(tzinfo=None)`)，禁止带时区信息的 datetime（PG `TIMESTAMP WITHOUT TIME ZONE` 会做时区转换导致双重偏移）
+- 时间戳: 一律 **naive UTC**，统一调用 `from app.core.time import utcnow`，禁止直接使用 `datetime.now(timezone.utc)`
+
+### 时间戳陷阱 — 必读
+
+**绝对禁止**: `datetime.now(timezone.utc)` 直接写入数据库或与数据库读出的值比较。
+
+**原因**: PG 列类型是 `TIMESTAMP WITHOUT TIME ZONE`。当写入带 `tzinfo` 的 datetime 时，PG 会按 server timezone 做 UTC→本地转换后存储。读出时又被当作 UTC，导致双重偏移（曾导致定时采集延迟 8 小时的线上事故）。
+
+**正确做法**:
+```python
+from app.core.time import utcnow
+
+now = utcnow()                    # 返回 naive UTC datetime
+item.updated_at = utcnow()        # 写入数据库
+if now > item.last_at + delta:    # 与数据库值比较（都是 naive UTC）
+```
+
+**禁止写法**:
+```python
+datetime.now(timezone.utc)                          # 带 tzinfo，写入 PG 会被转换
+datetime.now(timezone.utc).replace(tzinfo=None)     # 正确但啰嗦，用 utcnow() 代替
+some_dt.replace(tzinfo=timezone.utc)                # 给 naive datetime 加时区标记，与 PG 值混用会出错
+```
 - 枚举: 使用 `str, Enum` 子类，存储 `.value` 字符串到 DB
 - 迁移: 必须通过 `alembic revision --autogenerate`，禁止手写 SQL
 - JSON 字段当前存储为 `Column(Text)` + `json.loads`/`json.dumps`（后续可迁移到 JSONB）

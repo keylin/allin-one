@@ -1,11 +1,12 @@
 """Dashboard API"""
 
-from datetime import datetime, timezone, timedelta
+from datetime import timedelta
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func, cast, Date
 
 from app.core.database import get_db
+from app.core.time import utcnow
 from app.models.content import SourceConfig, ContentItem
 from app.models.pipeline import PipelineExecution, PipelineStatus
 
@@ -17,9 +18,7 @@ async def get_dashboard_stats(db: Session = Depends(get_db)):
     """获取仪表盘统计数据"""
     sources_count = db.query(func.count(SourceConfig.id)).scalar()
 
-    today_start = datetime.now(timezone.utc).replace(
-        hour=0, minute=0, second=0, microsecond=0, tzinfo=None,
-    )
+    today_start = utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     contents_today = (
         db.query(func.count(ContentItem.id))
         .filter(ContentItem.collected_at >= today_start)
@@ -56,7 +55,7 @@ async def get_collection_trend(
     db: Session = Depends(get_db),
 ):
     """获取最近 N 天每日采集数量趋势"""
-    now = datetime.now(timezone.utc)
+    now = utcnow()
     start = (now - timedelta(days=days - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
 
     # 按天聚合

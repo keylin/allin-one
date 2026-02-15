@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import dayjs from 'dayjs'
 import { useContentStore } from '@/stores/content'
 import { listSources } from '@/api/sources'
-import { analyzeContent, incrementView, getContentStats, batchMarkRead, batchFavorite, deleteAllContent } from '@/api/content'
+import { analyzeContent, incrementView, getContentStats, batchMarkRead, batchFavorite } from '@/api/content'
 import ContentDetailPanel from '@/components/content-detail-panel.vue'
 import DetailDrawer from '@/components/detail-drawer.vue'
 import ConfirmDialog from '@/components/confirm-dialog.vue'
@@ -210,17 +210,16 @@ async function handleBatchDelete() {
   showBatchDeleteDialog.value = false
   await store.batchDelete(selectedIds.value)
   selectedIds.value = []
+  fetchWithFilters()
 }
 
 async function handleDeleteAll() {
   showDeleteAllDialog.value = false
   deletingAll.value = true
   try {
-    const res = await deleteAllContent()
-    if (res.code === 0) {
-      store.currentPage = 1
-      fetchWithFilters()
-    }
+    await store.deleteAll()
+    store.currentPage = 1
+    fetchWithFilters()
   } finally {
     deletingAll.value = false
   }
@@ -239,7 +238,18 @@ async function handleBatchFavorite() {
 }
 
 function formatTime(t) {
-  return t ? dayjs.utc(t).local().format('MM-DD HH:mm') : '-'
+  return t ? dayjs.utc(t).local().format('YYYY-MM-DD HH:mm:ss') : '-'
+}
+
+function handleSort(field) {
+  if (sortBy.value === field) {
+    sortOrder.value = sortOrder.value === 'desc' ? 'asc' : 'desc'
+  } else {
+    sortBy.value = field
+    sortOrder.value = 'desc'
+  }
+  store.currentPage = 1
+  fetchWithFilters()
 }
 
 // Search debounce
@@ -510,7 +520,28 @@ onUnmounted(() => {
               <th class="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">状态</th>
               <th class="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">媒体</th>
               <th class="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">浏览</th>
-              <th class="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">采集时间</th>
+              <th
+                class="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer hover:bg-slate-100 select-none"
+                @click="handleSort('collected_at')"
+              >
+                <div class="flex items-center gap-1">
+                  <span>采集时间</span>
+                  <svg v-if="sortBy === 'collected_at'" class="w-3 h-3" :class="sortOrder === 'desc' ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                  </svg>
+                </div>
+              </th>
+              <th
+                class="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider cursor-pointer hover:bg-slate-100 select-none"
+                @click="handleSort('published_at')"
+              >
+                <div class="flex items-center gap-1">
+                  <span>发布时间</span>
+                  <svg v-if="sortBy === 'published_at'" class="w-3 h-3" :class="sortOrder === 'desc' ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                  </svg>
+                </div>
+              </th>
               <th class="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">操作</th>
             </tr>
           </thead>
@@ -559,7 +590,8 @@ onUnmounted(() => {
                 <span v-else class="text-slate-300">-</span>
               </td>
               <td class="px-4 py-3 text-sm text-slate-400 text-right tabular-nums">{{ item.view_count || 0 }}</td>
-              <td class="px-4 py-3 text-sm text-slate-400">{{ formatTime(item.collected_at) }}</td>
+              <td class="px-4 py-3 text-sm text-slate-400 whitespace-nowrap">{{ formatTime(item.collected_at) }}</td>
+              <td class="px-4 py-3 text-sm text-slate-400 whitespace-nowrap">{{ formatTime(item.published_at) }}</td>
               <td class="px-4 py-3 text-right" @click.stop>
                 <button
                   v-if="item.status === 'pending'"
@@ -607,12 +639,17 @@ onUnmounted(() => {
             </span>
           </div>
           <p v-if="item.summary_text" class="text-xs text-slate-400 line-clamp-1 mb-2">{{ item.summary_text }}</p>
-          <div class="flex items-center gap-2 text-xs text-slate-400">
-            <span class="truncate max-w-[120px]">{{ item.source_name || '-' }}</span>
-            <span v-if="item.media_items?.length" class="text-slate-300">
-              {{ item.media_items.some(m => m.media_type === 'video') ? '视频' : item.media_items.some(m => m.media_type === 'image') ? '图片' : '音频' }}
-            </span>
-            <span class="ml-auto shrink-0">{{ formatTime(item.collected_at) }}</span>
+          <div class="flex flex-col gap-1 text-xs text-slate-400">
+            <div class="flex items-center gap-2">
+              <span class="truncate max-w-[120px]">{{ item.source_name || '-' }}</span>
+              <span v-if="item.media_items?.length" class="text-slate-300">
+                {{ item.media_items.some(m => m.media_type === 'video') ? '视频' : item.media_items.some(m => m.media_type === 'image') ? '图片' : '音频' }}
+              </span>
+            </div>
+            <div class="flex items-center gap-2 text-[10px]">
+              <span class="text-slate-500">采集: {{ formatTime(item.collected_at) }}</span>
+              <span class="text-slate-500">发布: {{ formatTime(item.published_at) }}</span>
+            </div>
           </div>
         </div>
       </div>

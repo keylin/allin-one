@@ -63,13 +63,16 @@ async def list_finance_sources(db: Session = Depends(get_db)):
             elif latest.unit_nav is not None:
                 latest_value = latest.unit_nav
 
+        # 获取有效采集间隔：优先 calculated_interval，回退到 schedule_interval_override
+        effective_interval = src.calculated_interval or src.schedule_interval_override or 3600
+
         result.append({
             "id": src.id,
             "name": src.name,
             "indicator": config.get("indicator"),
             "category": category,
             "is_active": src.is_active,
-            "schedule_interval": src.schedule_interval,
+            "schedule_interval": effective_interval,
             "content_count": content_count,
             "latest_value": latest_value,
             "latest_date": latest_date,

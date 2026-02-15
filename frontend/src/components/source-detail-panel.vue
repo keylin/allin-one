@@ -118,10 +118,15 @@ function formatInterval(seconds) {
         </div>
         <div class="bg-slate-50 rounded-xl p-4">
           <span class="text-xs text-slate-400 block mb-1">调度</span>
-          <span v-if="source.schedule_enabled" class="text-sm text-slate-700 font-medium">
-            每 {{ formatInterval(source.schedule_interval) }}
+          <span v-if="!source.schedule_enabled" class="text-sm text-slate-400">禁用</span>
+          <span v-else-if="source.schedule_mode === 'manual'" class="text-sm text-slate-500">手动</span>
+          <span v-else-if="source.schedule_mode === 'fixed' && source.schedule_interval_override" class="text-sm text-slate-700 font-medium">
+            每{{ formatInterval(source.schedule_interval_override) }}
           </span>
-          <span v-else class="text-sm text-slate-400">已禁用</span>
+          <span v-else-if="source.schedule_mode === 'auto' && source.calculated_interval" class="text-sm text-indigo-600 font-medium">
+            智能 {{ formatInterval(source.calculated_interval) }}
+          </span>
+          <span v-else class="text-sm text-slate-400">-</span>
         </div>
         <div class="bg-slate-50 rounded-xl p-4">
           <span class="text-xs text-slate-400 block mb-1">流水线模板</span>

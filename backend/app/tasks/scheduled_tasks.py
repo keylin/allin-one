@@ -20,34 +20,44 @@ from app.tasks.procrastinate_app import proc_app
 logger = logging.getLogger(__name__)
 
 
-@proc_app.periodic(cron="*/5 * * * *")
+@proc_app.periodic(cron="*/1 * * * *")  # 每1分钟触发，支持60秒最小间隔
 @proc_app.task(queue="scheduled", queueing_lock="collection_loop")
 async def check_and_collect_sources(timestamp):
     """主采集循环 — 智能调度 + 退避策略"""
+    import time
+    start_time = time.time()  # 性能监控：记录开始时间
+
+    from datetime import timedelta
     from app.core.database import SessionLocal
+    from app.core.time import utcnow
     from app.models.content import SourceConfig, ContentItem, ContentStatus
     from app.models.pipeline import TriggerSource
     from app.services.pipeline.orchestrator import PipelineOrchestrator
-    from datetime import datetime, timezone, timedelta
+    from app.services.scheduling_service import SchedulingService
 
     with SessionLocal() as db:
-        now = datetime.now(timezone.utc)
+        now = utcnow()
+        query_start = time.time()  # 性能监控：记录查询开始时间
+
+        # 使用智能调度：查询 next_collection_at <= now 的源
+        # 索引优化：ix_source_next_collection (is_active, schedule_enabled, next_collection_at)
         sources = db.query(SourceConfig).filter(
             SourceConfig.is_active == True,
             SourceConfig.schedule_enabled == True,
+            (SourceConfig.next_collection_at.is_(None)) |
+            (SourceConfig.next_collection_at <= now)
         ).all()
 
-        logger.info(f"Collection check: {len(sources)} active sources")
+        query_elapsed = time.time() - query_start
+        logger.info(
+            f"Collection check: {len(sources)} sources due for collection "
+            f"(query took {query_elapsed*1000:.1f}ms)"
+        )
 
         for source in sources:
-            # 退避策略: 连续失败次数越多, 间隔越长
-            if source.last_collected_at:
-                interval = source.schedule_interval
-                if source.consecutive_failures > 0:
-                    interval = min(interval * (2 ** source.consecutive_failures), 7200)
-                last = source.last_collected_at.replace(tzinfo=timezone.utc) if source.last_collected_at.tzinfo is None else source.last_collected_at
-                if now < last + timedelta(seconds=interval):
-                    continue
+            # 二次确认（防止并发或时间偏移）
+            if not SchedulingService.should_collect_now(source, now):
+                continue
 
             try:
                 # ---- 第一阶段: Collector 抓取, 产出 ContentItem ----
@@ -56,6 +66,9 @@ async def check_and_collect_sources(timestamp):
 
                 source.last_collected_at = now
                 source.consecutive_failures = 0
+
+                # ✨ 智能调度：更新下次采集时间
+                SchedulingService.update_next_collection_time(source, db)
 
                 # ---- 第二阶段: 对每条新内容触发流水线 ----
                 orchestrator = PipelineOrchestrator(db)
@@ -80,11 +93,14 @@ async def check_and_collect_sources(timestamp):
             except Exception as e:
                 db.rollback()
                 source.consecutive_failures += 1
+
+                # ✨ 失败也更新调度时间（应用退避策略）
                 try:
+                    SchedulingService.update_next_collection_time(source, db)
                     db.commit()
-                except Exception:
+                except Exception as update_err:
                     db.rollback()
-                    logger.error(f"Failed to update failure count for {source.name}")
+                    logger.error(f"Failed to update schedule for {source.name}: {update_err}")
 
                 import httpx
                 from sqlalchemy.exc import OperationalError
@@ -99,10 +115,11 @@ async def check_and_collect_sources(timestamp):
         from app.models.pipeline import PipelineExecution
         from sqlalchemy import not_, exists
 
+        # 限制每次补偿100条，避免1分钟周期下单次查询过多（频率增加5倍）
         orphaned = db.query(ContentItem).filter(
             ContentItem.status == ContentStatus.PENDING.value,
             ~exists().where(PipelineExecution.content_id == ContentItem.id),
-        ).all()
+        ).limit(100).all()
 
         if orphaned:
             logger.info(f"Compensation: {len(orphaned)} pending items without pipeline")
@@ -181,6 +198,15 @@ async def check_and_collect_sources(timestamp):
                 except Exception as e:
                     logger.error(f"Failed to requeue stuck step: pipeline={pipeline_id[:12]}, error={e}")
 
+        # ---- 性能监控: 记录主循环总耗时 ----
+        total_elapsed = time.time() - start_time
+        logger.info(f"Collection loop completed in {total_elapsed:.2f}s")
+        if total_elapsed > 55:  # 接近1分钟超时（留5秒余量）
+            logger.warning(
+                f"Collection loop near timeout: {total_elapsed:.2f}s "
+                f"(processed {len(sources)} sources)"
+            )
+
 
 @proc_app.periodic(cron="0 22 * * *")
 @proc_app.task(queue="scheduled", queueing_lock="daily_report")
@@ -198,18 +224,121 @@ async def trigger_weekly_report(timestamp):
     await generate_weekly_report()
 
 
-@proc_app.periodic(cron="0 3 * * *")
-@proc_app.task(queue="scheduled", queueing_lock="cleanup_content")
-async def trigger_cleanup_content(timestamp):
-    """内容清理 — 每天 03:00"""
-    await cleanup_expired_content()
+@proc_app.periodic(cron="0 4 * * *")
+@proc_app.task(queue="scheduled", queueing_lock="analyze_periodicity")
+async def analyze_source_periodicity(timestamp):
+    """周期性分析任务 — 每天凌晨 4 点分析所有活跃源的更新模式"""
+    import json
+    from app.core.database import SessionLocal
+    from app.core.time import utcnow
+    from app.models.content import SourceConfig
+    from app.services.scheduling_service import SchedulingService
+
+    with SessionLocal() as db:
+        sources = db.query(SourceConfig).filter(
+            SourceConfig.is_active == True,
+            SourceConfig.schedule_mode == "auto",
+        ).all()
+
+        analyzed_count = 0
+        for source in sources:
+            try:
+                # 检查是否需要更新（至少24小时一次）
+                if source.periodicity_updated_at:
+                    hours_since = (utcnow() - source.periodicity_updated_at).total_seconds() / 3600
+                    if hours_since < 24:
+                        continue
+
+                # 执行周期性分析
+                periodicity = SchedulingService.analyze_periodicity(source, db)
+
+                # 保存结果
+                if periodicity["pattern_type"] != "none":
+                    source.periodicity_data = json.dumps(periodicity)
+                    logger.info(
+                        f"Periodicity detected: {source.name} - {periodicity['pattern_type']} "
+                        f"(confidence={periodicity['confidence']:.2f})"
+                    )
+                else:
+                    source.periodicity_data = None
+
+                source.periodicity_updated_at = utcnow()
+                analyzed_count += 1
+
+            except Exception as e:
+                logger.error(f"Periodicity analysis failed for {source.name}: {e}")
+
+        db.commit()
+        logger.info(f"Periodicity analysis complete: {analyzed_count}/{len(sources)} sources analyzed")
 
 
-@proc_app.periodic(cron="30 3 * * *")
-@proc_app.task(queue="scheduled", queueing_lock="cleanup_records")
-async def trigger_cleanup_records(timestamp):
-    """记录清理 — 每天 03:30"""
-    await cleanup_records()
+@proc_app.periodic(cron="0 * * * *")
+@proc_app.task(queue="scheduled", queueing_lock="cleanup_scheduler")
+async def cleanup_scheduler(timestamp):
+    """清理任务调度器 — 每小时检查,根据配置动态执行清理"""
+    from datetime import datetime
+    from app.core.database import SessionLocal
+    from app.models.system_setting import SystemSetting
+
+    with SessionLocal() as db:
+        # 读取配置的清理时间（格式：HH:MM）
+        content_time_setting = db.get(SystemSetting, "cleanup_content_time")
+        records_time_setting = db.get(SystemSetting, "cleanup_records_time")
+
+        content_cleanup_time = content_time_setting.value if content_time_setting else "03:00"
+        records_cleanup_time = records_time_setting.value if records_time_setting else "03:30"
+
+        # 获取当前 UTC 时间
+        now = datetime.utcnow()
+        current_time = f"{now.hour:02d}:{now.minute:02d}"
+
+        # 检查是否到达内容清理时间
+        if should_run_cleanup(current_time, content_cleanup_time):
+            last_run_key = "cleanup_content_last_run"
+            last_run = db.get(SystemSetting, last_run_key)
+            today = now.strftime("%Y-%m-%d")
+
+            if not last_run or last_run.value != today:
+                logger.info(f"Running content cleanup at configured time: {content_cleanup_time} UTC")
+                await cleanup_expired_content()
+
+                # 更新最后执行日期
+                if last_run:
+                    last_run.value = today
+                else:
+                    db.add(SystemSetting(key=last_run_key, value=today))
+                db.commit()
+
+        # 检查是否到达记录清理时间
+        if should_run_cleanup(current_time, records_cleanup_time):
+            last_run_key = "cleanup_records_last_run"
+            last_run = db.get(SystemSetting, last_run_key)
+            today = now.strftime("%Y-%m-%d")
+
+            if not last_run or last_run.value != today:
+                logger.info(f"Running records cleanup at configured time: {records_cleanup_time} UTC")
+                await cleanup_records()
+
+                if last_run:
+                    last_run.value = today
+                else:
+                    db.add(SystemSetting(key=last_run_key, value=today))
+                db.commit()
+
+
+def should_run_cleanup(current_time: str, target_time: str) -> bool:
+    """判断当前时间是否匹配目标清理时间（允许±30分钟误差）"""
+    try:
+        current_h, current_m = map(int, current_time.split(':'))
+        target_h, target_m = map(int, target_time.split(':'))
+
+        current_minutes = current_h * 60 + current_m
+        target_minutes = target_h * 60 + target_m
+
+        # 允许±30分钟误差（因为调度器每小时运行一次）
+        return abs(current_minutes - target_minutes) <= 30
+    except:
+        return False
 
 
 async def cleanup_expired_content():
@@ -222,9 +351,10 @@ async def cleanup_expired_content():
     """
     import shutil
     from pathlib import Path
-    from datetime import datetime, timezone, timedelta
+    from datetime import timedelta
     from app.core.database import SessionLocal
     from app.core.config import settings
+    from app.core.time import utcnow
     from app.models.content import SourceConfig, ContentItem, MediaItem
     from app.models.pipeline import PipelineExecution, PipelineStep
     from app.models.system_setting import SystemSetting
@@ -245,7 +375,7 @@ async def cleanup_expired_content():
             logger.info("Cleanup: no sources with auto_cleanup_enabled")
             return
 
-        now = datetime.now(timezone.utc)
+        now = utcnow()
         total_deleted = 0
 
         for source in sources:
@@ -311,8 +441,9 @@ async def cleanup_records():
     2. 按天数清理: 删除 created_at/started_at 早于 cutoff 的已终态记录
     3. 按数量清理: 按时间倒序保留前 N 条，删除多余的已终态记录
     """
-    from datetime import datetime, timezone, timedelta
+    from datetime import timedelta
     from app.core.database import SessionLocal
+    from app.core.time import utcnow
     from app.models.system_setting import SystemSetting
     from app.models.pipeline import PipelineExecution, PipelineStep, PipelineStatus
     from app.models.content import CollectionRecord
@@ -333,7 +464,7 @@ async def cleanup_records():
         coll_retention_days = get_setting("collection_retention_days", 30)
         coll_max_count = get_setting("collection_max_count", 0)
 
-        now = datetime.now(timezone.utc)
+        now = utcnow()
         total_exec_deleted = 0
         total_coll_deleted = 0
 
@@ -379,33 +510,57 @@ async def cleanup_records():
                 ).delete(synchronize_session=False)
                 total_exec_deleted += deleted
 
-        # ---- 采集记录清理 ----
+        # ---- 采集记录清理（带保护机制）----
         coll_terminal = ["completed", "failed"]
 
-        # 按天数清理
+        # 🆕 每个数据源至少保留的记录数
+        MIN_KEEP_PER_SOURCE = get_setting("collection_min_keep", 10)
+
+        # 按天数清理（保护最新记录）
         if coll_retention_days > 0:
             cutoff = now - timedelta(days=coll_retention_days)
-            deleted = db.query(CollectionRecord).filter(
-                CollectionRecord.status.in_(coll_terminal),
-                CollectionRecord.started_at < cutoff,
-            ).delete(synchronize_session=False)
-            total_coll_deleted += deleted
 
-        # 按数量清理
-        if coll_max_count > 0:
-            overflow_ids = [
-                cid for (cid,) in db.query(CollectionRecord.id).filter(
+            # 🆕 按数据源分别处理，确保每个源至少保留 MIN_KEEP_PER_SOURCE 条
+            from app.models.content import SourceConfig
+            sources = db.query(SourceConfig).all()
+
+            for source in sources:
+                # 查询该源的所有终态记录，按时间倒序
+                all_records = db.query(CollectionRecord).filter(
+                    CollectionRecord.source_id == source.id,
                     CollectionRecord.status.in_(coll_terminal),
-                ).order_by(CollectionRecord.started_at.desc()).offset(coll_max_count).all()
-            ]
-            if overflow_ids:
-                deleted = db.query(CollectionRecord).filter(
-                    CollectionRecord.id.in_(overflow_ids)
-                ).delete(synchronize_session=False)
-                total_coll_deleted += deleted
+                ).order_by(CollectionRecord.started_at.desc()).all()
+
+                # 保护最新的 MIN_KEEP_PER_SOURCE 条记录
+                if len(all_records) <= MIN_KEEP_PER_SOURCE:
+                    continue  # 总数不超过最小保留数，跳过清理
+
+                # 只删除过期且不在保护范围内的记录
+                deletable_ids = [
+                    r.id for r in all_records[MIN_KEEP_PER_SOURCE:]
+                    if r.started_at < cutoff
+                ]
+
+                if deletable_ids:
+                    deleted = db.query(CollectionRecord).filter(
+                        CollectionRecord.id.in_(deletable_ids)
+                    ).delete(synchronize_session=False)
+                    total_coll_deleted += deleted
+                    logger.info(
+                        f"Cleanup [{source.name}]: deleted {deleted} collection records "
+                        f"(kept {MIN_KEEP_PER_SOURCE} most recent)"
+                    )
 
         db.commit()
         logger.info(
             f"Records cleanup: {total_exec_deleted} executions, "
-            f"{total_coll_deleted} collection records deleted"
+            f"{total_coll_deleted} collection records deleted. "
+            f"Protected records per source: {MIN_KEEP_PER_SOURCE}"
         )
+
+        # 🆕 大量删除警告
+        if total_coll_deleted > 100:
+            logger.warning(
+                f"Large cleanup detected: {total_coll_deleted} collection records deleted. "
+                f"Please check retention settings."
+            )

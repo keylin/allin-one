@@ -166,7 +166,6 @@ async def list_downloads(
     total = query.count()
 
     # 排序
-    order_fn = desc if sort_order == "desc" else asc
     sort_map = {
         "published_at": ContentItem.published_at,
         "collected_at": ContentItem.collected_at,
@@ -174,7 +173,11 @@ async def list_downloads(
         "duration": cast(media_meta["duration"].astext, Float),
     }
     sort_column = sort_map.get(sort_by, MediaItem.created_at)
-    query = query.order_by(order_fn(sort_column))
+    if sort_order == "desc":
+        order_expr = desc(sort_column).nulls_last()
+    else:
+        order_expr = asc(sort_column).nulls_last()
+    query = query.order_by(order_expr)
 
     # 分页
     query = query.offset((page - 1) * page_size).limit(page_size)
@@ -237,14 +240,14 @@ async def save_playback_progress(
     db: Session = Depends(get_db),
 ):
     """保存视频播放进度"""
-    from datetime import datetime, timezone
+    from app.core.time import utcnow
 
     content = db.get(ContentItem, content_id)
     if not content:
         return error_response(404, "Content not found")
 
     content.playback_position = max(0, body.position)
-    content.last_played_at = datetime.now(timezone.utc)
+    content.last_played_at = utcnow()
     db.commit()
 
     return {"code": 0, "data": {"playback_position": content.playback_position}, "message": "ok"}

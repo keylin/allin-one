@@ -11,7 +11,8 @@ class SourceCreate(BaseModel):
     url: Optional[str] = None
     description: Optional[str] = None
     schedule_enabled: Optional[bool] = True
-    schedule_interval: Optional[int] = 3600
+    schedule_mode: Optional[str] = "auto"
+    schedule_interval_override: Optional[int] = None
     pipeline_template_id: Optional[str] = None
     config_json: Optional[str] = None
     credential_id: Optional[str] = None
@@ -25,7 +26,8 @@ class SourceUpdate(BaseModel):
     url: Optional[str] = None
     description: Optional[str] = None
     schedule_enabled: Optional[bool] = None
-    schedule_interval: Optional[int] = None
+    schedule_mode: Optional[str] = None
+    schedule_interval_override: Optional[int] = None
     pipeline_template_id: Optional[str] = None
     config_json: Optional[str] = None
     credential_id: Optional[str] = None
@@ -43,7 +45,9 @@ class SourceResponse(BaseModel):
     url: Optional[str] = None
     description: Optional[str] = None
     schedule_enabled: bool = True
-    schedule_interval: int = 3600
+    schedule_mode: str = "auto"
+    schedule_interval_override: Optional[int] = None
+    calculated_interval: Optional[int] = None
     pipeline_template_id: Optional[str] = None
     pipeline_template_name: Optional[str] = None
     config_json: Optional[str] = None
@@ -55,6 +59,7 @@ class SourceResponse(BaseModel):
     is_active: bool = True
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    next_collection_at: Optional[datetime] = None  # 系统计算的下次采集时间
 
 
 class CollectionRecordResponse(BaseModel):

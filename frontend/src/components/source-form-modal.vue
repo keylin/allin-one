@@ -48,7 +48,9 @@ function getDefaultForm() {
     url: '',
     description: '',
     schedule_enabled: true,
-    schedule_interval: 3600,
+    schedule_mode: 'auto',
+    schedule_interval_override: null,
+    calculated_interval: null,
     pipeline_template_id: '',
     config_json: '',
     credential_id: '',
@@ -213,6 +215,9 @@ function handleSubmit() {
   if (!data.url) data.url = null
   if (!data.description) data.description = null
   if (!data.retention_days) data.retention_days = null
+  if (!data.schedule_interval_override) data.schedule_interval_override = null
+  // 移除只读的 calculated_interval（由服务端计算）
+  delete data.calculated_interval
   // 序列化结构化配置
   if (hasStructuredConfig.value) {
     data.config_json = serializeConfig()
@@ -233,7 +238,9 @@ function handlePresetSelect(preset) {
     form.value.name = preset.name
   }
 
-  form.value.schedule_interval = preset.schedule_interval || 3600
+  // For AkShare presets, use fixed mode with preset interval
+  form.value.schedule_mode = 'fixed'
+  form.value.schedule_interval_override = preset.schedule_interval || 3600
 
   // Build configForm
   const cfg = preset.config
@@ -320,8 +327,9 @@ const sectionClass = 'space-y-4 p-4 bg-slate-50/50 rounded-xl border border-slat
         </div>
 
         <!-- 定时采集 -->
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div class="flex items-center gap-3 pt-6">
+        <div :class="sectionClass">
+          <h4 class="text-sm font-semibold text-slate-800">定时调度</h4>
+          <div class="flex items-center gap-3">
             <input
               v-model="form.schedule_enabled"
               type="checkbox"
@@ -330,10 +338,43 @@ const sectionClass = 'space-y-4 p-4 bg-slate-50/50 rounded-xl border border-slat
             />
             <label for="schedule_enabled" class="text-sm font-medium text-slate-700">启用定时采集</label>
           </div>
-          <div>
-            <label :class="labelClass">采集间隔 (秒)</label>
-            <input v-model.number="form.schedule_interval" type="number" min="60" :class="inputClass" />
-          </div>
+
+          <template v-if="form.schedule_enabled">
+            <div>
+              <label :class="labelClass">调度模式</label>
+              <select v-model="form.schedule_mode" :class="selectClass">
+                <option value="auto">智能调度（根据活跃度自动调整）</option>
+                <option value="fixed">固定间隔</option>
+                <option value="manual">仅手动采集</option>
+              </select>
+            </div>
+
+            <!-- 固定模式：显示间隔输入框 -->
+            <div v-if="form.schedule_mode === 'fixed'">
+              <label :class="labelClass">采集间隔 (秒)</label>
+              <input v-model.number="form.schedule_interval_override" type="number" min="60" :class="inputClass" placeholder="例: 3600 (1小时)" />
+            </div>
+
+            <!-- 自动模式：显示系统计算的间隔（只读） -->
+            <div v-else-if="form.schedule_mode === 'auto' && form.calculated_interval">
+              <label :class="labelClass">当前计算间隔</label>
+              <div class="px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-600">
+                {{ formatInterval(form.calculated_interval) }}
+                <span class="text-xs text-slate-400 ml-2">(系统根据采集历史自动调整)</span>
+              </div>
+            </div>
+
+            <!-- 手动模式：提示信息 -->
+            <div v-else-if="form.schedule_mode === 'manual'">
+              <p class="text-sm text-slate-500 px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl">
+                手动模式下，数据源不会自动采集，仅通过手动触发或 API 调用采集。
+              </p>
+            </div>
+          </template>
+
+          <p class="text-xs text-slate-400">
+            智能调度根据数据源的历史采集情况（新增内容数、成功率、趋势）动态调整采集频率。
+          </p>
         </div>
 
         <!-- 内容保留 -->

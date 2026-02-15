@@ -34,14 +34,25 @@ class RSSCollector(BaseCollector):
         if feed.bozo and not feed.entries:
             raise ValueError(f"Feed parse failed for '{source.name}': {feed.bozo_exception}")
 
+        # 预取本源已有 URL 集合（一次查询），过渡期安全网
+        existing_urls = set(
+            url for (url,) in db.query(ContentItem.url)
+            .filter(ContentItem.source_id == source.id, ContentItem.url.isnot(None))
+            .all()
+        )
+
         new_items = []
         for entry in feed.entries:
+            url = self._fix_link(entry.get("link"))
+            if url and url in existing_urls:
+                continue  # URL 已存在，跳过
+
             external_id = self._extract_external_id(entry)
             item = ContentItem(
                 source_id=source.id,
                 title=entry.get("title", "Untitled")[:500],
                 external_id=external_id,
-                url=self._fix_link(entry.get("link")),
+                url=url,
                 author=entry.get("author"),
                 raw_data=json.dumps(self._entry_to_dict(entry), ensure_ascii=False),
                 status=ContentStatus.PENDING.value,
@@ -101,7 +112,7 @@ class RSSCollector(BaseCollector):
 
     def _extract_external_id(self, entry: dict) -> str:
         """提取或生成唯一 ID"""
-        eid = entry.get("id") or entry.get("link") or entry.get("title", "")
+        eid = entry.get("link") or entry.get("id") or entry.get("title", "")
         if not eid:
             eid = json.dumps(entry, sort_keys=True, default=str)
         return hashlib.md5(eid.encode()).hexdigest()

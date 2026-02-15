@@ -48,13 +48,13 @@ export const useContentStore = defineStore('content', () => {
 
   async function batchDelete(ids) {
     const res = await apiBatchDelete(ids)
-    if (res.code === 0) await fetchContent()
+    // 不自动刷新，由调用方决定如何刷新以保持筛选状态
     return res
   }
 
   async function deleteAll() {
     const res = await apiDeleteAll()
-    if (res.code === 0) await fetchContent()
+    // 不自动刷新，由调用方决定如何刷新以保持筛选状态
     return res
   }
 

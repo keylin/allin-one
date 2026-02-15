@@ -185,10 +185,15 @@ async def _extract_with_crawl4ai(url: str) -> str | None:
 
     try:
         async with AsyncWebCrawler(config=browser_config) as crawler:
-            result = await asyncio.wait_for(
-                crawler.arun(url=url, config=run_config),
-                timeout=45,
-            )
+            try:
+                result = await asyncio.wait_for(
+                    crawler.arun(url=url, config=run_config),
+                    timeout=45,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(f"[crawl4ai] Timeout (45s) for {url}")
+                return None  # __aexit__ will clean up the CDP connection
+
             if result and result.success:
                 md = None
                 if result.markdown and hasattr(result.markdown, "fit_markdown"):
@@ -201,9 +206,6 @@ async def _extract_with_crawl4ai(url: str) -> str | None:
             else:
                 logger.warning(f"[crawl4ai] Crawl failed for {url}: {getattr(result, 'error_message', 'unknown')}")
                 return None
-    except asyncio.TimeoutError:
-        logger.warning(f"[crawl4ai] Timeout (45s) for {url}")
-        return None
     except Exception as e:
         logger.warning(f"[crawl4ai] Failed for {url}: {e}")
         return None

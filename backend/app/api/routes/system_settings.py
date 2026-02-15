@@ -2,13 +2,14 @@
 
 import logging
 import re
-from datetime import datetime, timezone, timedelta
+from datetime import timedelta
 from typing import Optional
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.time import utcnow
 from app.models.system_setting import SystemSetting
 from app.schemas import SettingsUpdate, SettingItem, error_response
 
@@ -55,7 +56,7 @@ async def update_settings(body: SettingsUpdate, db: Session = Depends(get_db)):
         existing = db.get(SystemSetting, key)
         if existing:
             existing.value = value
-            existing.updated_at = datetime.now(timezone.utc)
+            existing.updated_at = utcnow()
         else:
             db.add(SystemSetting(key=key, value=value))
     db.commit()
@@ -115,7 +116,7 @@ async def clear_executions(body: ClearRecordsRequest = ClearRecordsRequest(), db
         PipelineExecution.status.in_(terminal_statuses)
     )
     if body.before_days is not None and body.before_days > 0:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=body.before_days)
+        cutoff = utcnow() - timedelta(days=body.before_days)
         query = query.filter(PipelineExecution.created_at < cutoff)
 
     execution_ids = [eid for (eid,) in query.with_entities(PipelineExecution.id).all()]
@@ -146,7 +147,7 @@ async def clear_collections(body: ClearRecordsRequest = ClearRecordsRequest(), d
         CollectionRecord.status.in_(terminal_statuses)
     )
     if body.before_days is not None and body.before_days > 0:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=body.before_days)
+        cutoff = utcnow() - timedelta(days=body.before_days)
         query = query.filter(CollectionRecord.started_at < cutoff)
 
     deleted = query.delete(synchronize_session=False)
@@ -154,3 +155,119 @@ async def clear_collections(body: ClearRecordsRequest = ClearRecordsRequest(), d
 
     logger.info(f"Manual cleanup: deleted {deleted} collection records")
     return {"code": 0, "data": {"deleted": deleted}, "message": f"已清理 {deleted} 条采集记录"}
+
+
+@router.post("/preview-cleanup")
+async def preview_cleanup(db: Session = Depends(get_db)):
+    """预览清理影响 — 计算将要删除的记录数量，不实际删除"""
+    from app.models.content import ContentItem, CollectionRecord, SourceConfig
+    from app.models.pipeline import PipelineExecution, PipelineStatus
+    from app.models.system_setting import SystemSetting
+
+    def get_setting(key: str, default: int) -> int:
+        row = db.get(SystemSetting, key)
+        if row and row.value:
+            try:
+                return int(row.value)
+            except ValueError:
+                pass
+        return default
+
+    now = utcnow()
+
+    # ---- 预览内容清理 ----
+    default_retention = get_setting("default_retention_days", 30)
+    content_count = 0
+
+    if default_retention > 0:
+        sources = db.query(SourceConfig).filter(
+            SourceConfig.auto_cleanup_enabled == True,
+        ).all()
+
+        for source in sources:
+            retention = source.retention_days if source.retention_days and source.retention_days > 0 else default_retention
+            cutoff = now - timedelta(days=retention)
+
+            count = db.query(ContentItem).filter(
+                ContentItem.source_id == source.id,
+                ContentItem.collected_at < cutoff,
+                ContentItem.is_favorited == False,
+                ContentItem.user_note.is_(None),
+            ).count()
+            content_count += count
+
+    # ---- 预览执行记录清理 ----
+    exec_retention_days = get_setting("execution_retention_days", 30)
+    exec_max_count = get_setting("execution_max_count", 0)
+    exec_count = 0
+
+    exec_terminal = [
+        PipelineStatus.COMPLETED.value,
+        PipelineStatus.FAILED.value,
+        PipelineStatus.CANCELLED.value,
+    ]
+
+    # 按天数
+    if exec_retention_days > 0:
+        cutoff = now - timedelta(days=exec_retention_days)
+        exec_count += db.query(PipelineExecution).filter(
+            PipelineExecution.status.in_(exec_terminal),
+            PipelineExecution.created_at < cutoff,
+        ).count()
+
+    # 按数量
+    if exec_max_count > 0:
+        total_terminal = db.query(PipelineExecution).filter(
+            PipelineExecution.status.in_(exec_terminal),
+        ).count()
+        exec_count = max(exec_count, total_terminal - exec_max_count)
+
+    # ---- 预览采集记录清理 ----
+    coll_retention_days = get_setting("collection_retention_days", 90)
+    coll_min_keep = get_setting("collection_min_keep", 10)
+    coll_count = 0
+
+    coll_terminal = ["completed", "failed"]
+
+    if coll_retention_days > 0:
+        cutoff = now - timedelta(days=coll_retention_days)
+        sources = db.query(SourceConfig).all()
+
+        for source in sources:
+            all_records = db.query(CollectionRecord).filter(
+                CollectionRecord.source_id == source.id,
+                CollectionRecord.status.in_(coll_terminal),
+            ).order_by(CollectionRecord.started_at.desc()).all()
+
+            if len(all_records) <= coll_min_keep:
+                continue
+
+            deletable = [
+                r for r in all_records[coll_min_keep:]
+                if r.started_at < cutoff
+            ]
+            coll_count += len(deletable)
+
+    return {
+        "code": 0,
+        "data": {
+            "content_items": content_count,
+            "executions": exec_count,
+            "collection_records": coll_count,
+        },
+        "message": "ok"
+    }
+
+
+@router.post("/manual-cleanup")
+async def manual_cleanup(db: Session = Depends(get_db)):
+    """立即执行清理（无需等待定时任务）"""
+    from app.tasks.scheduled_tasks import cleanup_expired_content, cleanup_records
+
+    try:
+        await cleanup_expired_content()
+        await cleanup_records()
+        return {"code": 0, "data": None, "message": "清理完成"}
+    except Exception as e:
+        logger.error(f"Manual cleanup failed: {e}")
+        return {"code": 500, "data": None, "message": f"清理失败: {str(e)}"}

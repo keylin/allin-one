@@ -3,7 +3,7 @@
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, noload
 from sqlalchemy import func
 
 from app.core.database import get_db
+from app.core.time import utcnow
 from app.models.content import SourceConfig, ContentItem, MediaItem
 from app.models.pipeline import PipelineExecution, PipelineStep
 from app.schemas import (
@@ -151,21 +152,24 @@ async def list_content(
 
     if date_from:
         try:
-            dt = datetime.fromisoformat(date_from).replace(tzinfo=timezone.utc)
+            dt = datetime.fromisoformat(date_from).replace(tzinfo=None)
             query = query.filter(ContentItem.collected_at >= dt)
         except ValueError:
             pass
     if date_to:
         try:
             dt = datetime.fromisoformat(date_to).replace(
-                hour=23, minute=59, second=59, tzinfo=timezone.utc)
+                hour=23, minute=59, second=59, tzinfo=None)
             query = query.filter(ContentItem.collected_at <= dt)
         except ValueError:
             pass
 
     # 排序: 白名单校验，非法值 fallback collected_at desc
     col = SORT_COLUMNS.get(sort_by, ContentItem.collected_at)
-    order_expr = col.asc() if sort_order == 'asc' else col.desc()
+    if sort_order == 'asc':
+        order_expr = col.asc().nulls_last()
+    else:
+        order_expr = col.desc().nulls_last()
 
     total = query.count()
     items = (
@@ -287,7 +291,7 @@ async def batch_mark_read(body: ContentBatchDelete, db: Session = Depends(get_db
     updated = db.query(ContentItem).filter(
         ContentItem.id.in_(body.ids),
         (ContentItem.view_count == 0) | (ContentItem.view_count.is_(None)),
-    ).update({ContentItem.view_count: 1, ContentItem.last_viewed_at: datetime.now(timezone.utc)},
+    ).update({ContentItem.view_count: 1, ContentItem.last_viewed_at: utcnow()},
              synchronize_session=False)
     db.commit()
     return {"code": 0, "data": {"updated": updated}, "message": "ok"}
@@ -298,7 +302,7 @@ async def batch_toggle_favorite(body: ContentBatchDelete, db: Session = Depends(
     """批量收藏"""
     updated = db.query(ContentItem).filter(
         ContentItem.id.in_(body.ids)
-    ).update({ContentItem.is_favorited: True, ContentItem.updated_at: datetime.now(timezone.utc)},
+    ).update({ContentItem.is_favorited: True, ContentItem.updated_at: utcnow()},
              synchronize_session=False)
     db.commit()
     return {"code": 0, "data": {"updated": updated}, "message": "ok"}
@@ -307,7 +311,7 @@ async def batch_toggle_favorite(body: ContentBatchDelete, db: Session = Depends(
 @router.get("/stats")
 async def content_stats(db: Session = Depends(get_db)):
     """内容库统计：按状态分组 + 今日新增"""
-    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start = utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     status_rows = (
         db.query(ContentItem.status, func.count(ContentItem.id))
         .group_by(ContentItem.status).all()
@@ -437,7 +441,7 @@ async def apply_enrichment(content_id: str, body: EnrichApplyRequest, db: Sessio
         return error_response(404, "Content not found")
 
     item.processed_content = body.content
-    item.updated_at = datetime.now(timezone.utc)
+    item.updated_at = utcnow()
     db.commit()
 
     return {"code": 0, "data": {"method": body.method}, "message": "已应用富化结果"}
@@ -451,7 +455,7 @@ async def toggle_favorite(content_id: str, db: Session = Depends(get_db)):
         return error_response(404, "Content not found")
 
     item.is_favorited = not item.is_favorited
-    item.updated_at = datetime.now(timezone.utc)
+    item.updated_at = utcnow()
     db.commit()
     db.refresh(item)
 
@@ -466,7 +470,7 @@ async def record_view(content_id: str, db: Session = Depends(get_db)):
         return error_response(404, "Content not found")
 
     item.view_count = (item.view_count or 0) + 1
-    item.last_viewed_at = datetime.now(timezone.utc)
+    item.last_viewed_at = utcnow()
     db.commit()
 
     return {"code": 0, "data": {"view_count": item.view_count}, "message": "ok"}
@@ -480,7 +484,7 @@ async def update_note(content_id: str, body: ContentNoteUpdate, db: Session = De
         return error_response(404, "Content not found")
 
     item.user_note = body.user_note
-    item.updated_at = datetime.now(timezone.utc)
+    item.updated_at = utcnow()
     db.commit()
 
     return {"code": 0, "data": None, "message": "ok"}

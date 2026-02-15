@@ -897,8 +897,8 @@ def _handle_localize_media(context: dict) -> dict:
                     upload_date = info.get("upload_date")
                     if upload_date and not content.published_at:
                         try:
-                            from datetime import datetime, timezone
-                            content.published_at = datetime.strptime(upload_date, "%Y%m%d").replace(tzinfo=timezone.utc)
+                            from datetime import datetime
+                            content.published_at = datetime.strptime(upload_date, "%Y%m%d")
                         except ValueError:
                             pass
                     # Set processed_content to video description

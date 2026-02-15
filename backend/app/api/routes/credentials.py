@@ -3,7 +3,6 @@
 import json
 import logging
 import re
-from datetime import datetime, timezone
 from urllib.parse import urlparse, parse_qs
 
 from fastapi import APIRouter, Depends, Query
@@ -12,6 +11,7 @@ from sqlalchemy.orm import Session
 import httpx
 
 from app.core.database import get_db
+from app.core.time import utcnow
 from app.models.credential import PlatformCredential
 from app.models.content import SourceConfig
 from app.schemas.credential import CredentialCreate, CredentialUpdate, CredentialResponse
@@ -151,7 +151,7 @@ async def bilibili_qrcode_poll(
                 existing.credential_data = cookie_str
                 existing.status = "active"
                 existing.extra_info = extra
-                existing.updated_at = datetime.now(timezone.utc)
+                existing.updated_at = utcnow()
                 credential_id = existing.id
             else:
                 cred = PlatformCredential(
@@ -256,7 +256,7 @@ async def update_credential(credential_id: str, body: CredentialUpdate, db: Sess
     for key, value in update_data.items():
         setattr(cred, key, value)
 
-    cred.updated_at = datetime.now(timezone.utc)
+    cred.updated_at = utcnow()
     db.commit()
     db.refresh(cred)
 
@@ -323,7 +323,7 @@ async def check_credential(credential_id: str, db: Session = Depends(get_db)):
                 uname = data["data"].get("uname", "")
                 mid = str(data["data"].get("mid", ""))
                 cred.status = "active"
-                cred.updated_at = datetime.now(timezone.utc)
+                cred.updated_at = utcnow()
                 # 自动补写 extra_info（uid/uname）
                 if mid:
                     try:
@@ -341,7 +341,7 @@ async def check_credential(credential_id: str, db: Session = Depends(get_db)):
                 return {"code": 0, "data": {"valid": True, "username": uname, "uid": mid}, "message": f"凭证有效 ({uname})"}
             else:
                 cred.status = "expired"
-                cred.updated_at = datetime.now(timezone.utc)
+                cred.updated_at = utcnow()
                 db.commit()
                 return {"code": 0, "data": {"valid": False}, "message": "凭证已失效"}
         except Exception as e:
@@ -362,7 +362,7 @@ async def check_credential(credential_id: str, db: Session = Depends(get_db)):
             if resp.status_code == 200 and data.get("screen_name"):
                 screen_name = data["screen_name"]
                 cred.status = "active"
-                cred.updated_at = datetime.now(timezone.utc)
+                cred.updated_at = utcnow()
                 try:
                     extra = json.loads(cred.extra_info or "{}")
                 except (json.JSONDecodeError, TypeError):
@@ -373,7 +373,7 @@ async def check_credential(credential_id: str, db: Session = Depends(get_db)):
                 return {"code": 0, "data": {"valid": True, "username": f"@{screen_name}"}, "message": f"凭证有效 (@{screen_name})"}
             else:
                 cred.status = "expired"
-                cred.updated_at = datetime.now(timezone.utc)
+                cred.updated_at = utcnow()
                 db.commit()
                 return {"code": 0, "data": {"valid": False}, "message": "凭证已失效"}
         except Exception as e:

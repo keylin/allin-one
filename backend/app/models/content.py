@@ -11,7 +11,6 @@
 """
 
 import uuid
-from datetime import datetime, timezone
 from enum import Enum
 
 from sqlalchemy import (
@@ -20,6 +19,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import relationship
 
 from app.core.database import Base
+from app.core.time import utcnow
 
 
 # ============ 枚举定义 ============
@@ -70,9 +70,7 @@ class ContentStatus(str, Enum):
 def _uuid():
     return uuid.uuid4().hex
 
-def _utcnow():
-    """返回 naive UTC datetime，避免 PG TIMESTAMP WITHOUT TIME ZONE 的时区转换"""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+_utcnow = utcnow  # 兼容已有引用
 
 
 # ============ 模型定义 ============
@@ -102,7 +100,16 @@ class SourceConfig(Base):
     description = Column(Text)
     # 调度
     schedule_enabled = Column(Boolean, default=True)
-    schedule_interval = Column(Integer, default=3600)   # 采集间隔 (秒)
+    schedule_mode = Column(String, default="auto")      # auto / fixed / manual
+    schedule_interval_override = Column(Integer, nullable=True)  # 固定间隔覆盖值（仅 fixed 模式）
+    calculated_interval = Column(Integer, nullable=True)         # 系统计算的间隔（仅供展示）
+    next_collection_at = Column(DateTime, nullable=True)         # 预计算的下次采集时间
+
+    # 高级调度字段（0007 迁移）
+    periodicity_data = Column(Text, nullable=True)               # 周期模式识别结果 JSON
+    periodicity_updated_at = Column(DateTime, nullable=True)     # 周期分析更新时间
+    hotspot_level = Column(String, nullable=True)                # 热点等级: extreme/high/instant
+    hotspot_detected_at = Column(DateTime, nullable=True)        # 热点检测时间
 
     # 流水线绑定 — 解耦的关键
     pipeline_template_id = Column(String, ForeignKey("pipeline_templates.id"), nullable=True)
@@ -126,13 +133,14 @@ class SourceConfig(Base):
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     # Relationships
-    content_items = relationship("ContentItem", back_populates="source", cascade="all, delete-orphan")
+    content_items = relationship("ContentItem", back_populates="source")
     collection_records = relationship("CollectionRecord", back_populates="source", cascade="all, delete-orphan")
     finance_data_points = relationship("FinanceDataPoint", back_populates="source", cascade="all, delete-orphan")
     credential = relationship("PlatformCredential", back_populates="sources")
 
     __table_args__ = (
         Index("ix_source_credential_id", "credential_id"),
+        Index("ix_source_next_collection", "is_active", "schedule_enabled", "next_collection_at"),
     )
 
 
@@ -144,7 +152,7 @@ class ContentItem(Base):
     __tablename__ = "content_items"
 
     id = Column(String, primary_key=True, default=_uuid)
-    source_id = Column(String, ForeignKey("source_configs.id"), nullable=False)
+    source_id = Column(String, ForeignKey("source_configs.id", ondelete="SET NULL"), nullable=True)
     title = Column(String, nullable=False)
     external_id = Column(String, nullable=False)
     url = Column(String)

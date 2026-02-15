@@ -6,9 +6,9 @@ context 中 content_id 总是存在的。
 
 import json
 import logging
-from datetime import datetime, timezone
 
 from app.core.database import SessionLocal
+from app.core.time import utcnow
 from app.models.pipeline import (
     PipelineExecution, PipelineStep,
     PipelineStatus, StepStatus,
@@ -49,12 +49,12 @@ class PipelineExecutor:
 
             # 标记步骤运行中
             current_step.status = StepStatus.RUNNING.value
-            current_step.started_at = datetime.now(timezone.utc)
+            current_step.started_at = utcnow()
 
             # 首个步骤实际执行时, 将 execution 从 PENDING 转为 RUNNING
             if execution.status == PipelineStatus.PENDING.value:
                 execution.status = PipelineStatus.RUNNING.value
-                execution.started_at = datetime.now(timezone.utc)
+                execution.started_at = utcnow()
                 execution.current_step = step_index
 
             step_config = {}
@@ -99,7 +99,7 @@ class PipelineExecutor:
             if not step:
                 return None
 
-            now = datetime.now(timezone.utc)
+            now = utcnow()
             step.completed_at = now
 
             if error:

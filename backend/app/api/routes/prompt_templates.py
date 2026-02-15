@@ -1,11 +1,11 @@
 """Prompt Templates API - 提示词模板管理"""
 
 import logging
-from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.core.time import utcnow
 from app.models.prompt_template import PromptTemplate, TemplateType
 from app.schemas import PromptTemplateCreate, PromptTemplateUpdate, PromptTemplateResponse, error_response
 
@@ -96,7 +96,7 @@ async def update_prompt_template(template_id: str, body: PromptTemplateUpdate, d
     for key, value in update_data.items():
         setattr(tpl, key, value)
 
-    tpl.updated_at = datetime.now(timezone.utc)
+    tpl.updated_at = utcnow()
     db.commit()
     db.refresh(tpl)
 

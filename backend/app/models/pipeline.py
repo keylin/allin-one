@@ -9,7 +9,6 @@
 """
 
 import uuid
-from datetime import datetime, timezone
 from enum import Enum
 
 from sqlalchemy import (
@@ -18,6 +17,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import relationship
 
 from app.core.database import Base
+from app.core.time import utcnow
 
 
 # ============ 枚举定义 ============
@@ -66,9 +66,7 @@ class TriggerSource(str, Enum):
 def _uuid():
     return uuid.uuid4().hex
 
-def _utcnow():
-    """返回 naive UTC datetime，避免 PG TIMESTAMP WITHOUT TIME ZONE 的时区转换"""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+_utcnow = utcnow  # 兼容已有引用
 
 
 # ============ 模型定义 ============

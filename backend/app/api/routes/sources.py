@@ -2,7 +2,6 @@
 
 import json
 import logging
-from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Query, UploadFile, File
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
@@ -11,6 +10,7 @@ import xml.etree.ElementTree as ET
 
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.time import utcnow
 from app.models.content import SourceConfig, ContentItem, CollectionRecord, SourceType, MediaItem
 from app.models.finance import FinanceDataPoint
 from app.models.pipeline import PipelineTemplate, PipelineExecution, PipelineStep
@@ -36,11 +36,17 @@ def _resolve_rss_feed_url(source_type: str, url: str | None, config: dict) -> st
 
 
 def _source_to_response(source: SourceConfig, db: Session) -> dict:
-    """将 ORM 对象转为响应 dict，解析 pipeline_template_name"""
+    """将 ORM 对象转为响应 dict，解析 pipeline_template_name 和 content_count"""
     data = SourceResponse.model_validate(source).model_dump()
     if source.pipeline_template_id:
         tpl = db.get(PipelineTemplate, source.pipeline_template_id)
         data["pipeline_template_name"] = tpl.name if tpl else None
+    data["content_count"] = db.query(func.count(ContentItem.id)).filter(
+        ContentItem.source_id == source.id
+    ).scalar()
+
+    # next_collection_at 已由系统计算并存储在数据库，直接使用
+    # 由 SchedulingService.update_next_collection_time() 维护
     return data
 
 
@@ -61,9 +67,11 @@ async def list_sources(
     source_type: str | None = Query(None),
     is_active: bool | None = Query(None),
     q: str | None = Query(None, description="搜索名称或描述"),
+    sort_by: str = Query("created_at", description="排序字段"),
+    sort_order: str = Query("desc", description="排序方向: asc/desc"),
     db: Session = Depends(get_db),
 ):
-    """获取数据源列表（分页、筛选）"""
+    """获取数据源列表（分页、筛选、排序）"""
     query = db.query(SourceConfig)
 
     if source_type is not None:
@@ -76,8 +84,23 @@ async def list_sources(
             (SourceConfig.name.ilike(pattern)) | (SourceConfig.description.ilike(pattern))
         )
 
+    # 排序字段映射（仅允许白名单字段）
+    sort_mapping = {
+        "name": SourceConfig.name,
+        "created_at": SourceConfig.created_at,
+        "last_collected_at": SourceConfig.last_collected_at,
+        "next_collection_at": SourceConfig.next_collection_at,
+        "calculated_interval": SourceConfig.calculated_interval,
+    }
+
+    sort_column = sort_mapping.get(sort_by, SourceConfig.created_at)
+    if sort_order.lower() == "asc":
+        query = query.order_by(sort_column.asc())
+    else:
+        query = query.order_by(sort_column.desc())
+
     total = query.count()
-    sources = query.order_by(SourceConfig.created_at.desc()).offset((page - 1) * page_size).limit(page_size).all()
+    sources = query.offset((page - 1) * page_size).limit(page_size).all()
 
     return {
         "code": 0,
@@ -174,7 +197,7 @@ async def import_opml(
                     url=xml_url,
                     description=description[:500] if description else None,
                     schedule_enabled=True,
-                    schedule_interval=3600,  # 默认 1 小时
+                    schedule_mode="auto",  # 智能调度
                     is_active=True,
                 )
                 db.add(source)
@@ -220,7 +243,7 @@ async def export_opml(
 
     head = ET.SubElement(opml, "head")
     ET.SubElement(head, "title").text = "Allin-One RSS Subscriptions"
-    ET.SubElement(head, "dateCreated").text = datetime.now(timezone.utc).isoformat()
+    ET.SubElement(head, "dateCreated").text = utcnow().isoformat()
 
     body = ET.SubElement(opml, "body")
 
@@ -285,7 +308,7 @@ async def update_source(source_id: str, body: SourceUpdate, db: Session = Depend
     for key, value in update_data.items():
         setattr(source, key, value)
 
-    source.updated_at = datetime.now(timezone.utc)
+    source.updated_at = utcnow()
     db.commit()
     db.refresh(source)
 
@@ -298,6 +321,7 @@ async def batch_collect_all(db: Session = Depends(get_db)):
     """一键采集所有启用的数据源"""
     from app.services.collectors import collect_source
     from app.services.pipeline.orchestrator import PipelineOrchestrator
+    from app.services.scheduling_service import SchedulingService
     from app.models.pipeline import TriggerSource
 
     active_sources = db.query(SourceConfig).filter(SourceConfig.is_active == True).all()
@@ -320,8 +344,12 @@ async def batch_collect_all(db: Session = Depends(get_db)):
             sources_collected += 1
             total_items_new += len(new_items)
 
-            source.last_collected_at = datetime.now(timezone.utc)
+            source.last_collected_at = utcnow()
             source.consecutive_failures = 0
+
+            # ✨ 更新智能调度时间
+            SchedulingService.update_next_collection_time(source, db)
+
             db.flush()
 
             for item in new_items:
@@ -356,27 +384,23 @@ async def batch_delete_sources(
     cascade: bool = Query(False, description="是否同时删除关联内容"),
     db: Session = Depends(get_db),
 ):
-    """批量删除数据源"""
+    """批量删除数据源
+
+    cascade=false (默认): 仅删除数据源，保留关联内容（source_id 置空）
+    cascade=true: 同时删除关联内容及处理记录
+    """
     sources = db.query(SourceConfig).filter(SourceConfig.id.in_(body.ids)).all()
     if not sources:
         return {"code": 0, "data": {"deleted": 0}, "message": "ok"}
 
     source_ids = [s.id for s in sources]
 
-    # 检查关联内容
     content_count = db.query(func.count(ContentItem.id)).filter(
         ContentItem.source_id.in_(source_ids)
     ).scalar()
 
-    if content_count > 0 and not cascade:
-        return {
-            "code": 1,
-            "data": {"content_count": content_count},
-            "message": f"选中的数据源共关联 {content_count} 条内容，请确认是否级联删除",
-        }
-
-    # 级联删除关联数据
     if cascade and content_count > 0:
+        # 级联删除关联数据
         content_ids = [
             cid for (cid,) in db.query(ContentItem.id)
             .filter(ContentItem.source_id.in_(source_ids)).all()
@@ -392,9 +416,17 @@ async def batch_delete_sources(
             db.query(PipelineExecution).filter(
                 PipelineExecution.id.in_(execution_ids)
             ).delete(synchronize_session=False)
+        db.query(MediaItem).filter(
+            MediaItem.content_id.in_(content_ids)
+        ).delete(synchronize_session=False)
         db.query(ContentItem).filter(
             ContentItem.source_id.in_(source_ids)
         ).delete(synchronize_session=False)
+    elif content_count > 0:
+        # 保留内容，断开关联
+        db.query(ContentItem).filter(
+            ContentItem.source_id.in_(source_ids)
+        ).update({"source_id": None}, synchronize_session=False)
 
     # 清理 CollectionRecord 和 FinanceDataPoint
     db.query(CollectionRecord).filter(
@@ -422,8 +454,8 @@ async def batch_delete_sources(
     ).delete(synchronize_session=False)
     db.commit()
 
-    logger.info(f"Batch deleted {deleted} sources (cascade={cascade})")
-    return {"code": 0, "data": {"deleted": deleted}, "message": "ok"}
+    logger.info(f"Batch deleted {deleted} sources (cascade={cascade}, content_kept={content_count if not cascade else 0})")
+    return {"code": 0, "data": {"deleted": deleted, "content_count": content_count, "content_deleted": cascade}, "message": "ok"}
 
 
 @router.delete("/{source_id}")
@@ -432,22 +464,19 @@ async def delete_source(
     cascade: bool = Query(False, description="是否同时删除关联内容"),
     db: Session = Depends(get_db),
 ):
-    """删除数据源"""
+    """删除数据源
+
+    cascade=false (默认): 仅删除数据源，保留关联内容（source_id 置空）
+    cascade=true: 同时删除关联内容及处理记录
+    """
     source = db.get(SourceConfig, source_id)
     if not source:
         return error_response(404, "Source not found")
 
     content_count = db.query(func.count(ContentItem.id)).filter(ContentItem.source_id == source_id).scalar()
 
-    if content_count > 0 and not cascade:
-        return {
-            "code": 1,
-            "data": {"content_count": content_count},
-            "message": f"该数据源关联 {content_count} 条内容，请确认是否级联删除",
-        }
-
-    # 级联删除: pipeline_steps → pipeline_executions → content_items → source
     if cascade and content_count > 0:
+        # 级联删除: pipeline_steps → pipeline_executions → content_items
         content_ids = [
             cid for (cid,) in db.query(ContentItem.id)
             .filter(ContentItem.source_id == source_id).all()
@@ -463,9 +492,17 @@ async def delete_source(
             db.query(PipelineExecution).filter(
                 PipelineExecution.id.in_(execution_ids)
             ).delete(synchronize_session=False)
+        db.query(MediaItem).filter(
+            MediaItem.content_id.in_(content_ids)
+        ).delete(synchronize_session=False)
         db.query(ContentItem).filter(
             ContentItem.source_id == source_id
         ).delete(synchronize_session=False)
+    elif content_count > 0:
+        # 保留内容，断开关联
+        db.query(ContentItem).filter(
+            ContentItem.source_id == source_id
+        ).update({"source_id": None}, synchronize_session=False)
 
     # 清理 CollectionRecord 和 FinanceDataPoint
     db.query(CollectionRecord).filter(
@@ -475,7 +512,7 @@ async def delete_source(
         FinanceDataPoint.source_id == source_id
     ).delete(synchronize_session=False)
 
-    # 同时清理以 source_id 关联的无内容 pipeline_executions
+    # 清理以 source_id 关联的 pipeline_executions
     orphan_exec_ids = [
         eid for (eid,) in db.query(PipelineExecution.id)
         .filter(PipelineExecution.source_id == source_id).all()
@@ -491,8 +528,8 @@ async def delete_source(
     db.delete(source)
     db.commit()
 
-    logger.info(f"Source deleted: {source_id} (cascade={cascade})")
-    return {"code": 0, "data": None, "message": "ok"}
+    logger.info(f"Source deleted: {source_id} (cascade={cascade}, content_kept={content_count if not cascade else 0})")
+    return {"code": 0, "data": {"content_count": content_count, "content_deleted": cascade}, "message": "ok"}
 
 
 # ---- 手动采集 ----
@@ -506,15 +543,19 @@ async def trigger_collect(source_id: str, db: Session = Depends(get_db)):
 
     from app.services.collectors import collect_source
     from app.services.pipeline.orchestrator import PipelineOrchestrator
+    from app.services.scheduling_service import SchedulingService
     from app.models.pipeline import TriggerSource
 
     try:
         new_items = await collect_source(source, db)
 
         # 更新采集时间 (与 scheduled_tasks 保持一致)
-        from datetime import datetime, timezone
-        source.last_collected_at = datetime.now(timezone.utc)
+        source.last_collected_at = utcnow()
         source.consecutive_failures = 0
+
+        # ✨ 更新智能调度时间
+        SchedulingService.update_next_collection_time(source, db)
+
         db.flush()
 
         # 对新内容触发关联流水线

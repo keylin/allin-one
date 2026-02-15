@@ -1,8 +1,8 @@
 """系统设置模型"""
 
-from datetime import datetime, timezone
 from sqlalchemy import Column, String, Text, DateTime
 from app.core.database import Base
+from app.core.time import utcnow
 
 
 class SystemSetting(Base):
@@ -12,5 +12,4 @@ class SystemSetting(Base):
     key = Column(String, primary_key=True)
     value = Column(Text)
     description = Column(Text)
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
-                        onupdate=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)

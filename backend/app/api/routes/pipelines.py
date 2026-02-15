@@ -199,7 +199,8 @@ async def test_step(
 @router.post("/cancel-all")
 async def cancel_all_pipelines(db: Session = Depends(get_db)):
     """一键取消所有 pending/running 的流水线"""
-    now = datetime.now(timezone.utc)
+    from app.core.time import utcnow
+    now = utcnow()
     active_statuses = [PipelineStatus.PENDING.value, PipelineStatus.RUNNING.value]
 
     executions = db.query(PipelineExecution).filter(
@@ -262,7 +263,8 @@ async def cancel_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
         return error_response(400, f"Cannot cancel pipeline in '{execution.status}' status")
 
     execution.status = PipelineStatus.CANCELLED.value
-    execution.completed_at = datetime.now(timezone.utc)
+    from app.core.time import utcnow
+    execution.completed_at = utcnow()
 
     # 取消所有 pending 的步骤
     for step in execution.steps:

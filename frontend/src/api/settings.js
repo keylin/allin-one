@@ -19,3 +19,11 @@ export function clearExecutions(params = {}) {
 export function clearCollections(params = {}) {
   return api.post('/settings/clear-collections', params)
 }
+
+export function previewCleanup() {
+  return api.post('/settings/preview-cleanup')
+}
+
+export function manualCleanup() {
+  return api.post('/settings/manual-cleanup')
+}

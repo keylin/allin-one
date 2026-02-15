@@ -1,7 +1,6 @@
 """金融数据点模型 — 列式存储替代 ContentItem.raw_data JSON"""
 
 import uuid
-from datetime import datetime, timezone
 
 from sqlalchemy import (
     Column, String, Float, DateTime, Text, ForeignKey, UniqueConstraint, Index,
@@ -9,14 +8,11 @@ from sqlalchemy import (
 from sqlalchemy.orm import relationship
 
 from app.core.database import Base
+from app.core.time import utcnow as _utcnow
 
 
 def _uuid():
     return uuid.uuid4().hex
-
-def _utcnow():
-    """返回 naive UTC datetime，避免 PG TIMESTAMP WITHOUT TIME ZONE 的时区转换"""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class FinanceDataPoint(Base):
