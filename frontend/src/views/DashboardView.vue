@@ -8,6 +8,7 @@ import {
   getCollectionTrend,
   getSourceHealth,
   getRecentContent,
+  getDailyStats,
 } from '@/api/dashboard'
 import { getFinanceSummary } from '@/api/finance'
 import { collectSource } from '@/api/sources'
@@ -16,7 +17,7 @@ import { useToast } from '@/composables/useToast'
 const router = useRouter()
 
 const stats = ref({
-  sources_count: 0, contents_today: 0, contents_total: 0,
+  sources_count: 0, contents_today: 0, contents_yesterday: 0, contents_total: 0,
   pipelines_running: 0, pipelines_failed: 0, pipelines_pending: 0,
 })
 const activities = ref([])
@@ -28,6 +29,11 @@ const toast = useToast()
 const loading = ref(true)
 const collectingId = ref(null)
 let timer = null
+
+// 日详情相关
+const selectedDate = ref(dayjs().format('YYYY-MM-DD'))
+const dailyStats = ref(null)
+const loadingDaily = ref(false)
 
 // --- 统计卡片 ---
 const statCards = [
@@ -46,6 +52,14 @@ const accentClasses = {
 
 // --- 采集趋势 ---
 const trendMax = computed(() => Math.max(...trend.value.map(t => t.count), 1))
+
+// --- 今昨对比 ---
+const todayChange = computed(() => {
+  const today = stats.value.contents_today
+  const yesterday = stats.value.contents_yesterday
+  if (yesterday === 0) return 0
+  return today - yesterday
+})
 
 // --- 数据源健康统计 ---
 const healthSummary = computed(() => {
@@ -108,6 +122,25 @@ async function fetchData() {
   }
 }
 
+async function fetchDailyStats(date) {
+  loadingDaily.value = true
+  try {
+    const res = await getDailyStats(date)
+    if (res.code === 0) {
+      dailyStats.value = res.data
+    }
+  } catch (e) {
+    toast.error('日统计数据加载失败')
+  } finally {
+    loadingDaily.value = false
+  }
+}
+
+function selectDate(date) {
+  selectedDate.value = date
+  fetchDailyStats(date)
+}
+
 function formatTime(t) {
   return t ? dayjs.utc(t).local().format('MM-DD HH:mm') : '-'
 }
@@ -137,6 +170,7 @@ function formatDayLabel(dateStr) {
 
 onMounted(() => {
   fetchData()
+  fetchDailyStats(selectedDate.value)
   timer = setInterval(fetchData, 30000)
 })
 
@@ -172,11 +206,42 @@ onUnmounted(() => {
             <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
           </svg>
         </div>
-        <div
-          class="text-3xl font-bold tracking-tight"
-          :class="accentClasses[card.accent].number"
-        >
-          {{ loading ? '-' : stats[card.key] }}
+        <div class="flex items-baseline gap-2">
+          <div
+            class="text-3xl font-bold tracking-tight"
+            :class="accentClasses[card.accent].number"
+          >
+            {{ loading ? '-' : stats[card.key] }}
+          </div>
+          <!-- 今昨对比（仅"今日采集"卡片） -->
+          <div v-if="card.key === 'contents_today' && !loading && stats.contents_yesterday !== undefined" class="flex items-center gap-0.5">
+            <svg
+              v-if="todayChange > 0"
+              class="w-3 h-3 text-emerald-500"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              stroke-width="2.5"
+            >
+              <path stroke-linecap="round" stroke-linejoin="round" d="M5 10l7-7m0 0l7 7m-7-7v18" />
+            </svg>
+            <svg
+              v-else-if="todayChange < 0"
+              class="w-3 h-3 text-rose-500"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              stroke-width="2.5"
+            >
+              <path stroke-linecap="round" stroke-linejoin="round" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+            </svg>
+            <span
+              class="text-xs font-medium"
+              :class="todayChange > 0 ? 'text-emerald-500' : todayChange < 0 ? 'text-rose-500' : 'text-slate-400'"
+            >
+              {{ todayChange > 0 ? '+' : '' }}{{ todayChange }}
+            </span>
+          </div>
         </div>
         <div class="text-sm text-slate-500 mt-1">{{ card.label }}</div>
         <div class="text-xs text-slate-300">{{ card.subtitle }}</div>
@@ -241,21 +306,109 @@ onUnmounted(() => {
           <div
             v-for="day in trend"
             :key="day.date"
-            class="flex-1 flex flex-col items-center gap-1.5"
+            class="flex-1 flex flex-col items-center gap-1.5 cursor-pointer"
+            @click="selectDate(day.date)"
           >
             <!-- 数量标签 -->
-            <span class="text-[10px] font-medium text-slate-500">{{ day.count || '' }}</span>
+            <span class="text-[10px] font-medium" :class="selectedDate === day.date ? 'text-indigo-600' : 'text-slate-500'">
+              {{ day.count || '' }}
+            </span>
             <!-- 柱子 -->
             <div class="w-full flex justify-center">
               <div
-                class="w-full max-w-[36px] rounded-t-md transition-all duration-500"
-                :class="day.count > 0 ? 'bg-indigo-400 hover:bg-indigo-500' : 'bg-slate-100'"
+                class="w-full max-w-[36px] rounded-t-md transition-all duration-300"
+                :class="selectedDate === day.date
+                  ? 'bg-indigo-600 shadow-md'
+                  : day.count > 0
+                    ? 'bg-indigo-400 hover:bg-indigo-500'
+                    : 'bg-slate-100'"
                 :style="{ height: `${Math.max(day.count / trendMax * 100, 4)}px` }"
                 :title="`${day.date}: ${day.count} 条`"
               ></div>
             </div>
-            <!-- 日期 -->
-            <span class="text-[10px] text-slate-400">{{ formatDayLabel(day.date) }}</span>
+            <!-- 日期 + 选中指示器 -->
+            <div class="flex flex-col items-center gap-0.5">
+              <span class="text-[10px]" :class="selectedDate === day.date ? 'text-indigo-600 font-semibold' : 'text-slate-400'">
+                {{ formatDayLabel(day.date) }}
+              </span>
+              <div
+                v-if="selectedDate === day.date"
+                class="w-1 h-1 rounded-full bg-indigo-600"
+              ></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 日详情面板 -->
+        <div v-if="selectedDate" class="mt-6 pt-5 border-t border-slate-100">
+          <!-- 加载状态 -->
+          <div v-if="loadingDaily" class="flex items-center justify-center py-6">
+            <svg class="w-5 h-5 animate-spin text-slate-300" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
+          </div>
+
+          <!-- 空状态 -->
+          <div v-else-if="dailyStats && dailyStats.collection_total === 0" class="flex flex-col items-center justify-center py-6">
+            <svg class="w-10 h-10 text-slate-200 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
+            </svg>
+            <p class="text-xs text-slate-400">{{ formatDayLabel(selectedDate) }}无采集记录</p>
+          </div>
+
+          <!-- 日详情内容 -->
+          <div v-else-if="dailyStats">
+            <!-- 概况行 -->
+            <div class="flex items-center gap-4 text-xs mb-4">
+              <div class="flex items-center gap-1.5">
+                <span class="text-slate-400">采集</span>
+                <span class="font-semibold text-slate-700">{{ dailyStats.collection_total }}</span>
+                <span class="text-slate-400">次</span>
+              </div>
+              <div class="w-px h-3 bg-slate-200"></div>
+              <div class="flex items-center gap-1.5">
+                <span class="text-slate-400">成功率</span>
+                <span class="font-semibold" :class="dailyStats.success_rate >= 90 ? 'text-emerald-600' : dailyStats.success_rate >= 70 ? 'text-amber-600' : 'text-rose-600'">
+                  {{ dailyStats.success_rate }}%
+                </span>
+              </div>
+              <div class="w-px h-3 bg-slate-200"></div>
+              <div class="flex items-center gap-1.5">
+                <span class="text-slate-400">发现</span>
+                <span class="font-semibold text-indigo-600">{{ dailyStats.items_found }}</span>
+                <span class="text-slate-400">条</span>
+              </div>
+              <div class="w-px h-3 bg-slate-200"></div>
+              <div class="flex items-center gap-1.5">
+                <span class="text-slate-400">新增</span>
+                <span class="font-semibold text-emerald-600">{{ dailyStats.items_new }}</span>
+                <span class="text-slate-400">条</span>
+              </div>
+            </div>
+
+            <!-- Top 数据源排行 -->
+            <div v-if="dailyStats.top_sources.length > 0" class="space-y-2">
+              <h4 class="text-xs font-medium text-slate-500 mb-2">Top 数据源</h4>
+              <div
+                v-for="source in dailyStats.top_sources.slice(0, 5)"
+                :key="source.source_id"
+                class="flex items-center gap-2"
+              >
+                <div class="flex-1 min-w-0">
+                  <div class="text-xs text-slate-700 truncate">{{ source.source_name }}</div>
+                </div>
+                <div class="flex items-center gap-2 shrink-0">
+                  <span class="text-xs font-medium text-emerald-600">+{{ source.items_new }}</span>
+                  <div class="w-16 bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                    <div
+                      class="h-1.5 bg-emerald-400 rounded-full"
+                      :style="{ width: `${(source.items_new / dailyStats.items_new) * 100}%` }"
+                    ></div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>

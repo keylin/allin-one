@@ -306,7 +306,7 @@ async def batch_toggle_favorite(body: ContentBatchDelete, db: Session = Depends(
 
 @router.get("/stats")
 async def content_stats(db: Session = Depends(get_db)):
-    """内容库统计：按状态分组 + 今日新增"""
+    """内容库统计：按状态分组 + 今日新增 + 已读/未读"""
     today_start = utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     status_rows = (
         db.query(ContentItem.status, func.count(ContentItem.id))
@@ -317,6 +317,19 @@ async def content_stats(db: Session = Depends(get_db)):
         db.query(func.count(ContentItem.id))
         .filter(ContentItem.collected_at >= today_start).scalar()
     )
+
+    # 已读/未读统计
+    unread_count = (
+        db.query(func.count(ContentItem.id))
+        .filter((ContentItem.view_count == 0) | (ContentItem.view_count.is_(None)))
+        .scalar()
+    )
+    read_count = (
+        db.query(func.count(ContentItem.id))
+        .filter(ContentItem.view_count > 0)
+        .scalar()
+    )
+
     return {
         "code": 0,
         "data": {
@@ -327,6 +340,8 @@ async def content_stats(db: Session = Depends(get_db)):
             "ready": status_counts.get("ready", 0),
             "analyzed": status_counts.get("analyzed", 0),
             "failed": status_counts.get("failed", 0),
+            "unread": unread_count,
+            "read": read_count,
         },
         "message": "ok",
     }

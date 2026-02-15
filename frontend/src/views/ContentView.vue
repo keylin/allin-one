@@ -21,7 +21,16 @@ const filterSourceId = ref(route.query.source_id || '')
 const sources = ref([])
 
 // Stats
-const contentStats = ref({ total: 0, today: 0, pending: 0, processing: 0, analyzed: 0, failed: 0 })
+const contentStats = ref({
+  total: 0,
+  today: 0,
+  pending: 0,
+  processing: 0,
+  analyzed: 0,
+  failed: 0,
+  read: 0,      // 新增
+  unread: 0     // 新增
+})
 
 // Date range
 const dateRange = ref(route.query.date_range || '')
@@ -33,9 +42,14 @@ const dateRangeOptions = [
   { value: '30', label: '近30天' },
 ]
 
-// Favorites / unread toggles
+// Favorites toggle
 const showFavoritesOnly = ref(route.query.favorites === '1')
-const showUnreadOnly = ref(route.query.unread === '1')
+// 三态已读/未读筛选：null=全部, 'unread'=仅未读, 'read'=仅已读
+const readStatusFilter = ref(
+  route.query.read_status === 'unread' ? 'unread' :
+  route.query.read_status === 'read' ? 'read' :
+  null
+)
 
 // Sort (from URL)
 const sortBy = ref(route.query.sort_by || 'collected_at')
@@ -78,7 +92,7 @@ function syncQueryParams() {
   if (filterSourceId.value) query.source_id = filterSourceId.value
   if (dateRange.value) query.date_range = dateRange.value
   if (showFavoritesOnly.value) query.favorites = '1'
-  if (showUnreadOnly.value) query.unread = '1'
+  if (readStatusFilter.value) query.read_status = readStatusFilter.value  // 三态筛选
   if (sortBy.value !== 'collected_at') query.sort_by = sortBy.value
   if (sortOrder.value !== 'desc') query.sort_order = sortOrder.value
   if (store.currentPage > 1) query.page = String(store.currentPage)
@@ -106,8 +120,17 @@ async function fetchContentStats() {
 }
 
 function handleStatCardClick(statusFilter) {
-  if (statusFilter === null) return
-  filterStatus.value = filterStatus.value === statusFilter ? '' : statusFilter
+  if (statusFilter === null) return  // "今日新增"等卡片不可点击
+
+  // 处理已读/未读筛选（特殊值）
+  if (statusFilter === 'unread' || statusFilter === 'read') {
+    readStatusFilter.value = readStatusFilter.value === statusFilter ? null : statusFilter
+  }
+  // 处理 status 筛选（pending/analyzed/failed）
+  else {
+    filterStatus.value = filterStatus.value === statusFilter ? '' : statusFilter
+  }
+
   handleFilterChange()
 }
 
@@ -122,7 +145,11 @@ function fetchWithFilters() {
   if (filterHasVideo.value) params.has_video = true
   if (filterSourceId.value) params.source_id = filterSourceId.value
   if (showFavoritesOnly.value) params.is_favorited = true
-  if (showUnreadOnly.value) params.is_unread = true
+
+  // 三态已读/未读筛选
+  if (readStatusFilter.value === 'unread') params.is_unread = true
+  if (readStatusFilter.value === 'read') params.is_unread = false
+
   store.fetchContent(params)
   syncQueryParams()
   fetchContentStats()
@@ -360,13 +387,21 @@ onUnmounted(() => {
             { label: '全部', value: contentStats.total, filter: '', icon: 'M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z', color: 'text-slate-600 bg-slate-50', active: 'ring-slate-400' },
             { label: '今日新增', value: contentStats.today, filter: null, icon: 'M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z', color: 'text-blue-600 bg-blue-50', active: '' },
             { label: '待处理', value: contentStats.pending, filter: 'pending', icon: 'M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z', color: 'text-amber-600 bg-amber-50', active: 'ring-amber-400' },
+            { label: '已就绪', value: contentStats.ready, filter: 'ready', icon: 'M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z', color: 'text-sky-600 bg-sky-50', active: 'ring-sky-400' },
             { label: '已分析', value: contentStats.analyzed, filter: 'analyzed', icon: 'M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z', color: 'text-emerald-600 bg-emerald-50', active: 'ring-emerald-400' },
             { label: '失败', value: contentStats.failed, filter: 'failed', icon: 'M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z', color: 'text-rose-600 bg-rose-50', active: 'ring-rose-400' },
+            { label: '未读', value: contentStats.unread, filter: 'unread', icon: 'M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.64 0 8.577 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.64 0-8.577-3.007-9.963-7.178zM15 12a3 3 0 11-6 0 3 3 0 016 0z', color: 'text-blue-600 bg-blue-50', active: 'ring-blue-400' },
+            { label: '已读', value: contentStats.read, filter: 'read', icon: 'M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z', color: 'text-slate-600 bg-slate-100', active: 'ring-slate-400' },
           ]"
           :key="card.label"
           class="flex items-center gap-2.5 px-3 py-2 rounded-lg border transition-all duration-200 shrink-0 min-w-0"
           :class="[
-            card.filter !== null && filterStatus === card.filter
+            // 判断卡片是否激活
+            (
+              (card.filter !== null && card.filter !== 'unread' && card.filter !== 'read' && filterStatus === card.filter) ||
+              (card.filter === 'unread' && readStatusFilter === 'unread') ||
+              (card.filter === 'read' && readStatusFilter === 'read')
+            )
               ? `border-transparent ring-2 ${card.active} ${card.color}`
               : 'border-slate-200 hover:border-slate-300 bg-white',
             card.filter === null ? 'cursor-default' : 'cursor-pointer'
@@ -442,14 +477,14 @@ onUnmounted(() => {
       </select>
       <button
         class="p-2 rounded-lg border transition-all duration-200"
-        :class="showUnreadOnly ? 'bg-blue-50 border-blue-300 text-blue-600' : 'bg-white border-slate-200 text-slate-400 hover:text-slate-600 hover:border-slate-300'"
-        :title="showUnreadOnly ? '显示全部' : '仅看未读'"
-        @click="showUnreadOnly = !showUnreadOnly; handleFilterChange()"
+        :class="readStatusFilter === 'unread' ? 'bg-blue-50 border-blue-300 text-blue-600' : 'bg-white border-slate-200 text-slate-400 hover:text-slate-600 hover:border-slate-300'"
+        :title="readStatusFilter === 'unread' ? '显示全部' : '仅看未读'"
+        @click="readStatusFilter = readStatusFilter === 'unread' ? null : 'unread'; handleFilterChange()"
       >
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-          <path v-if="!showUnreadOnly" stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.64 0 8.577 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.64 0-8.577-3.007-9.963-7.178z" />
-          <path v-if="!showUnreadOnly" stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-          <path v-if="showUnreadOnly" stroke-linecap="round" stroke-linejoin="round" d="M3.98 8.223A10.477 10.477 0 001.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.45 10.45 0 0112 4.5c4.756 0 8.773 3.162 10.065 7.498a10.523 10.523 0 01-4.293 5.774M6.228 6.228L3 3m3.228 3.228l3.65 3.65m7.894 7.894L21 21m-3.228-3.228l-3.65-3.65m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88" />
+          <path v-if="readStatusFilter !== 'unread'" stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.64 0 8.577 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.64 0-8.577-3.007-9.963-7.178z" />
+          <path v-if="readStatusFilter !== 'unread'" stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          <path v-if="readStatusFilter === 'unread'" stroke-linecap="round" stroke-linejoin="round" d="M3.98 8.223A10.477 10.477 0 001.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.45 10.45 0 0112 4.5c4.756 0 8.773 3.162 10.065 7.498a10.523 10.523 0 01-4.293 5.774M6.228 6.228L3 3m3.228 3.228l3.65 3.65m7.894 7.894L21 21m-3.228-3.228l-3.65-3.65m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88" />
         </svg>
       </button>
       <button

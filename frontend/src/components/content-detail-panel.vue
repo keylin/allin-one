@@ -215,7 +215,7 @@ defineExpose({ content })
           <span v-if="content.author">{{ content.author }}</span>
           <span>{{ formatTime(content.published_at || content.created_at) }}</span>
           <span
-            v-if="content.status"
+            v-if="content.status && content.status !== 'ready'"
             class="inline-flex px-2 py-0.5 text-xs font-medium rounded-md"
             :class="statusStyles[content.status] || 'bg-slate-100 text-slate-600'"
           >

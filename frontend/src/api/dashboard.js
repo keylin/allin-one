@@ -19,3 +19,7 @@ export function getSourceHealth() {
 export function getRecentContent(limit = 8) {
   return api.get('/dashboard/recent-content', { params: { limit } })
 }
+
+export function getDailyStats(date) {
+  return api.get('/dashboard/daily-stats', { params: { date } })
+}

@@ -160,8 +160,9 @@ function onThumbError(e) {
 
           <span v-if="relTime">{{ relTime }}</span>
 
-          <!-- 状态 badge -->
+          <!-- 状态 badge (隐藏 ready 状态) -->
           <span
+            v-if="item.status !== 'ready'"
             :class="currentStatus.class"
             class="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium leading-none"
           >

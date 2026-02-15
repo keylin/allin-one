@@ -7,7 +7,7 @@ from sqlalchemy import func, cast, Date
 
 from app.core.database import get_db
 from app.core.time import utcnow
-from app.models.content import SourceConfig, ContentItem
+from app.models.content import SourceConfig, ContentItem, CollectionRecord
 from app.models.pipeline import PipelineExecution, PipelineStatus
 
 router = APIRouter()
@@ -22,6 +22,17 @@ async def get_dashboard_stats(db: Session = Depends(get_db)):
     contents_today = (
         db.query(func.count(ContentItem.id))
         .filter(ContentItem.collected_at >= today_start)
+        .scalar()
+    )
+
+    # 昨日采集数（用于今昨对比）
+    yesterday_start = (today_start - timedelta(days=1))
+    contents_yesterday = (
+        db.query(func.count(ContentItem.id))
+        .filter(
+            ContentItem.collected_at >= yesterday_start,
+            ContentItem.collected_at < today_start
+        )
         .scalar()
     )
 
@@ -40,6 +51,7 @@ async def get_dashboard_stats(db: Session = Depends(get_db)):
         "data": {
             "sources_count": sources_count,
             "contents_today": contents_today,
+            "contents_yesterday": contents_yesterday,
             "contents_total": contents_total,
             "pipelines_running": pipeline_counts.get(PipelineStatus.RUNNING.value, 0),
             "pipelines_failed": pipeline_counts.get(PipelineStatus.FAILED.value, 0),
@@ -78,6 +90,94 @@ async def get_collection_trend(
         trend.append({"date": day, "count": count_map.get(day, 0)})
 
     return {"code": 0, "data": trend, "message": "ok"}
+
+
+@router.get("/daily-stats")
+async def get_daily_stats(
+    date: str = Query(None, description="日期 YYYY-MM-DD，默认今天"),
+    db: Session = Depends(get_db),
+):
+    """获取指定日期的采集详细统计"""
+    # 解析日期参数，默认今天
+    if date:
+        try:
+            target_date = utcnow().strptime(date, "%Y-%m-%d")
+        except ValueError:
+            return {"code": -1, "data": None, "message": "日期格式错误，需要 YYYY-MM-DD"}
+    else:
+        target_date = utcnow()
+        date = target_date.strftime("%Y-%m-%d")
+
+    # 计算当天起止时间
+    day_start = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_end = day_start + timedelta(days=1)
+
+    # 筛选当天的采集记录
+    records = (
+        db.query(CollectionRecord)
+        .filter(
+            CollectionRecord.started_at >= day_start,
+            CollectionRecord.started_at < day_end
+        )
+        .all()
+    )
+
+    # 聚合统计
+    collection_total = len(records)
+    collection_success = sum(1 for r in records if r.status == "completed")
+    collection_failed = sum(1 for r in records if r.status == "failed")
+    items_found = sum(r.items_found or 0 for r in records)
+    items_new = sum(r.items_new or 0 for r in records)
+    success_rate = round(collection_success / collection_total * 100, 1) if collection_total > 0 else 0
+
+    # 按数据源分组统计
+    source_stats = {}
+    for r in records:
+        if r.source_id not in source_stats:
+            source_stats[r.source_id] = {
+                "source_id": r.source_id,
+                "items_new": 0,
+                "collection_count": 0
+            }
+        source_stats[r.source_id]["items_new"] += r.items_new or 0
+        source_stats[r.source_id]["collection_count"] += 1
+
+    # 取 Top 10 数据源（按 items_new 降序）
+    top_source_ids = sorted(
+        source_stats.values(),
+        key=lambda x: x["items_new"],
+        reverse=True
+    )[:10]
+
+    # 批量查询数据源名称
+    source_ids = [s["source_id"] for s in top_source_ids]
+    sources = db.query(SourceConfig.id, SourceConfig.name).filter(SourceConfig.id.in_(source_ids)).all()
+    source_name_map = {s.id: s.name for s in sources}
+
+    # 填充数据源名称
+    top_sources = []
+    for s in top_source_ids:
+        top_sources.append({
+            "source_id": s["source_id"],
+            "source_name": source_name_map.get(s["source_id"], "未知数据源"),
+            "items_new": s["items_new"],
+            "collection_count": s["collection_count"]
+        })
+
+    return {
+        "code": 0,
+        "data": {
+            "date": date,
+            "collection_total": collection_total,
+            "collection_success": collection_success,
+            "collection_failed": collection_failed,
+            "success_rate": success_rate,
+            "items_found": items_found,
+            "items_new": items_new,
+            "top_sources": top_sources,
+        },
+        "message": "ok",
+    }
 
 
 @router.get("/source-health")
