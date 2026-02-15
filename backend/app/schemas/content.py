@@ -18,7 +18,7 @@ class ContentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
-    source_id: str
+    source_id: Optional[str] = None
     source_name: Optional[str] = None
     title: str
     external_id: str

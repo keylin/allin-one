@@ -132,12 +132,8 @@ async def list_content(
     if status:
         query = query.filter(ContentItem.status == status)
     if has_video:
-        from sqlalchemy import exists as sa_exists
         query = query.filter(
-            sa_exists().where(
-                (MediaItem.content_id == ContentItem.id) &
-                (MediaItem.media_type == "video")
-            )
+            ContentItem.media_items.any(MediaItem.media_type == "video")
         )
     if q:
         pattern = f"%{q}%"

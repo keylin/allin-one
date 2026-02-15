@@ -61,6 +61,20 @@ class SchedulingConfig:
     window_boost_hourly_factor: float = 0.4
     window_boost_weekly_factor: float = 0.6
 
+    # 采集层立即重试配置
+    retry_in_collector_enabled: bool = True
+    retry_in_collector_max_attempts: int = 3
+    retry_in_collector_delays: str = "30,60"
+
+    # 调度层快速重试配置（暂时性错误）
+    retry_transient_intervals: str = "300,900,1800,3600"  # 5min,15min,30min,1h
+    retry_transient_max_failures: int = 4
+
+    # 退避策略配置
+    backoff_permanent_enabled: bool = True
+    backoff_base_interval: int = 3600  # 1小时
+    backoff_max_interval: int = 86400  # 24小时
+
 
 class SchedulingService:
     """智能调度服务"""
@@ -94,6 +108,10 @@ class SchedulingService:
                 return setting.value.lower() in ('true', '1', 'yes')
             return default
 
+        def get_str(key: str, default: str) -> str:
+            setting = db.get(SystemSetting, key)
+            return setting.value if setting and setting.value else default
+
         return SchedulingConfig(
             min_interval=get_int("schedule_min_interval", 300),
             max_interval=get_int("schedule_max_interval", 86400),
@@ -103,7 +121,7 @@ class SchedulingService:
             activity_medium=get_float("schedule_activity_medium", 2.0),
             activity_low=get_float("schedule_activity_low", 0.5),
 
-            # 热点提权（新增）
+            # 热点提权
             hotspot_enabled=get_bool("hotspot_enabled", True),
             hotspot_instant_factor=get_float("hotspot_instant_factor", 0.3),
             hotspot_high_factor=get_float("hotspot_high_factor", 0.2),
@@ -116,15 +134,29 @@ class SchedulingService:
             hotspot_history_days=get_int("hotspot_history_days", 7),
             max_hotspot_sources=get_int("max_hotspot_sources", 5),
 
-            # 周期性识别（新增）
+            # 周期性识别
             periodicity_enabled=get_bool("periodicity_enabled", True),
             periodicity_min_samples=get_int("periodicity_min_samples", 14),
             periodicity_confidence_threshold=get_float("periodicity_confidence_threshold", 0.7),
 
-            # 时间窗口提权（新增）
+            # 时间窗口提权
             window_boost_enabled=get_bool("window_boost_enabled", True),
             window_boost_hourly_factor=get_float("window_boost_hourly_factor", 0.4),
             window_boost_weekly_factor=get_float("window_boost_weekly_factor", 0.6),
+
+            # 采集层立即重试配置
+            retry_in_collector_enabled=get_bool("retry_in_collector_enabled", True),
+            retry_in_collector_max_attempts=get_int("retry_in_collector_max_attempts", 3),
+            retry_in_collector_delays=get_str("retry_in_collector_delays", "30,60"),
+
+            # 调度层快速重试配置（暂时性错误）
+            retry_transient_intervals=get_str("retry_transient_intervals", "300,900,1800,3600"),
+            retry_transient_max_failures=get_int("retry_transient_max_failures", 4),
+
+            # 退避策略配置
+            backoff_permanent_enabled=get_bool("backoff_permanent_enabled", True),
+            backoff_base_interval=get_int("backoff_base_interval", 3600),
+            backoff_max_interval=get_int("backoff_max_interval", 86400),
         )
 
     @staticmethod
@@ -165,8 +197,31 @@ class SchedulingService:
 
         # 失败退避优先（优先级最高）
         if source.consecutive_failures > 0:
-            interval = SchedulingService._apply_backoff(config.base_interval, source.consecutive_failures, config)
-            logger.debug(f"Source {source.id} ({source.name}): backoff mode, interval={interval}s (failures={source.consecutive_failures})")
+            # 查询最近一次失败记录，提取错误类型
+            latest_failure = db.query(CollectionRecord).filter(
+                CollectionRecord.source_id == source.id,
+                CollectionRecord.status == "failed"
+            ).order_by(desc(CollectionRecord.started_at)).first()
+
+            error_type = "unknown"
+            if latest_failure and latest_failure.error_message:
+                # 从 error_message 前缀提取错误类型
+                msg = latest_failure.error_message
+                if msg.startswith("[TRANSIENT]"):
+                    error_type = "transient"
+                elif msg.startswith("[PERMANENT]"):
+                    error_type = "permanent"
+
+            # 使用新的分级退避算法
+            interval = SchedulingService._calculate_backoff_interval(
+                source.consecutive_failures,
+                error_type,
+                config
+            )
+            logger.debug(
+                f"Source {source.id} ({source.name}): backoff mode, "
+                f"error_type={error_type}, interval={interval}s (failures={source.consecutive_failures})"
+            )
             return interval
 
         # ✨ 热点检测（优先级高于常规评分）
@@ -333,12 +388,65 @@ class SchedulingService:
 
     @staticmethod
     def _apply_backoff(base_interval: int, consecutive_failures: int, config: SchedulingConfig) -> int:
-        """应用退避策略：2^n 指数延长"""
+        """应用退避策略：2^n 指数延长（遗留方法，保留向后兼容）"""
         if consecutive_failures <= 0:
             return base_interval
 
         backoff_interval = base_interval * (2 ** consecutive_failures)
         return min(backoff_interval, config.max_interval)
+
+    @staticmethod
+    def _calculate_backoff_interval(consecutive_failures: int, error_type: str, config: SchedulingConfig) -> int:
+        """根据错误类型计算退避间隔
+
+        Args:
+            consecutive_failures: 连续失败次数
+            error_type: 错误类型 ("transient", "permanent", 或其他)
+            config: 调度配置
+
+        Returns:
+            下次采集间隔（秒）
+        """
+        if consecutive_failures <= 0:
+            return config.base_interval
+
+        # 暂时性错误：快速重试
+        if error_type == "transient":
+            # 解析固定间隔序列
+            try:
+                intervals = [int(x) for x in config.retry_transient_intervals.split(",")]
+            except (ValueError, AttributeError):
+                intervals = [300, 900, 1800, 3600]  # 默认：5min,15min,30min,1h
+
+            max_failures = config.retry_transient_max_failures
+
+            # 前 N 次使用固定间隔
+            if consecutive_failures <= len(intervals):
+                interval = intervals[consecutive_failures - 1]
+            elif consecutive_failures <= max_failures:
+                # 最后一个固定间隔之后，继续使用最后一个值
+                interval = intervals[-1]
+            else:
+                # 超过阈值，进入指数退避
+                failures_beyond = consecutive_failures - max_failures
+                base = config.backoff_base_interval
+                interval = base * (2 ** failures_beyond)
+
+            return min(interval, config.backoff_max_interval)
+
+        # 持续性错误：立即激进退避
+        elif error_type == "permanent":
+            if not config.backoff_permanent_enabled:
+                # 禁用持续性错误退避，使用标准策略
+                return SchedulingService._apply_backoff(config.base_interval, consecutive_failures, config)
+
+            base = config.backoff_base_interval
+            interval = base * (2 ** consecutive_failures)
+            return min(interval, config.backoff_max_interval)
+
+        # 未知类型：使用标准指数退避（兜底）
+        else:
+            return SchedulingService._apply_backoff(config.base_interval, consecutive_failures, config)
 
     @staticmethod
     def detect_hotspot_level(source, recent_records: list, config: SchedulingConfig) -> Optional[str]:

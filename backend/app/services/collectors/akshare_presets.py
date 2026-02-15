@@ -102,7 +102,7 @@ FINANCE_PRESETS = {
                 "params": {},
                 "title_field": "日期",
                 "id_fields": ["日期"],
-                "value_field": "国家外汇储备",
+                "value_field": "今值",  # 修复: 使用实际返回的字段名
                 "date_field": "日期",
                 "schedule_interval": 86400,
                 "max_history": 60,

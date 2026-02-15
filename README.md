@@ -61,11 +61,17 @@ cd backend
 huey_consumer app.tasks.huey_instance.huey
 ```
 
-或使用一键开发脚本：
+或使用一键开发脚本（**推荐，已默认支持局域网访问**）：
 
 ```bash
 ./local-dev.sh
 ```
+
+启动后可通过以下地址访问：
+- **本机**: `http://localhost:3000`
+- **局域网设备**（手机/平板）: `http://<你的局域网IP>:3000`
+
+脚本会自动检测并显示局域网访问地址。
 
 ## 项目结构
 

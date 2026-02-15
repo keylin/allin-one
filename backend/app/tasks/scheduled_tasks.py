@@ -60,9 +60,9 @@ async def check_and_collect_sources(timestamp):
                 continue
 
             try:
-                # ---- 第一阶段: Collector 抓取, 产出 ContentItem ----
-                from app.services.collectors import collect_source
-                new_items = await collect_source(source, db)
+                # ---- 第一阶段: Collector 抓取（带重试）, 产出 ContentItem ----
+                from app.services.collectors import collect_source_with_retry
+                new_items = await collect_source_with_retry(source, db)
 
                 source.last_collected_at = now
                 source.consecutive_failures = 0
@@ -92,6 +92,24 @@ async def check_and_collect_sources(timestamp):
 
             except Exception as e:
                 db.rollback()
+
+                # 分类错误类型
+                from app.services.collectors import classify_error
+                error_type = classify_error(e)
+
+                # 生成带错误类型前缀的错误信息
+                error_msg = f"[{error_type.upper()}] {str(e)[:480]}"
+
+                # 查询最近的失败记录并更新 error_message
+                from app.models.content import CollectionRecord
+                latest_record = db.query(CollectionRecord).filter(
+                    CollectionRecord.source_id == source.id,
+                    CollectionRecord.status == "failed"
+                ).order_by(CollectionRecord.started_at.desc()).first()
+
+                if latest_record:
+                    latest_record.error_message = error_msg
+
                 source.consecutive_failures += 1
 
                 # ✨ 失败也更新调度时间（应用退避策略）
@@ -102,14 +120,18 @@ async def check_and_collect_sources(timestamp):
                     db.rollback()
                     logger.error(f"Failed to update schedule for {source.name}: {update_err}")
 
+                # 根据错误类型记录日志
                 import httpx
                 from sqlalchemy.exc import OperationalError
                 if isinstance(e, OperationalError):
                     logger.warning(f"Database contention for {source.name}: {e}")
                 elif isinstance(e, (httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException)):
-                    logger.warning(f"Collection transient error for {source.name}: {type(e).__name__}: {str(e) or repr(e)}")
+                    logger.warning(
+                        f"Collection {error_type} error for {source.name}: "
+                        f"{type(e).__name__}: {str(e) or repr(e)}"
+                    )
                 else:
-                    logger.error(f"Collection failed for {source.name}: {e}")
+                    logger.error(f"Collection {error_type} error for {source.name}: {e}")
 
         # ---- 补偿: 对 pending 且无 pipeline 的内容补触发 ----
         from app.models.pipeline import PipelineExecution

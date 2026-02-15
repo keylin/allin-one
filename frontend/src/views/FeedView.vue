@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { listContent, getContent, analyzeContent, toggleFavorite, listSourceOptions, incrementView, chatWithContent, enrichContent, applyEnrichment } from '@/api/content'
 import { useToast } from '@/composables/useToast'
 import FeedCard from '@/components/feed-card.vue'
-import VideoPlayer from '@/components/video-player.vue'
+import IframeVideoPlayer from '@/components/iframe-video-player.vue'
 import MarkdownIt from 'markdown-it'
 import DOMPurify from 'dompurify'
 import { formatTimeFull } from '@/utils/time'
@@ -984,10 +984,10 @@ onUnmounted(() => {
             </div>
 
             <!-- 视频播放器 -->
-            <VideoPlayer
+            <IframeVideoPlayer
               v-if="detailContent.media_items?.some(m => m.media_type === 'video')"
               :key="'vp-' + detailContent.id"
-              :content-id="detailContent.id"
+              :video-url="detailContent.url"
               :title="detailContent.title || '视频播放'"
             />
 
@@ -1205,10 +1205,10 @@ onUnmounted(() => {
               </div>
 
               <!-- 视频播放器 -->
-              <VideoPlayer
+              <IframeVideoPlayer
                 v-if="detailContent.media_items?.some(m => m.media_type === 'video')"
                 :key="'m-vp-' + detailContent.id"
-                :content-id="detailContent.id"
+                :video-url="detailContent.url"
                 :title="detailContent.title || '视频播放'"
               />
 

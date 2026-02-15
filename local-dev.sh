@@ -140,12 +140,22 @@ ENVEOF
 
 # ---- 状态查看 ----
 show_status() {
+    # 获取本机局域网 IP
+    local LAN_IP=""
+    if command -v ipconfig >/dev/null 2>&1; then
+        # macOS
+        LAN_IP=$(ipconfig getifaddr en0 2>/dev/null || ifconfig | grep "inet " | grep -v 127.0.0.1 | awk '{print $2}' | head -1)
+    else
+        # Linux
+        LAN_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+    fi
+
     echo ""
     echo "  Allin-One 本地服务状态"
     echo "  ──────────────────────────"
     $DC ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}"
     echo ""
-    echo "  访问地址:"
+    echo "  本机访问:"
     echo "  ──────────────────────────"
     echo "  前端页面:    http://localhost:3000/"
     echo "  后端 API:    http://localhost:8000/api/"
@@ -153,6 +163,15 @@ show_status() {
     echo "  RSSHub:      http://localhost:1200/"
     echo "  Browserless: http://localhost:3001/"
     echo "  PostgreSQL:  localhost:5432"
+
+    if [ -n "$LAN_IP" ]; then
+        echo ""
+        echo "  局域网访问 (手机/平板/其他设备):"
+        echo "  ──────────────────────────"
+        echo "  前端页面:    http://${LAN_IP}:3000/"
+        echo "  后端 API:    http://${LAN_IP}:8000/api/"
+        echo "  API 文档:    http://${LAN_IP}:8000/docs"
+    fi
     echo ""
 }
 
