@@ -146,8 +146,11 @@ function serializeConfig() {
   return Object.keys(cfg).length ? JSON.stringify(cfg) : null
 }
 
-// 需要 URL 字段的类型
-const needsUrl = computed(() => !['account.bilibili', 'file.upload', 'user.note', 'system.notification'].includes(form.value.source_type))
+// 需要 URL 字段的类型（排除 rss.hub，改用 rsshub_route）
+const needsUrl = computed(() => {
+  const urlTypes = ['rss.standard', 'web.scraper', 'account.generic']
+  return urlTypes.includes(form.value.source_type)
+})
 
 // 有结构化配置的类型
 const hasStructuredConfig = computed(() => ['rss.hub', 'rss.standard', 'web.scraper', 'api.akshare', 'account.bilibili', 'account.generic'].includes(form.value.source_type))
@@ -312,8 +315,16 @@ const sectionClass = 'space-y-4 p-4 bg-slate-50/50 rounded-xl border border-slat
 
         <!-- URL（按类型显示） -->
         <div v-if="needsUrl">
-          <label :class="labelClass">URL</label>
-          <input v-model="form.url" type="text" :class="inputClass" placeholder="订阅或采集地址" />
+          <label :class="labelClass">
+            {{ form.source_type === 'rss.standard' ? 'Feed URL *' : 'URL' }}
+          </label>
+          <input
+            v-model="form.url"
+            type="text"
+            :class="inputClass"
+            :placeholder="form.source_type === 'rss.standard' ? 'https://example.com/feed.xml' : '订阅或采集地址'"
+            :required="form.source_type === 'rss.standard'"
+          />
         </div>
 
         <!-- 描述 -->
@@ -408,9 +419,18 @@ const sectionClass = 'space-y-4 p-4 bg-slate-50/50 rounded-xl border border-slat
         <div v-if="form.source_type === 'rss.hub'" :class="sectionClass">
           <h4 class="text-sm font-semibold text-slate-800">RSSHub 配置</h4>
           <div>
-            <label :class="labelClass">RSSHub 路由</label>
-            <input v-model="configForm.rsshub_route" type="text" :class="inputClass" placeholder="/bilibili/user/video/12345" />
-            <p class="mt-1 text-xs text-slate-400">RSSHub 路由路径，参考 <a href="https://docs.rsshub.app" target="_blank" class="text-indigo-500 hover:underline">RSSHub 文档</a></p>
+            <label :class="labelClass">RSSHub 路由 *</label>
+            <input
+              v-model="configForm.rsshub_route"
+              type="text"
+              :class="inputClass"
+              placeholder="/bilibili/user/video/12345?limit=20"
+              required
+            />
+            <p class="mt-1 text-xs text-slate-400">
+              RSSHub 路由路径（以 / 开头，可包含查询参数），参考
+              <a href="https://docs.rsshub.app" target="_blank" class="text-indigo-500 hover:underline">RSSHub 文档</a>
+            </p>
           </div>
         </div>
 

@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.content import SourceConfig, ContentItem, ContentStatus
 from app.services.collectors.base import BaseCollector
+from app.services.collectors.utils import resolve_rss_feed_url
 
 logger = logging.getLogger(__name__)
 
@@ -74,23 +75,12 @@ class RSSCollector(BaseCollector):
         return new_items
 
     def _resolve_feed_url(self, source: SourceConfig) -> str | None:
-        if source.source_type == "rss.hub":
-            # 优先从 config_json 读 rsshub_route
-            config = json.loads(source.config_json) if source.config_json else {}
-            route = config.get("rsshub_route") or ""
-            # url 为路由路径时也当作 route
-            if not route and source.url and not source.url.startswith(("http://", "https://")):
-                route = source.url
-            if route:
-                base = settings.RSSHUB_URL.rstrip("/")
-                if not route.startswith("/"):
-                    route = f"/{route}"
-                url = f"{base}{route}"
-            else:
-                url = source.url
-            return url
-        else:
-            return source.url
+        """解析 Feed URL（调用共享工具）"""
+        try:
+            return resolve_rss_feed_url(source, settings.RSSHUB_URL)
+        except ValueError as e:
+            logger.error(f"Failed to resolve feed URL: {e}")
+            raise
 
     async def _fetch_feed(self, url: str) -> str:
         """抓取 feed 内容，失败时抛异常"""

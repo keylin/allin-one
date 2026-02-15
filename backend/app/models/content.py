@@ -86,8 +86,8 @@ class SourceConfig(Base):
 
     config_json 示例:
       RSSHub B站UP主:  {"rsshub_route": "/bilibili/user/video/12345"}
-      RSSHub YouTube:   {"rsshub_route": "/youtube/channel/UCxxxx"}
-      标准RSS:          {"feed_format": "atom"}
+      RSSHub YouTube:   {"rsshub_route": "/youtube/channel/UCxxxx?embed_description=1"}
+      标准RSS:          (使用 url 字段，config_json 可留空)
       Scraper:          {"scrape_level": "L2", "selectors": {"title": "h1"}}
       AkShare:          {"indicator": "macro_china_cpi"}
     """

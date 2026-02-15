@@ -85,6 +85,18 @@ function formatInterval(seconds) {
   if (seconds < 3600) return `${Math.round(seconds / 60)}分钟`
   return `${Math.round(seconds / 3600)}小时`
 }
+
+const displayUrl = computed(() => {
+  if (props.source?.source_type === 'rss.hub' && props.source?.config_json) {
+    try {
+      const config = JSON.parse(props.source.config_json)
+      return config.rsshub_route ? `RSSHub: ${config.rsshub_route}` : '-'
+    } catch {
+      return '-'
+    }
+  }
+  return props.source?.url || '-'
+})
 </script>
 
 <template>
@@ -138,12 +150,20 @@ function formatInterval(seconds) {
         </div>
       </div>
 
-      <!-- URL -->
-      <div v-if="source.url" class="bg-slate-50 rounded-xl p-4">
-        <span class="text-xs text-slate-400 block mb-1">URL</span>
-        <a :href="source.url" target="_blank" class="text-sm text-indigo-600 hover:underline break-all">
-          {{ source.url }}
+      <!-- URL / RSSHub Route -->
+      <div v-if="displayUrl !== '-'" class="bg-slate-50 rounded-xl p-4">
+        <span class="text-xs text-slate-400 block mb-1">
+          {{ source.source_type === 'rss.hub' ? 'RSSHub 路由' : 'URL' }}
+        </span>
+        <a
+          v-if="source.source_type === 'rss.standard' && source.url"
+          :href="source.url"
+          target="_blank"
+          class="text-sm text-indigo-600 hover:underline break-all"
+        >
+          {{ displayUrl }}
         </a>
+        <span v-else class="text-sm text-slate-700 break-all font-mono">{{ displayUrl }}</span>
       </div>
 
       <!-- Collection history -->

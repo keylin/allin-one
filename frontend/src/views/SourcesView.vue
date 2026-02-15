@@ -70,6 +70,18 @@ const typeStyles = {
 
 const totalPages = computed(() => Math.max(1, Math.ceil(store.total / store.pageSize)))
 
+function getDisplayUrl(source) {
+  if (source.source_type === 'rss.hub' && source.config_json) {
+    try {
+      const config = JSON.parse(source.config_json)
+      return config.rsshub_route || '-'
+    } catch {
+      return '-'
+    }
+  }
+  return source.url || '-'
+}
+
 function syncQueryParams() {
   const query = {}
   if (searchQuery.value) query.q = searchQuery.value
@@ -539,7 +551,7 @@ function handleExport() {
                   {{ typeLabels[source.source_type] || source.source_type }}
                 </span>
               </td>
-              <td class="px-4 py-3 text-sm text-slate-400 max-w-[200px] truncate">{{ source.url || '-' }}</td>
+              <td class="px-4 py-3 text-sm text-slate-400 max-w-[200px] truncate">{{ getDisplayUrl(source) }}</td>
               <td class="px-4 py-3 text-sm text-slate-500 truncate max-w-[120px]">{{ source.pipeline_template_name || '-' }}</td>
               <td class="px-4 py-3 text-sm text-slate-500">
                 <span v-if="!source.schedule_enabled" class="text-slate-300">禁用</span>

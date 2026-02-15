@@ -27,12 +27,17 @@ _RSS_TYPES = {"rss.standard", "rss.hub"}
 
 
 def _resolve_rss_feed_url(source_type: str, url: str | None, config: dict) -> str:
-    """根据源类型解析出实际的 RSS feed URL"""
-    if source_type == "rss.hub":
-        rsshub_route = config.get("rsshub_route") or url or ""
-        return f"{settings.RSSHUB_URL.rstrip('/')}{rsshub_route}"
-    # rss.standard → 直接用 url
-    return url or ""
+    """临时构造 SourceConfig 对象调用共享工具"""
+    from app.services.collectors.utils import resolve_rss_feed_url
+    # 为了复用共享工具，构造临时对象
+    temp_source = SourceConfig(
+        id="temp",
+        name="temp",
+        source_type=source_type,
+        url=url,
+        config_json=json.dumps(config) if config else None
+    )
+    return resolve_rss_feed_url(temp_source, settings.RSSHUB_URL)
 
 
 def _source_to_response(source: SourceConfig, db: Session) -> dict:
@@ -119,6 +124,17 @@ async def create_source(body: SourceCreate, db: Session = Depends(get_db)):
     err = _validate_source_type(body.source_type)
     if err:
         return error_response(400, err)
+
+    # 验证 RSSHub 源必须有 rsshub_route
+    if body.source_type == "rss.hub":
+        config = json.loads(body.config_json) if body.config_json else {}
+        if not config.get("rsshub_route"):
+            return error_response(400, "RSSHub 数据源必须在配置中提供 rsshub_route 字段")
+
+    # 验证标准 RSS 源必须有 url
+    elif body.source_type == "rss.standard":
+        if not body.url:
+            return error_response(400, "RSS/Atom 数据源必须提供 url 字段")
 
     # 校验 pipeline_template_id
     if body.pipeline_template_id:
@@ -248,13 +264,23 @@ async def export_opml(
     body = ET.SubElement(opml, "body")
 
     for source in sources:
+        # 解析实际的 Feed URL（而非直接用 source.url）
+        try:
+            if source.source_type in _RSS_TYPES:
+                config = json.loads(source.config_json) if source.config_json else {}
+                xml_url = _resolve_rss_feed_url(source.source_type, source.url, config)
+            else:
+                xml_url = source.url or ""
+        except ValueError:
+            xml_url = ""  # 配置错误的源，导出空 URL
+
         outline = ET.SubElement(
             body,
             "outline",
             type="rss",
             text=source.name,
             title=source.name,
-            xmlUrl=source.url or "",
+            xmlUrl=xml_url,
         )
         if source.description:
             outline.set("description", source.description)
@@ -298,6 +324,25 @@ async def update_source(source_id: str, body: SourceUpdate, db: Session = Depend
         err = _validate_source_type(update_data["source_type"])
         if err:
             return error_response(400, err)
+
+    # 更新后的 source_type（如果未更新则用现有值）
+    final_source_type = update_data.get("source_type", source.source_type)
+
+    # 验证 RSSHub 源必须有 rsshub_route
+    if final_source_type == "rss.hub":
+        # 如果更新了 config_json，检查新配置；否则检查现有配置
+        if "config_json" in update_data:
+            config = json.loads(update_data["config_json"]) if update_data["config_json"] else {}
+        else:
+            config = json.loads(source.config_json) if source.config_json else {}
+        if not config.get("rsshub_route"):
+            return error_response(400, "RSSHub 数据源必须在配置中提供 rsshub_route 字段")
+
+    # 验证标准 RSS 源必须有 url
+    elif final_source_type == "rss.standard":
+        final_url = update_data.get("url", source.url)
+        if not final_url:
+            return error_response(400, "RSS/Atom 数据源必须提供 url 字段")
 
     # 校验 pipeline_template_id
     if "pipeline_template_id" in update_data and update_data["pipeline_template_id"]:
