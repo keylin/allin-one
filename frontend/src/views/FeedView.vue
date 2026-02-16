@@ -1,8 +1,11 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { listContent, getContent, analyzeContent, toggleFavorite, listSourceOptions, incrementView, chatWithContent, enrichContent, applyEnrichment, getContentStats } from '@/api/content'
+import { listContent, getContent, analyzeContent, toggleFavorite, listSourceOptions, incrementView, chatWithContent, enrichContent, applyEnrichment, getContentStats, batchMarkRead } from '@/api/content'
 import { useToast } from '@/composables/useToast'
+import { useIntersectionObserver } from '@/composables/useIntersectionObserver'
+import { useDebounce } from '@/composables/useDebounce'
+import { useSwipe } from '@/composables/useSwipe'
 import FeedCard from '@/components/feed-card.vue'
 import IframeVideoPlayer from '@/components/iframe-video-player.vue'
 import MarkdownIt from 'markdown-it'
@@ -80,6 +83,11 @@ const enriching = ref(false)
 const enrichResults = ref(null)
 const showEnrichModal = ref(false)
 const applyingEnrich = ref(null)
+
+// === 自动标记已读状态 ===
+const visibleItems = ref(new Map()) // Map<itemId, startTime>
+const pendingReadIds = ref(new Set()) // 待提交的已读 ID
+const mobileDetailRef = ref(null) // 移动端详情容器 ref
 
 // Markdown & DOMPurify setup
 DOMPurify.addHook('afterSanitizeAttributes', (node) => {
@@ -626,6 +634,108 @@ async function loadStats() {
   } catch (_) { /* ignore */ }
 }
 
+// --- 自动标记已读逻辑 ---
+// IntersectionObserver 回调
+function handleCardVisible(entry) {
+  const itemId = entry.target.dataset.itemId
+  const item = items.value.find(i => i.id === itemId)
+
+  // 跳过已读卡片
+  if (!item || (item.view_count || 0) > 0) return
+
+  if (entry.isIntersecting && entry.intersectionRatio >= 0.7) {
+    // 卡片进入视口（70%可见）
+    visibleItems.value.set(itemId, Date.now())
+
+    // 2秒后检查是否仍在视口
+    setTimeout(() => {
+      if (visibleItems.value.has(itemId)) {
+        const startTime = visibleItems.value.get(itemId)
+        const duration = Date.now() - startTime
+
+        // 确保真的停留了2秒
+        if (duration >= 2000) {
+          markAsRead(itemId)
+          visibleItems.value.delete(itemId)
+        }
+      }
+    }, 2000)
+  } else {
+    // 卡片离开视口
+    visibleItems.value.delete(itemId)
+  }
+}
+
+// 标记单个 item 为已读（加入批量队列）
+function markAsRead(itemId) {
+  if (!pendingReadIds.value.has(itemId)) {
+    pendingReadIds.value.add(itemId)
+    debouncedBatchSubmit()
+  }
+}
+
+// 防抖批量提交已读
+const debouncedBatchSubmit = useDebounce(async () => {
+  if (pendingReadIds.value.size === 0) return
+
+  const ids = Array.from(pendingReadIds.value)
+  pendingReadIds.value.clear()
+
+  try {
+    await batchMarkRead(ids)
+
+    // 更新本地状态（立即反映视觉变化）
+    ids.forEach(id => {
+      const item = items.value.find(i => i.id === id)
+      if (item) {
+        item.view_count = 1
+        item.last_viewed_at = new Date().toISOString()
+      }
+    })
+
+    // 刷新统计数据
+    await loadStats()
+  } catch (err) {
+    console.error('批量标记已读失败:', err)
+    // 失败时重新加入队列（下次重试）
+    ids.forEach(id => pendingReadIds.value.add(id))
+  }
+}, 500) // 500ms 防抖
+
+// 初始化 IntersectionObserver
+const { observe, unobserve, disconnect } = useIntersectionObserver(
+  handleCardVisible,
+  { threshold: 0.7 } // 70% 可见触发
+)
+
+// 监听 items 变化，自动观察新卡片
+watch(items, () => {
+  nextTick(() => {
+    const container = leftPanelRef.value
+    if (!container) return
+
+    // 获取所有卡片元素
+    const cards = container.querySelectorAll('[data-item-id]')
+    cards.forEach(card => {
+      const itemId = card.dataset.itemId
+      const item = items.value.find(i => i.id === itemId)
+
+      // 只观察未读卡片
+      if (item && (item.view_count || 0) === 0) {
+        observe(card)
+      }
+    })
+  })
+}, { flush: 'post' })
+
+// 初始化手势
+const { isSwiping, swipeOffset } = useSwipe(mobileDetailRef, {
+  threshold: 80,
+  onSwipeRight: () => {
+    closeMobileDetail()
+  }
+})
+
 onMounted(async () => {
   fetchItems(true)
   loadStats()
@@ -642,6 +752,10 @@ onUnmounted(() => {
   cancelChat()
   document.removeEventListener('keydown', handleKeydown)
   document.removeEventListener('click', handleClickOutside)
+  // 清理自动标记已读
+  disconnect()
+  pendingReadIds.value.clear()
+  visibleItems.value.clear()
 })
 </script>
 
@@ -871,6 +985,7 @@ onUnmounted(() => {
               :key="item.id"
               :item="item"
               :selected="selectedId === item.id"
+              :data-item-id="item.id"
               data-feed-card
               @click="selectItem"
               @favorite="handleFavorite"
@@ -1139,7 +1254,9 @@ onUnmounted(() => {
       >
         <div
           v-if="showMobileDetail && selectedId"
+          ref="mobileDetailRef"
           class="fixed inset-0 z-40 bg-white flex flex-col md:hidden"
+          :style="isSwiping ? { transform: `translateX(${Math.max(0, swipeOffset)}px)` } : {}"
         >
           <!-- 移动端返回栏 -->
           <div class="flex items-center gap-3 px-4 py-3 border-b border-slate-100 shrink-0">

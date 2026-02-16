@@ -64,6 +64,9 @@ const sentimentColor = computed(() => {
 const showThumbnail = computed(() => props.item.has_thumbnail || (derivedMediaType.value === 'video' && props.item.has_thumbnail))
 const thumbnailUrl = computed(() => showThumbnail.value ? `/api/video/${props.item.id}/thumbnail` : null)
 
+// 计算已读状态
+const isRead = computed(() => (props.item.view_count || 0) > 0)
+
 function onThumbError(e) {
   e.target.style.display = 'none'
 }
@@ -71,10 +74,22 @@ function onThumbError(e) {
 
 <template>
   <article
-    class="group bg-white rounded-xl border overflow-hidden transition-all duration-200 cursor-pointer"
-    :class="selected
-      ? 'ring-2 ring-indigo-500 border-indigo-300 shadow-md'
-      : 'border-slate-200/80 hover:shadow-md hover:border-slate-300'"
+    class="group bg-white rounded-xl border overflow-hidden cursor-pointer relative"
+    :class="[
+      // 基础过渡
+      'transition-all duration-300',
+
+      // 选中状态（优先级最高）
+      selected
+        ? 'ring-2 ring-indigo-500 border-indigo-300 shadow-md'
+        : 'border-slate-200/80 hover:shadow-md hover:border-slate-300',
+
+      // 未读样式: 左边框 + 正常色
+      !isRead && 'border-l-4 border-l-indigo-500',
+
+      // 已读样式: 整体变灰
+      isRead && 'opacity-60'
+    ]"
     @click="emit('click', item)"
   >
     <div class="flex">
@@ -82,6 +97,7 @@ function onThumbError(e) {
       <div
         v-if="showThumbnail"
         class="relative shrink-0 w-28 md:w-36 bg-slate-100 overflow-hidden"
+        :class="isRead && 'grayscale'"
       >
         <img
           :src="thumbnailUrl"
@@ -116,7 +132,10 @@ function onThumbError(e) {
             />
           </div>
 
-          <h3 class="flex-1 min-w-0 text-sm font-semibold text-slate-800 leading-snug group-hover:text-indigo-700 transition-colors duration-200 line-clamp-1">
+          <h3
+            class="flex-1 min-w-0 text-sm leading-snug group-hover:text-indigo-700 transition-colors duration-200 line-clamp-1"
+            :class="isRead ? 'text-slate-500 font-medium' : 'text-slate-800 font-semibold'"
+          >
             {{ item.title }}
           </h3>
 
