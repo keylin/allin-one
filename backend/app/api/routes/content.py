@@ -12,6 +12,7 @@ from sqlalchemy import func
 
 from app.core.database import get_db
 from app.core.time import utcnow
+from app.core.timezone_utils import get_local_day_boundaries
 from app.models.content import SourceConfig, ContentItem, MediaItem
 from app.models.pipeline import PipelineExecution, PipelineStep
 from app.schemas import (
@@ -307,15 +308,23 @@ async def batch_toggle_favorite(body: ContentBatchDelete, db: Session = Depends(
 @router.get("/stats")
 async def content_stats(db: Session = Depends(get_db)):
     """内容库统计：按状态分组 + 今日新增 + 已读/未读"""
-    today_start = utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    # 计算今日边界（容器时区）
+    today_start, today_end = get_local_day_boundaries()
+
     status_rows = (
         db.query(ContentItem.status, func.count(ContentItem.id))
         .group_by(ContentItem.status).all()
     )
     status_counts = {r[0]: r[1] for r in status_rows}
+
+    # 今日新增计数（使用时区边界）
     today_count = (
         db.query(func.count(ContentItem.id))
-        .filter(ContentItem.collected_at >= today_start).scalar()
+        .filter(
+            ContentItem.collected_at >= today_start,
+            ContentItem.collected_at < today_end
+        )
+        .scalar()
     )
 
     # 已读/未读统计

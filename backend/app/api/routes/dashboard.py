@@ -1,12 +1,13 @@
 """Dashboard API"""
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func, cast, Date
+from sqlalchemy import func, cast, Date, literal_column
 
 from app.core.database import get_db
 from app.core.time import utcnow
+from app.core.timezone_utils import get_local_day_boundaries, get_container_timezone_name
 from app.models.content import SourceConfig, ContentItem, CollectionRecord
 from app.models.pipeline import PipelineExecution, PipelineStatus
 
@@ -18,20 +19,25 @@ async def get_dashboard_stats(db: Session = Depends(get_db)):
     """获取仪表盘统计数据"""
     sources_count = db.query(func.count(SourceConfig.id)).scalar()
 
-    today_start = utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    # 计算今日边界（容器时区）
+    today_start, today_end = get_local_day_boundaries()
     contents_today = (
         db.query(func.count(ContentItem.id))
-        .filter(ContentItem.collected_at >= today_start)
+        .filter(
+            ContentItem.collected_at >= today_start,
+            ContentItem.collected_at < today_end
+        )
         .scalar()
     )
 
-    # 昨日采集数（用于今昨对比）
-    yesterday_start = (today_start - timedelta(days=1))
+    # 计算昨日边界
+    yesterday_date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    yesterday_start, yesterday_end = get_local_day_boundaries(yesterday_date)
     contents_yesterday = (
         db.query(func.count(ContentItem.id))
         .filter(
             ContentItem.collected_at >= yesterday_start,
-            ContentItem.collected_at < today_start
+            ContentItem.collected_at < yesterday_end
         )
         .scalar()
     )
@@ -67,26 +73,36 @@ async def get_collection_trend(
     db: Session = Depends(get_db),
 ):
     """获取最近 N 天每日采集数量趋势"""
-    now = utcnow()
-    start = (now - timedelta(days=days - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    # 计算起始边界（容器时区的 N 天前 00:00）
+    start_date = (datetime.now() - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+    start_utc, _ = get_local_day_boundaries(start_date)
 
-    # 按天聚合
+    # 获取容器时区名称（用于 SQL 层时区转换）
+    tz_name = get_container_timezone_name()
+
+    # 使用 AT TIME ZONE 在数据库层按容器时区分组
+    # 将 UTC 时间转为容器时区后提取日期，避免拉取全量数据到 Python 处理
     rows = (
         db.query(
-            func.date(ContentItem.collected_at).label("day"),
+            func.date(
+                func.timezone(
+                    literal_column(f"'{tz_name}'"),
+                    func.timezone('UTC', ContentItem.collected_at)
+                )
+            ).label("day"),
             func.count(ContentItem.id).label("count"),
         )
-        .filter(ContentItem.collected_at >= start)
-        .group_by(func.date(ContentItem.collected_at))
+        .filter(ContentItem.collected_at >= start_utc)
+        .group_by("day")
         .all()
     )
 
     count_map = {str(row.day): row.count for row in rows}
 
-    # 补全缺失的天
+    # 补全缺失天数（使用容器本地时间日期）
     trend = []
     for i in range(days):
-        day = (start + timedelta(days=i)).strftime("%Y-%m-%d")
+        day = (datetime.now() - timedelta(days=days - 1 - i)).strftime("%Y-%m-%d")
         trend.append({"date": day, "count": count_map.get(day, 0)})
 
     return {"code": 0, "data": trend, "message": "ok"}
@@ -94,25 +110,21 @@ async def get_collection_trend(
 
 @router.get("/daily-stats")
 async def get_daily_stats(
-    date: str = Query(None, description="日期 YYYY-MM-DD，默认今天"),
+    date: str = Query(None, description="日期 YYYY-MM-DD，默认今天（容器时区）"),
     db: Session = Depends(get_db),
 ):
     """获取指定日期的采集详细统计"""
-    # 解析日期参数，默认今天
-    if date:
-        try:
-            target_date = utcnow().strptime(date, "%Y-%m-%d")
-        except ValueError:
-            return {"code": -1, "data": None, "message": "日期格式错误，需要 YYYY-MM-DD"}
-    else:
-        target_date = utcnow()
-        date = target_date.strftime("%Y-%m-%d")
+    # 如果未传日期，使用容器本地时间的今天
+    if not date:
+        date = datetime.now().strftime("%Y-%m-%d")
 
-    # 计算当天起止时间
-    day_start = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
-    day_end = day_start + timedelta(days=1)
+    # 计算日期边界（容器时区）
+    try:
+        day_start, day_end = get_local_day_boundaries(date)
+    except ValueError:
+        return {"code": -1, "data": None, "message": "日期格式错误，需要 YYYY-MM-DD"}
 
-    # 筛选当天的采集记录
+    # 筛选当天的采集记录（使用时区边界）
     records = (
         db.query(CollectionRecord)
         .filter(

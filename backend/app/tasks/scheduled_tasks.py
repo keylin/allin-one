@@ -298,7 +298,7 @@ async def analyze_source_periodicity(timestamp):
 @proc_app.task(queue="scheduled", queueing_lock="cleanup_scheduler")
 async def cleanup_scheduler(timestamp):
     """清理任务调度器 — 每小时检查,根据配置动态执行清理"""
-    from datetime import datetime
+    from app.core.time import utcnow
     from app.core.database import SessionLocal
     from app.models.system_setting import SystemSetting
 
@@ -311,7 +311,7 @@ async def cleanup_scheduler(timestamp):
         records_cleanup_time = records_time_setting.value if records_time_setting else "03:30"
 
         # 获取当前 UTC 时间
-        now = datetime.utcnow()
+        now = utcnow()
         current_time = f"{now.hour:02d}:{now.minute:02d}"
 
         # 检查是否到达内容清理时间
