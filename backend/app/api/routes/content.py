@@ -519,6 +519,8 @@ class ChatRequest(BaseModel):
 @router.post("/{content_id}/chat")
 async def chat_with_content(content_id: str, body: ChatRequest, db: Session = Depends(get_db)):
     """与内容进行 AI 对话（SSE 流式返回）"""
+    from app.services.chat_service import build_chat_context, stream_chat_response
+
     item = db.get(ContentItem, content_id)
     if not item:
         async def error_stream():
@@ -526,78 +528,14 @@ async def chat_with_content(content_id: str, body: ChatRequest, db: Session = De
             yield "data: [DONE]\n\n"
         return StreamingResponse(error_stream(), media_type="text/event-stream")
 
-    # 组装上下文
-    context_parts = [f"标题: {item.title or '无标题'}"]
     source = db.get(SourceConfig, item.source_id) if item.source_id else None
-    if source:
-        context_parts.append(f"来源: {source.name}")
-    if item.author:
-        context_parts.append(f"作者: {item.author}")
-    if item.analysis_result:
-        try:
-            parsed = json.loads(item.analysis_result) if isinstance(item.analysis_result, str) else item.analysis_result
-            if isinstance(parsed, dict):
-                if parsed.get("summary"):
-                    context_parts.append(f"AI 摘要: {parsed['summary']}")
-                if parsed.get("tags"):
-                    context_parts.append(f"标签: {', '.join(parsed['tags']) if isinstance(parsed['tags'], list) else parsed['tags']}")
-            else:
-                context_parts.append(f"分析结果: {str(parsed)[:500]}")
-        except (json.JSONDecodeError, TypeError):
-            context_parts.append(f"分析结果: {str(item.analysis_result)[:500]}")
-    if item.processed_content:
-        context_parts.append(f"正文内容:\n{item.processed_content[:2000]}")
-    elif item.raw_data:
-        try:
-            raw = json.loads(item.raw_data) if isinstance(item.raw_data, str) else item.raw_data
-            if isinstance(raw, dict):
-                text = raw.get("summary") or raw.get("description") or ""
-                if not text and isinstance(raw.get("content"), list) and raw["content"]:
-                    first = raw["content"][0]
-                    text = first.get("value", "") if isinstance(first, dict) else str(first)
-                text = re.sub(r'<[^>]+>', '', str(text)).strip()
-                if text:
-                    context_parts.append(f"正文内容:\n{text[:2000]}")
-        except (json.JSONDecodeError, TypeError):
-            pass
-
-    system_message = (
-        "你是一个内容分析助手。用户正在阅读以下内容，请基于这篇内容回答用户的问题。"
-        "回答要准确、简洁，使用中文。如果问题与内容无关，可以礼貌地提示用户。\n\n"
-        "---\n" + "\n".join(context_parts) + "\n---"
-    )
+    system_message = build_chat_context(item, source)
 
     try:
-        from app.core.config import get_llm_config
-        from openai import AsyncOpenAI
-
-        llm_config = get_llm_config(db)
-        client = AsyncOpenAI(api_key=llm_config.api_key, base_url=llm_config.base_url)
-
-        messages = [{"role": "system", "content": system_message}]
-        for msg in body.messages:
-            if msg.get("role") in ("user", "assistant") and msg.get("content"):
-                messages.append({"role": msg["role"], "content": msg["content"]})
-
-        async def stream_response():
-            try:
-                response = await client.chat.completions.create(
-                    model=llm_config.model,
-                    messages=messages,
-                    stream=True,
-                )
-                async for chunk in response:
-                    if chunk.choices and chunk.choices[0].delta.content:
-                        content = chunk.choices[0].delta.content
-                        yield f"data: {content}\n\n"
-                yield "data: [DONE]\n\n"
-            except Exception as e:
-                logger.exception("Chat stream error")
-                yield f"data: [ERROR] {str(e)}\n\n"
-                yield "data: [DONE]\n\n"
-
-        return StreamingResponse(stream_response(), media_type="text/event-stream")
-
+        return StreamingResponse(
+            stream_chat_response(system_message, body.messages, db=db),
+            media_type="text/event-stream",
+        )
     except ValueError as e:
         async def config_error():
             yield f"data: [ERROR] {str(e)}\n\n"

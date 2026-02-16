@@ -2,42 +2,20 @@
 
 import json
 import logging
-from fastapi import APIRouter, Depends, Query, UploadFile, File
-from fastapi.responses import Response
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-import xml.etree.ElementTree as ET
 
-from app.core.config import settings
 from app.core.database import get_db
 from app.core.time import utcnow
-from app.models.content import SourceConfig, ContentItem, CollectionRecord, SourceType, MediaItem
-from app.models.finance import FinanceDataPoint
-from app.models.pipeline import PipelineTemplate, PipelineExecution, PipelineStep
+from app.models.content import SourceConfig, ContentItem, CollectionRecord, SourceType
+from app.models.pipeline import PipelineTemplate
 from app.schemas import (
     SourceCreate, SourceUpdate, SourceResponse, CollectionRecordResponse, ContentBatchDelete, error_response,
 )
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-# ---- RSS 辅助 ----
-
-_RSS_TYPES = {"rss.standard", "rss.hub"}
-
-
-def _resolve_rss_feed_url(source_type: str, url: str | None, config: dict) -> str:
-    """临时构造 SourceConfig 对象调用共享工具"""
-    from app.services.collectors.utils import resolve_rss_feed_url
-    # 为了复用共享工具，构造临时对象
-    temp_source = SourceConfig(
-        id="temp",
-        name="temp",
-        source_type=source_type,
-        url=url,
-        config_json=json.dumps(config) if config else None
-    )
-    return resolve_rss_feed_url(temp_source, settings.RSSHUB_URL)
 
 
 def _source_to_response(source: SourceConfig, db: Session) -> dict:
@@ -161,142 +139,6 @@ async def list_source_options(db: Session = Depends(get_db)):
         .order_by(SourceConfig.name).all()
     return {"code": 0, "data": [{"id": s.id, "name": s.name} for s in sources], "message": "ok"}
 
-
-# ---- OPML 导入导出 ----
-
-@router.post("/import")
-async def import_opml(
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db),
-):
-    """导入 OPML 文件批量创建 RSS 源"""
-    try:
-        # 读取文件内容
-        content = await file.read()
-        xml_text = content.decode("utf-8")
-
-        # 解析 OPML XML
-        root = ET.fromstring(xml_text)
-
-        # OPML 格式: <opml><body><outline ... /></body></opml>
-        outlines = root.findall(".//outline[@type='rss']") or root.findall(".//outline[@xmlUrl]")
-
-        if not outlines:
-            return error_response(400, "未找到有效的 RSS 订阅源")
-
-        created = 0
-        skipped = 0
-        errors = []
-
-        for outline in outlines:
-            try:
-                # 提取属性
-                title = outline.get("title") or outline.get("text", "Untitled")
-                xml_url = outline.get("xmlUrl")
-                html_url = outline.get("htmlUrl")
-                description = outline.get("description", "")
-
-                if not xml_url:
-                    skipped += 1
-                    continue
-
-                # 检查是否已存在
-                existing = db.query(SourceConfig).filter(SourceConfig.url == xml_url).first()
-                if existing:
-                    skipped += 1
-                    continue
-
-                # 创建数据源
-                source = SourceConfig(
-                    name=title[:200],
-                    source_type=SourceType.RSS_STANDARD.value,
-                    url=xml_url,
-                    description=description[:500] if description else None,
-                    schedule_enabled=True,
-                    schedule_mode="auto",  # 智能调度
-                    is_active=True,
-                )
-                db.add(source)
-                created += 1
-
-            except Exception as e:
-                errors.append(f"{title}: {str(e)}")
-                continue
-
-        db.commit()
-
-        logger.info(f"OPML imported: created={created}, skipped={skipped}, errors={len(errors)}")
-        return {
-            "code": 0,
-            "data": {
-                "created": created,
-                "skipped": skipped,
-                "errors": errors,
-            },
-            "message": f"导入完成: 新增 {created} 个源，跳过 {skipped} 个",
-        }
-
-    except ET.ParseError as e:
-        return error_response(400, f"OPML 解析失败: {str(e)}")
-    except Exception as e:
-        return error_response(500, f"导入失败: {str(e)}")
-
-
-@router.get("/export")
-async def export_opml(
-    db: Session = Depends(get_db),
-):
-    """导出 RSS 源为 OPML 文件"""
-    sources = db.query(SourceConfig).filter(
-        SourceConfig.source_type.in_([
-            SourceType.RSS_HUB.value,
-            SourceType.RSS_STANDARD.value,
-        ])
-    ).all()
-
-    # 构建 OPML XML
-    opml = ET.Element("opml", version="2.0")
-
-    head = ET.SubElement(opml, "head")
-    ET.SubElement(head, "title").text = "Allin-One RSS Subscriptions"
-    ET.SubElement(head, "dateCreated").text = utcnow().isoformat()
-
-    body = ET.SubElement(opml, "body")
-
-    for source in sources:
-        # 解析实际的 Feed URL（而非直接用 source.url）
-        try:
-            if source.source_type in _RSS_TYPES:
-                config = json.loads(source.config_json) if source.config_json else {}
-                xml_url = _resolve_rss_feed_url(source.source_type, source.url, config)
-            else:
-                xml_url = source.url or ""
-        except ValueError:
-            xml_url = ""  # 配置错误的源，导出空 URL
-
-        outline = ET.SubElement(
-            body,
-            "outline",
-            type="rss",
-            text=source.name,
-            title=source.name,
-            xmlUrl=xml_url,
-        )
-        if source.description:
-            outline.set("description", source.description)
-
-    # 转为 XML 字符串
-    xml_string = ET.tostring(opml, encoding="utf-8", method="xml")
-    xml_declaration = b'<?xml version="1.0" encoding="UTF-8"?>\n'
-    opml_content = xml_declaration + xml_string
-
-    return Response(
-        content=opml_content,
-        media_type="application/xml",
-        headers={
-            "Content-Disposition": f'attachment; filename="allin-one-feeds-{datetime.now().strftime("%Y%m%d")}.opml"'
-        },
-    )
 
 
 # ---- 单个数据源操作（参数路径必须在字面路径之后） ----
@@ -440,67 +282,12 @@ async def batch_delete_sources(
 
     source_ids = [s.id for s in sources]
 
-    content_count = db.query(func.count(ContentItem.id)).filter(
-        ContentItem.source_id.in_(source_ids)
-    ).scalar()
-
-    if cascade and content_count > 0:
-        # 级联删除关联数据
-        content_ids = [
-            cid for (cid,) in db.query(ContentItem.id)
-            .filter(ContentItem.source_id.in_(source_ids)).all()
-        ]
-        execution_ids = [
-            eid for (eid,) in db.query(PipelineExecution.id)
-            .filter(PipelineExecution.content_id.in_(content_ids)).all()
-        ]
-        if execution_ids:
-            db.query(PipelineStep).filter(
-                PipelineStep.pipeline_id.in_(execution_ids)
-            ).delete(synchronize_session=False)
-            db.query(PipelineExecution).filter(
-                PipelineExecution.id.in_(execution_ids)
-            ).delete(synchronize_session=False)
-        db.query(MediaItem).filter(
-            MediaItem.content_id.in_(content_ids)
-        ).delete(synchronize_session=False)
-        db.query(ContentItem).filter(
-            ContentItem.source_id.in_(source_ids)
-        ).delete(synchronize_session=False)
-    elif content_count > 0:
-        # 保留内容，断开关联
-        db.query(ContentItem).filter(
-            ContentItem.source_id.in_(source_ids)
-        ).update({"source_id": None}, synchronize_session=False)
-
-    # 清理 CollectionRecord 和 FinanceDataPoint
-    db.query(CollectionRecord).filter(
-        CollectionRecord.source_id.in_(source_ids)
-    ).delete(synchronize_session=False)
-    db.query(FinanceDataPoint).filter(
-        FinanceDataPoint.source_id.in_(source_ids)
-    ).delete(synchronize_session=False)
-
-    # 清理以 source_id 关联的 pipeline_executions
-    orphan_exec_ids = [
-        eid for (eid,) in db.query(PipelineExecution.id)
-        .filter(PipelineExecution.source_id.in_(source_ids)).all()
-    ]
-    if orphan_exec_ids:
-        db.query(PipelineStep).filter(
-            PipelineStep.pipeline_id.in_(orphan_exec_ids)
-        ).delete(synchronize_session=False)
-        db.query(PipelineExecution).filter(
-            PipelineExecution.id.in_(orphan_exec_ids)
-        ).delete(synchronize_session=False)
-
-    deleted = db.query(SourceConfig).filter(
-        SourceConfig.id.in_(source_ids)
-    ).delete(synchronize_session=False)
+    from app.services.source_cleanup import cascade_delete_source
+    result = cascade_delete_source(source_ids, db, cascade)
     db.commit()
 
-    logger.info(f"Batch deleted {deleted} sources (cascade={cascade}, content_kept={content_count if not cascade else 0})")
-    return {"code": 0, "data": {"deleted": deleted, "content_count": content_count, "content_deleted": cascade}, "message": "ok"}
+    logger.info(f"Batch deleted {result['deleted']} sources (cascade={cascade})")
+    return {"code": 0, "data": result, "message": "ok"}
 
 
 @router.delete("/{source_id}")
@@ -518,63 +305,12 @@ async def delete_source(
     if not source:
         return error_response(404, "Source not found")
 
-    content_count = db.query(func.count(ContentItem.id)).filter(ContentItem.source_id == source_id).scalar()
-
-    if cascade and content_count > 0:
-        # 级联删除: pipeline_steps → pipeline_executions → content_items
-        content_ids = [
-            cid for (cid,) in db.query(ContentItem.id)
-            .filter(ContentItem.source_id == source_id).all()
-        ]
-        execution_ids = [
-            eid for (eid,) in db.query(PipelineExecution.id)
-            .filter(PipelineExecution.content_id.in_(content_ids)).all()
-        ]
-        if execution_ids:
-            db.query(PipelineStep).filter(
-                PipelineStep.pipeline_id.in_(execution_ids)
-            ).delete(synchronize_session=False)
-            db.query(PipelineExecution).filter(
-                PipelineExecution.id.in_(execution_ids)
-            ).delete(synchronize_session=False)
-        db.query(MediaItem).filter(
-            MediaItem.content_id.in_(content_ids)
-        ).delete(synchronize_session=False)
-        db.query(ContentItem).filter(
-            ContentItem.source_id == source_id
-        ).delete(synchronize_session=False)
-    elif content_count > 0:
-        # 保留内容，断开关联
-        db.query(ContentItem).filter(
-            ContentItem.source_id == source_id
-        ).update({"source_id": None}, synchronize_session=False)
-
-    # 清理 CollectionRecord 和 FinanceDataPoint
-    db.query(CollectionRecord).filter(
-        CollectionRecord.source_id == source_id
-    ).delete(synchronize_session=False)
-    db.query(FinanceDataPoint).filter(
-        FinanceDataPoint.source_id == source_id
-    ).delete(synchronize_session=False)
-
-    # 清理以 source_id 关联的 pipeline_executions
-    orphan_exec_ids = [
-        eid for (eid,) in db.query(PipelineExecution.id)
-        .filter(PipelineExecution.source_id == source_id).all()
-    ]
-    if orphan_exec_ids:
-        db.query(PipelineStep).filter(
-            PipelineStep.pipeline_id.in_(orphan_exec_ids)
-        ).delete(synchronize_session=False)
-        db.query(PipelineExecution).filter(
-            PipelineExecution.id.in_(orphan_exec_ids)
-        ).delete(synchronize_session=False)
-
-    db.delete(source)
+    from app.services.source_cleanup import cascade_delete_source
+    result = cascade_delete_source([source_id], db, cascade)
     db.commit()
 
-    logger.info(f"Source deleted: {source_id} (cascade={cascade}, content_kept={content_count if not cascade else 0})")
-    return {"code": 0, "data": {"content_count": content_count, "content_deleted": cascade}, "message": "ok"}
+    logger.info(f"Source deleted: {source_id} (cascade={cascade})")
+    return {"code": 0, "data": result, "message": "ok"}
 
 
 # ---- 手动采集 ----

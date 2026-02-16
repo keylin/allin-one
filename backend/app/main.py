@@ -12,7 +12,7 @@ from app.core.config import settings
 from app.core.logging_config import setup_logging
 from app.core.auth import APIKeyMiddleware
 from app.core.database import init_db
-from app.api.routes import dashboard, sources, content, pipelines, templates, video, system_settings, prompt_templates, finance, credentials
+from app.api.routes import dashboard, sources, content, pipelines, templates, video, system_settings, prompt_templates, finance, credentials, opml, bilibili_auth
 
 setup_logging("backend")
 
@@ -103,6 +103,8 @@ app.include_router(system_settings.router, prefix="/api/settings", tags=["settin
 app.include_router(prompt_templates.router, prefix="/api/prompt-templates", tags=["prompt-templates"])
 app.include_router(finance.router, prefix="/api/finance", tags=["finance"])
 app.include_router(credentials.router, prefix="/api/credentials", tags=["credentials"])
+app.include_router(opml.router, prefix="/api/sources", tags=["sources"])
+app.include_router(bilibili_auth.router, prefix="/api/credentials/bilibili", tags=["credentials"])
 
 # ---- 通用媒体文件服务 ----
 
