@@ -5,7 +5,9 @@ import { batchMarkRead } from '@/api/content'
 
 /**
  * 自动标记已读 composable
- * 通过 IntersectionObserver 检测卡片滚出视野后自动标记已读
+ * 通过 IntersectionObserver 检测卡片滚出视野顶部后自动标记已读
+ *
+ * 核心逻辑：卡片完全滚出顶部视野时立即标记（类似 Twitter/X）
  *
  * @param {Object} options
  * @param {Ref} options.items - 内容列表 ref
@@ -16,47 +18,44 @@ import { batchMarkRead } from '@/api/content'
 export function useAutoRead({ items, leftPanelRef, loadStats }) {
   const hasScrolled = ref(false)
   const pendingReadIds = ref(new Set())
-  const cardPositions = ref(new Map())
   const autoActivateTimer = ref(null)
   const AUTO_ACTIVATE_DELAY = 3000
 
   // --- IntersectionObserver 回调 ---
+  // 简化逻辑：卡片完全滚出顶部视野 → 标记已读
   function handleCardVisible(entry) {
     if (!hasScrolled.value) return
 
     const itemId = entry.target.dataset.itemId
     const item = items.value.find(i => i.id === itemId)
 
-    if (!item || (item.view_count || 0) > 0) {
-      cardPositions.value.delete(itemId)
-      return
-    }
+    // 已读过或不存在则跳过
+    if (!item || (item.view_count || 0) > 0) return
 
-    const currentY = entry.boundingClientRect.top
-    const lastY = cardPositions.value.get(itemId)
-
-    if (entry.isIntersecting) {
-      cardPositions.value.set(itemId, currentY)
-    } else {
-      if (lastY !== undefined) {
-        const isMovingUp = currentY < lastY
-        if (isMovingUp) {
-          markAsRead(itemId)
-        }
-      }
-      cardPositions.value.delete(itemId)
+    // 卡片完全滚出顶部视野 → 标记已读
+    // boundingClientRect.bottom < 0 表示卡片完全在视口上方
+    if (!entry.isIntersecting && entry.boundingClientRect.bottom < 0) {
+      markAsRead(itemId)
     }
   }
 
   // 标记单个 item 为已读（加入批量队列）
   function markAsRead(itemId) {
-    if (!pendingReadIds.value.has(itemId)) {
-      pendingReadIds.value.add(itemId)
-      debouncedBatchSubmit()
+    if (pendingReadIds.value.has(itemId)) return
+
+    pendingReadIds.value.add(itemId)
+
+    // 立即更新本地状态（不等 API 返回，让用户感觉更即时）
+    const item = items.value.find(i => i.id === itemId)
+    if (item) {
+      item.view_count = 1
+      item.last_viewed_at = new Date().toISOString()
     }
+
+    debouncedBatchSubmit()
   }
 
-  // 防抖批量提交已读
+  // 防抖批量提交已读（300ms 更及时）
   const debouncedBatchSubmit = useDebounce(async () => {
     if (pendingReadIds.value.size === 0) return
 
@@ -65,31 +64,29 @@ export function useAutoRead({ items, leftPanelRef, loadStats }) {
 
     try {
       await batchMarkRead(ids)
-
-      // 更新本地状态（立即反映视觉变化）
-      ids.forEach(id => {
-        const item = items.value.find(i => i.id === id)
-        if (item) {
-          item.view_count = 1
-          item.last_viewed_at = new Date().toISOString()
-        }
-      })
-
       // 刷新统计数据
       await loadStats()
     } catch (err) {
       console.error('批量标记已读失败:', err)
-      // 失败时重新加入队列（下次重试）
-      ids.forEach(id => pendingReadIds.value.add(id))
+      // 失败时回滚本地状态并重新加入队列
+      ids.forEach(id => {
+        const item = items.value.find(i => i.id === id)
+        if (item) {
+          item.view_count = 0
+          item.last_viewed_at = null
+        }
+        pendingReadIds.value.add(id)
+      })
     }
-  }, 500)
+  }, 300)
 
   // 初始化 IntersectionObserver
+  // 使用精确边界和多个 threshold 确保更频繁的回调
   const { observe, unobserve, disconnect } = useIntersectionObserver(
     handleCardVisible,
     {
-      threshold: 0,
-      rootMargin: '-100px 0px 0px 0px'
+      threshold: [0, 0.1],
+      rootMargin: '0px 0px 0px 0px'
     }
   )
 
@@ -177,7 +174,6 @@ export function useAutoRead({ items, leftPanelRef, loadStats }) {
   onUnmounted(() => {
     disconnect()
     pendingReadIds.value.clear()
-    cardPositions.value.clear()
     hasScrolled.value = false
     if (autoActivateTimer.value) {
       clearTimeout(autoActivateTimer.value)
@@ -188,7 +184,6 @@ export function useAutoRead({ items, leftPanelRef, loadStats }) {
   return {
     hasScrolled,
     pendingReadIds,
-    cardPositions,
     markAsRead,
     handleScrollBottom,
     observe,
