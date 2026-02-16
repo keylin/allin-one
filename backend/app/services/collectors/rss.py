@@ -13,9 +13,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models.content import SourceConfig, ContentItem, ContentStatus
+from app.models.content import SourceConfig, ContentItem, ContentStatus, MediaItem
 from app.services.collectors.base import BaseCollector
 from app.services.collectors.utils import resolve_rss_feed_url
+from app.services.media_detection import detect_media_for_content
 
 logger = logging.getLogger(__name__)
 
@@ -49,13 +50,14 @@ class RSSCollector(BaseCollector):
                 continue  # URL 已存在，跳过
 
             external_id = self._extract_external_id(entry)
+            raw_dict = self._entry_to_dict(entry)
             item = ContentItem(
                 source_id=source.id,
                 title=entry.get("title", "Untitled")[:500],
                 external_id=external_id,
                 url=url,
                 author=entry.get("author"),
-                raw_data=json.dumps(self._entry_to_dict(entry), ensure_ascii=False),
+                raw_data=json.dumps(raw_dict, ensure_ascii=False),
                 status=ContentStatus.PENDING.value,
                 published_at=self._parse_published(entry),
             )
@@ -63,9 +65,17 @@ class RSSCollector(BaseCollector):
                 with db.begin_nested():
                     db.add(item)
                     db.flush()
+                    # 检测媒体，创建 pending MediaItem
+                    for det in detect_media_for_content(url, raw_dict):
+                        db.add(MediaItem(
+                            content_id=item.id,
+                            media_type=det.media_type,
+                            original_url=det.original_url,
+                            status="pending",
+                        ))
                 new_items.append(item)
             except IntegrityError:
-                pass  # SAVEPOINT 已自动回滚，外层事务不受影响
+                pass  # SAVEPOINT 已自动回滚，MediaItem 也一起回滚
 
         if new_items:
             db.commit()

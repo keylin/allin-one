@@ -9,8 +9,9 @@ import httpx
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models.content import SourceConfig, ContentItem, ContentStatus
+from app.models.content import SourceConfig, ContentItem, ContentStatus, MediaItem
 from app.services.collectors.base import BaseCollector
+from app.services.media_detection import detect_media_from_url
 
 logger = logging.getLogger(__name__)
 
@@ -88,9 +89,17 @@ class BilibiliCollector(BaseCollector):
                 with db.begin_nested():
                     db.add(item)
                     db.flush()
+                    # 检测媒体，创建 pending MediaItem
+                    for det in detect_media_from_url(item.url or ""):
+                        db.add(MediaItem(
+                            content_id=item.id,
+                            media_type=det.media_type,
+                            original_url=det.original_url,
+                            status="pending",
+                        ))
                 new_items.append(item)
             except IntegrityError:
-                pass  # SAVEPOINT 已自动回滚，外层事务不受影响
+                pass  # SAVEPOINT 已自动回滚，MediaItem 也一起回滚
 
         if new_items:
             db.commit()

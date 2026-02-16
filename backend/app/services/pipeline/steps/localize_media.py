@@ -51,14 +51,10 @@ def _handle_localize_media(context: dict) -> dict:
     from app.core.config import settings
     from app.core.database import SessionLocal
     from app.models.content import ContentItem, MediaItem, MediaType
+    from app.services.media_detection import url_matches_video_pattern
 
     content_id = context["content_id"]
     content_url = context.get("content_url", "")
-
-    VIDEO_URL_PATTERNS = [
-        r'bilibili\.com/video/', r'youtube\.com/watch',
-        r'youtu\.be/', r'b23\.tv/',
-    ]
 
     # Load content
     with SessionLocal() as db:
@@ -69,12 +65,7 @@ def _handle_localize_media(context: dict) -> dict:
         raw_data_json = content.raw_data
 
     # Check: is the content URL a video page?
-    is_video_url = False
-    if content_url:
-        for pattern in VIDEO_URL_PATTERNS:
-            if re.search(pattern, content_url):
-                is_video_url = True
-                break
+    is_video_url = url_matches_video_pattern(content_url)
 
     result = {
         "status": "done",
@@ -148,16 +139,28 @@ def _handle_localize_media(context: dict) -> dict:
             }
 
             with SessionLocal() as db:
-                media_item = MediaItem(
-                    content_id=content_id,
-                    media_type=MediaType.VIDEO.value,
-                    original_url=content_url,
-                    local_path=video_path,
-                    filename=os.path.basename(video_path) if video_path else None,
-                    status="downloaded" if video_path else "failed",
-                    metadata_json=json.dumps(metadata, ensure_ascii=False),
-                )
-                db.add(media_item)
+                # 优先更新采集时创建的 pending MediaItem，无则新建
+                existing = db.query(MediaItem).filter(
+                    MediaItem.content_id == content_id,
+                    MediaItem.media_type == MediaType.VIDEO.value,
+                    MediaItem.status == "pending",
+                ).first()
+                if existing:
+                    existing.original_url = content_url
+                    existing.local_path = video_path
+                    existing.filename = os.path.basename(video_path) if video_path else None
+                    existing.status = "downloaded" if video_path else "failed"
+                    existing.metadata_json = json.dumps(metadata, ensure_ascii=False)
+                else:
+                    db.add(MediaItem(
+                        content_id=content_id,
+                        media_type=MediaType.VIDEO.value,
+                        original_url=content_url,
+                        local_path=video_path,
+                        filename=os.path.basename(video_path) if video_path else None,
+                        status="downloaded" if video_path else "failed",
+                        metadata_json=json.dumps(metadata, ensure_ascii=False),
+                    ))
 
                 # Update content title and published_at from video info
                 content = db.get(ContentItem, content_id)
@@ -191,16 +194,24 @@ def _handle_localize_media(context: dict) -> dict:
 
         except Exception as e:
             logger.error(f"[localize_media] Video download failed: {e}")
-            # Create failed MediaItem for tracking
+            # 更新已有 pending MediaItem 或新建 failed 记录
             with SessionLocal() as db:
-                media_item = MediaItem(
-                    content_id=content_id,
-                    media_type=MediaType.VIDEO.value,
-                    original_url=content_url,
-                    status="failed",
-                    metadata_json=json.dumps({"error": str(e)[:200]}),
-                )
-                db.add(media_item)
+                existing = db.query(MediaItem).filter(
+                    MediaItem.content_id == content_id,
+                    MediaItem.media_type == MediaType.VIDEO.value,
+                    MediaItem.status == "pending",
+                ).first()
+                if existing:
+                    existing.status = "failed"
+                    existing.metadata_json = json.dumps({"error": str(e)[:200]})
+                else:
+                    db.add(MediaItem(
+                        content_id=content_id,
+                        media_type=MediaType.VIDEO.value,
+                        original_url=content_url,
+                        status="failed",
+                        metadata_json=json.dumps({"error": str(e)[:200]}),
+                    ))
                 db.commit()
             result["media_items_created"] += 1
 
