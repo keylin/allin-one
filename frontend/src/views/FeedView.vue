@@ -86,9 +86,11 @@ const applyingEnrich = ref(null)
 
 // === 自动标记已读状态 ===
 const hasScrolled = ref(false) // 用户是否已开始滚动
-const visibleItems = ref(new Map()) // Map<itemId, startTime>
 const pendingReadIds = ref(new Set()) // 待提交的已读 ID
+const cardPositions = ref(new Map()) // Map<itemId, lastY> 记录卡片Y坐标，用于判断移动方向
 const mobileDetailRef = ref(null) // 移动端详情容器 ref
+const autoActivateTimer = ref(null) // 非可滚动容器的自动激活定时器
+const AUTO_ACTIVATE_DELAY = 3000 // 3秒延迟（给用户开始阅读的时间）
 
 // Markdown & DOMPurify setup
 DOMPurify.addHook('afterSanitizeAttributes', (node) => {
@@ -576,8 +578,20 @@ function formatTime(t) {
 // --- Left panel scroll → infinite load ---
 function handleLeftScroll(e) {
   const el = e.target
-  if (el.scrollHeight - el.scrollTop - el.clientHeight < 200) {
+  const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+
+  // 原有逻辑：距离底部 200px 时触发无限加载
+  if (distanceToBottom < 200) {
     loadMore()
+  }
+
+  // 新增逻辑：滚动到底部时标记最后一条未读卡片
+  if (hasScrolled.value && distanceToBottom < 50) {
+    const unreadItems = items.value.filter(i => (i.view_count || 0) === 0)
+    if (unreadItems.length > 0) {
+      const lastUnread = unreadItems[unreadItems.length - 1]
+      markAsRead(lastUnread.id)
+    }
   }
 }
 
@@ -587,6 +601,7 @@ function handleKeydown(e) {
   const tag = e.target.tagName
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
 
+  // Navigation: ↑ ↓
   if (e.key === 'ArrowDown') {
     e.preventDefault()
     const idx = selectedIndex.value
@@ -635,38 +650,85 @@ async function loadStats() {
   } catch (_) { /* ignore */ }
 }
 
+/**
+ * 检测容器是否可滚动
+ */
+function isContainerScrollable() {
+  const container = leftPanelRef.value
+  if (!container) return false
+  return container.scrollHeight > container.clientHeight
+}
+
+/**
+ * 检查并激活自动标记已读功能
+ * - 可滚动容器: 等待用户首次滚动（保持原有行为）
+ * - 不可滚动容器: 延迟 3 秒后自动激活
+ */
+function checkAndActivateAutoRead() {
+  // 已激活或无内容，跳过
+  if (hasScrolled.value) return
+
+  // 清理之前的定时器
+  if (autoActivateTimer.value) {
+    clearTimeout(autoActivateTimer.value)
+    autoActivateTimer.value = null
+  }
+
+  const container = leftPanelRef.value
+  if (!container || items.value.length === 0) return
+
+  if (isContainerScrollable()) {
+    // 策略 A: 可滚动 → 等待滚动事件（已在 onMounted 中设置）
+    console.log('[Auto-read] 容器可滚动，等待用户滚动')
+  } else {
+    // 策略 B: 不可滚动 → 延迟后自动激活
+    console.log('[Auto-read] 容器不可滚动，将在 3 秒后自动激活')
+    autoActivateTimer.value = setTimeout(() => {
+      // 再次检查是否仍不可滚动（防止期间加载了更多内容）
+      if (!hasScrolled.value && !isContainerScrollable()) {
+        console.log('[Auto-read] 自动激活（内容少于一页）')
+        hasScrolled.value = true
+      }
+    }, AUTO_ACTIVATE_DELAY)
+  }
+}
+
 // --- 自动标记已读逻辑 ---
 // IntersectionObserver 回调
 function handleCardVisible(entry) {
-  // 用户未开始滚动前不计时
+  // 1. 未激活时不处理
   if (!hasScrolled.value) return
 
+  // 2. 获取卡片数据
   const itemId = entry.target.dataset.itemId
   const item = items.value.find(i => i.id === itemId)
 
-  // 跳过已读卡片
-  if (!item || (item.view_count || 0) > 0) return
+  // 3. 过滤已读卡片
+  if (!item || (item.view_count || 0) > 0) {
+    cardPositions.value.delete(itemId)
+    return
+  }
 
-  if (entry.isIntersecting && entry.intersectionRatio >= 0.7) {
-    // 卡片进入视口（70%可见）
-    visibleItems.value.set(itemId, Date.now())
+  // 4. 获取位置信息
+  const currentY = entry.boundingClientRect.top
+  const lastY = cardPositions.value.get(itemId)
 
-    // 2秒后检查是否仍在视口
-    setTimeout(() => {
-      if (visibleItems.value.has(itemId)) {
-        const startTime = visibleItems.value.get(itemId)
-        const duration = Date.now() - startTime
-
-        // 确保真的停留了2秒
-        if (duration >= 2000) {
-          markAsRead(itemId)
-          visibleItems.value.delete(itemId)
-        }
-      }
-    }, 2000)
+  if (entry.isIntersecting) {
+    // === 卡片进入视野 → 记录位置 ===
+    cardPositions.value.set(itemId, currentY)
   } else {
-    // 卡片离开视口
-    visibleItems.value.delete(itemId)
+    // === 卡片离开视野 → 判断方向并标记 ===
+    if (lastY !== undefined) {
+      const isMovingUp = currentY < lastY // 向上移动
+
+      if (isMovingUp) {
+        // 向上离开视野 → 立即标记为已读
+        markAsRead(itemId)
+      }
+    }
+
+    // 清理位置记录
+    cardPositions.value.delete(itemId)
   }
 }
 
@@ -709,7 +771,10 @@ const debouncedBatchSubmit = useDebounce(async () => {
 // 初始化 IntersectionObserver
 const { observe, unobserve, disconnect } = useIntersectionObserver(
   handleCardVisible,
-  { threshold: 0.7 } // 70% 可见触发
+  {
+    threshold: 0,  // 卡片完全离开视野时触发
+    rootMargin: '-100px 0px 0px 0px'  // 顶部向内收缩100px，让卡片更早被视为"离开"
+  }
 )
 
 // 监听 items 变化，自动观察新卡片
@@ -729,6 +794,9 @@ watch(items, () => {
         observe(card)
       }
     })
+
+    // 检查是否需要自动激活
+    checkAndActivateAutoRead()
   })
 }, { flush: 'post' })
 
@@ -739,6 +807,11 @@ const { isSwiping, swipeOffset } = useSwipe(mobileDetailRef, {
     closeMobileDetail()
   }
 })
+
+// 窗口 resize 处理（防抖）
+const handleResize = useDebounce(() => {
+  checkAndActivateAutoRead()
+}, 300)
 
 onMounted(async () => {
   fetchItems(true)
@@ -757,6 +830,9 @@ onMounted(async () => {
       hasScrolled.value = true
     }, { once: true })
   }
+
+  // 监听窗口大小变化（视口改变可能影响可滚动性）
+  window.addEventListener('resize', handleResize)
 })
 
 onUnmounted(() => {
@@ -767,8 +843,13 @@ onUnmounted(() => {
   // 清理自动标记已读
   disconnect()
   pendingReadIds.value.clear()
-  visibleItems.value.clear()
+  cardPositions.value.clear()
   hasScrolled.value = false
+  // 清理自动激活定时器和 resize 监听器
+  if (autoActivateTimer.value) {
+    clearTimeout(autoActivateTimer.value)
+  }
+  window.removeEventListener('resize', handleResize)
 })
 </script>
 
@@ -1015,13 +1096,13 @@ onUnmounted(() => {
               </div>
             </div>
 
-            <!-- 到底了 -->
-            <div v-else-if="!hasMore && items.length > 0" class="text-center py-6">
-              <div class="inline-flex items-center gap-2 px-4 py-2 bg-slate-100 rounded-full text-xs text-slate-500">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                已经到底了
+            <!-- 虚拟底部空白区（让最后几条卡片可以向上移出视野） -->
+            <div v-else-if="!hasMore && items.length > 0" class="flex items-center justify-center text-center min-h-[80vh] pt-12 text-sm text-slate-400">
+              <div>
+                <p class="mb-1">已浏览完所有内容</p>
+                <p class="text-xs text-slate-300">
+                  {{ contentStats.read }}/{{ contentStats.total }} 已读
+                </p>
               </div>
             </div>
           </div>

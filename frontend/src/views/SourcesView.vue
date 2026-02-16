@@ -592,6 +592,12 @@ function handleExport() {
                   >
                     编辑
                   </button>
+                  <button
+                    class="px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 rounded-lg transition-all duration-200"
+                    @click="handleDelete(source)"
+                  >
+                    删除
+                  </button>
                 </div>
               </td>
             </tr>
