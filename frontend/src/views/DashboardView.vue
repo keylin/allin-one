@@ -92,6 +92,14 @@ const contentStatusStyles = {
   failed: 'bg-rose-50 text-rose-600',
 }
 
+const contentStatusLabels = {
+  pending: '待处理',
+  processing: '处理中',
+  ready: '已就绪',
+  analyzed: '已分析',
+  failed: '失败',
+}
+
 const healthStyles = {
   healthy: { dot: 'bg-emerald-400', text: 'text-emerald-600', label: '正常' },
   warning: { dot: 'bg-amber-400', text: 'text-amber-600', label: '告警' },
@@ -519,7 +527,7 @@ onUnmounted(() => {
                     class="inline-flex px-2 py-0.5 text-xs font-medium rounded-md"
                     :class="contentStatusStyles[item.status] || 'bg-slate-100 text-slate-500'"
                   >
-                    {{ statusLabels[item.status] || item.status }}
+                    {{ contentStatusLabels[item.status] || item.status }}
                   </span>
                   <span v-if="item.source_name" class="text-[10px] text-slate-300 truncate max-w-[100px]">
                     {{ item.source_name }}
