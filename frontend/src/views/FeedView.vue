@@ -85,6 +85,7 @@ const showEnrichModal = ref(false)
 const applyingEnrich = ref(null)
 
 // === 自动标记已读状态 ===
+const hasScrolled = ref(false) // 用户是否已开始滚动
 const visibleItems = ref(new Map()) // Map<itemId, startTime>
 const pendingReadIds = ref(new Set()) // 待提交的已读 ID
 const mobileDetailRef = ref(null) // 移动端详情容器 ref
@@ -637,6 +638,9 @@ async function loadStats() {
 // --- 自动标记已读逻辑 ---
 // IntersectionObserver 回调
 function handleCardVisible(entry) {
+  // 用户未开始滚动前不计时
+  if (!hasScrolled.value) return
+
   const itemId = entry.target.dataset.itemId
   const item = items.value.find(i => i.id === itemId)
 
@@ -745,6 +749,14 @@ onMounted(async () => {
   } catch (_) { /* ignore */ }
   document.addEventListener('keydown', handleKeydown)
   document.addEventListener('click', handleClickOutside)
+
+  // 监听首次滚动，激活自动标记已读
+  const container = leftPanelRef.value
+  if (container) {
+    container.addEventListener('scroll', () => {
+      hasScrolled.value = true
+    }, { once: true })
+  }
 })
 
 onUnmounted(() => {
@@ -756,6 +768,7 @@ onUnmounted(() => {
   disconnect()
   pendingReadIds.value.clear()
   visibleItems.value.clear()
+  hasScrolled.value = false
 })
 </script>
 
