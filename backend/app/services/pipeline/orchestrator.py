@@ -4,15 +4,14 @@
   定时器 → CollectionService.collect(source) → N 条新 ContentItem
     → 对每条调用 Orchestrator.trigger_for_content(content) → 创建 PipelineExecution
 
-流水线分两阶段:
-  1. 预处理 (自动): 用 raw_data 填充 processed_content, 并注入 localize_media
-  2. 后置处理 (用户模板): analyze / translate / publish 等, 由用户配置
+流水线不自动预处理:
+  - 采集完成后不做预处理，直接保存 ContentItem，状态为 pending
+  - 有模板才创建流水线，无模板时直接标记 READY
+  - processed_content 填充改为 extract_content 步骤，由用户在模板中显式添加
 """
 
 import json
 import logging
-import re
-from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -23,9 +22,6 @@ from app.models.pipeline import (
 )
 
 logger = logging.getLogger(__name__)
-
-# 预处理步骤类型 — 由系统自动注入, 从用户模板中去重
-PREPROCESSING_STEP_TYPES = {"localize_media"}
 
 
 class PipelineOrchestrator:
@@ -44,59 +40,6 @@ class PipelineOrchestrator:
             return template
         return None
 
-    # ---- 自动预处理 ----
-
-    @staticmethod
-    def _strip_html(html: str) -> str:
-        """去除 HTML 标签, 返回纯文本"""
-        text = re.sub(r"<[^>]+>", "", html)
-        return text.strip()
-
-    @staticmethod
-    def _extract_raw_text(raw_data_json: str | None) -> str:
-        """从 raw_data JSON 提取最长的文本内容"""
-        if not raw_data_json:
-            return ""
-        try:
-            raw = json.loads(raw_data_json)
-        except (json.JSONDecodeError, TypeError):
-            return ""
-        # 优先 content[0].value (RSS <content:encoded>, 通常是全文 HTML)
-        contents = raw.get("content", [])
-        if isinstance(contents, list) and contents:
-            value = contents[0].get("value", "")
-            if value:
-                return value
-        # 回退 summary
-        return raw.get("summary", "")
-
-    def _compute_preprocessing_steps(self, content: ContentItem) -> list[dict]:
-        """计算自动预处理步骤: 用 raw_data 填充 processed_content + localize_media"""
-        steps = []
-
-        source = self.db.query(SourceConfig).get(content.source_id)
-
-        # 直接用 raw_data 填充 processed_content（不再自动富化）
-        if not content.processed_content:
-            raw_text = self._extract_raw_text(content.raw_data)
-            if raw_text:
-                content.processed_content = raw_text
-                self.db.flush()
-                logger.info(f"raw_data populated into processed_content for content {content.id}")
-
-        # 媒体本地化: 始终添加（步骤内部检测是否有媒体需处理）
-        # 纯数据源 (api.akshare) 跳过
-        if source and source.source_type != "api.akshare":
-            steps.append({"step_type": "localize_media", "is_critical": False, "config": {}})
-
-        return steps
-
-    @staticmethod
-    def _build_steps(pre_steps: list[dict], template_steps: list[dict]) -> list[dict]:
-        """合并预处理步骤 + 模板步骤 (去重: 模板中的预处理步骤被跳过)"""
-        post_steps = [s for s in template_steps if s["step_type"] not in PREPROCESSING_STEP_TYPES]
-        return pre_steps + post_steps
-
     # ---- 触发 ----
 
     def trigger_for_content(
@@ -107,20 +50,16 @@ class PipelineOrchestrator:
     ) -> PipelineExecution | None:
         """为一条已存在的 ContentItem 创建并启动流水线
 
-        自动注入预处理步骤 (基于内容检测), 然后拼接用户模板的后置步骤。
-        无模板时仍执行预处理; 无预处理也无模板则标记 READY。
+        有模板才创建流水线，无模板直接标记 READY。
+        步骤完全来自模板（包含 extract_content、localize_media 等），不再自动注入。
 
         Args:
             content: 已经由 Collector 创建的内容项
             template_override_id: 显式指定模板 (手动触发时使用, 覆盖源绑定)
             trigger: 触发来源
         """
-        # 1. 计算预处理步骤
-        pre_steps = self._compute_preprocessing_steps(content)
-
-        # 2. 确定用户模板
+        # 1. 确定模板
         template = None
-        template_steps = []
         if template_override_id:
             template = self.db.query(PipelineTemplate).get(template_override_id)
             if not template:
@@ -131,24 +70,26 @@ class PipelineOrchestrator:
                 raise ValueError(f"Source not found: {content.source_id}")
             template = self.get_template_for_source(source)
 
-        if template:
-            template_steps = json.loads(template.steps_config) or []
-
-        # 3. 合并: 预处理 + 后置处理 (去重)
-        all_steps = self._build_steps(pre_steps, template_steps)
-        if not all_steps:
-            # 无预处理也无后置处理 — 标记为终态，避免补偿循环反复扫描
+        if not template:
+            # 无模板 → 标记 READY，不创建流水线
             if content.status == ContentStatus.PENDING.value:
                 content.status = ContentStatus.READY.value
                 self.db.flush()
             return None
 
-        # 4. 创建执行记录
+        # 2. 直接使用模板步骤
+        all_steps = json.loads(template.steps_config) or []
+        if not all_steps:
+            content.status = ContentStatus.READY.value
+            self.db.flush()
+            return None
+
+        # 3. 创建执行记录
         execution = PipelineExecution(
             content_id=content.id,
             source_id=content.source_id,
-            template_id=template.id if template else None,
-            template_name=template.name if template else "自动预处理",
+            template_id=template.id,
+            template_name=template.name,
             status=PipelineStatus.PENDING.value,
             total_steps=len(all_steps),
             trigger_source=trigger.value,
@@ -156,7 +97,7 @@ class PipelineOrchestrator:
         self.db.add(execution)
         self.db.flush()
 
-        # 5. 创建步骤实例
+        # 4. 创建步骤实例
         for index, step_def in enumerate(all_steps):
             step = PipelineStep(
                 pipeline_id=execution.id,
@@ -170,8 +111,7 @@ class PipelineOrchestrator:
         self.db.commit()
         logger.info(
             f"Pipeline created: {execution.id} "
-            f"(template={template.name if template else 'auto'}, "
-            f"pre={len(pre_steps)}, post={len(all_steps) - len(pre_steps)}, "
+            f"(template={template.name}, steps={len(all_steps)}, "
             f"content={content.id})"
         )
         return execution

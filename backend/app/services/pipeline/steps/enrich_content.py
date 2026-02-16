@@ -53,7 +53,7 @@ def _handle_enrich_content(context: dict) -> dict:
 
     import httpx
     from bs4 import BeautifulSoup
-    from app.services.pipeline.orchestrator import PipelineOrchestrator
+    from app.services.pipeline.steps.extract_content import _extract_raw_text, _strip_html
     from app.services.enrichment import (
         _extract_with_trafilatura,
         _detect_anti_scraping,
@@ -69,8 +69,8 @@ def _handle_enrich_content(context: dict) -> dict:
         content = db.get(ContentItem, context["content_id"])
         raw_data_json = content.raw_data if content else None
 
-    original_html = PipelineOrchestrator._extract_raw_text(raw_data_json)
-    original_text = PipelineOrchestrator._strip_html(original_html) if original_html else ""
+    original_html = _extract_raw_text(raw_data_json)
+    original_text = _strip_html(original_html) if original_html else ""
 
     enriched_md = ""
     method = ""

@@ -137,7 +137,8 @@ class PipelineExecutor:
                 execution.current_step = execution.total_steps
                 execution.completed_at = now
 
-                # 更新内容状态: 有用户模板 → ANALYZED, 仅预处理 → READY
+                # 更新内容状态: template_id 必定存在（无模板不创建流水线）
+                # 保留 else → READY 分支作为防御性编码
                 from app.models.content import ContentItem, ContentStatus
                 content = db.get(ContentItem, execution.content_id)
                 if content:

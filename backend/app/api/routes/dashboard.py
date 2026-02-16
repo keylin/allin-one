@@ -1,6 +1,7 @@
 """Dashboard API"""
 
 from datetime import datetime, timedelta
+import sqlalchemy
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func, cast, Date, literal_column
@@ -72,7 +73,7 @@ async def get_collection_trend(
     days: int = Query(7, ge=1, le=30),
     db: Session = Depends(get_db),
 ):
-    """获取最近 N 天每日采集数量趋势"""
+    """获取最近 N 天每日采集数量趋势（含成功率）"""
     # 计算起始边界（容器时区的 N 天前 00:00）
     start_date = (datetime.now() - timedelta(days=days - 1)).strftime("%Y-%m-%d")
     start_utc, _ = get_local_day_boundaries(start_date)
@@ -80,9 +81,8 @@ async def get_collection_trend(
     # 获取容器时区名称（用于 SQL 层时区转换）
     tz_name = get_container_timezone_name()
 
-    # 使用 AT TIME ZONE 在数据库层按容器时区分组
-    # 将 UTC 时间转为容器时区后提取日期，避免拉取全量数据到 Python 处理
-    rows = (
+    # 1. 内容数量趋势
+    content_rows = (
         db.query(
             func.date(
                 func.timezone(
@@ -96,14 +96,51 @@ async def get_collection_trend(
         .group_by("day")
         .all()
     )
+    content_map = {str(row.day): row.count for row in content_rows}
 
-    count_map = {str(row.day): row.count for row in rows}
+    # 2. 采集记录统计（成功率）
+    collection_rows = (
+        db.query(
+            func.date(
+                func.timezone(
+                    literal_column(f"'{tz_name}'"),
+                    func.timezone('UTC', CollectionRecord.started_at)
+                )
+            ).label("day"),
+            func.count(CollectionRecord.id).label("total"),
+            func.sum(func.cast(CollectionRecord.status == 'completed', sqlalchemy.Integer)).label("success"),
+            func.sum(func.coalesce(CollectionRecord.items_new, 0)).label("items_new"),
+        )
+        .filter(CollectionRecord.started_at >= start_utc)
+        .group_by("day")
+        .all()
+    )
+    collection_map = {
+        str(row.day): {
+            "total": row.total,
+            "success": row.success or 0,
+            "items_new": row.items_new or 0,
+        }
+        for row in collection_rows
+    }
 
-    # 补全缺失天数（使用容器本地时间日期）
+    # 3. 合并数据，补全缺失天数
     trend = []
     for i in range(days):
         day = (datetime.now() - timedelta(days=days - 1 - i)).strftime("%Y-%m-%d")
-        trend.append({"date": day, "count": count_map.get(day, 0)})
+        col_data = collection_map.get(day, {"total": 0, "success": 0, "items_new": 0})
+        total = col_data["total"]
+        success = col_data["success"]
+        success_rate = round(success / total * 100, 1) if total > 0 else 0
+
+        trend.append({
+            "date": day,
+            "count": content_map.get(day, 0),
+            "collection_total": total,
+            "collection_success": success,
+            "success_rate": success_rate,
+            "items_new": col_data["items_new"],
+        })
 
     return {"code": 0, "data": trend, "message": "ok"}
 
@@ -255,6 +292,146 @@ async def get_recent_content(
         })
 
     return {"code": 0, "data": data, "message": "ok"}
+
+
+@router.get("/content-status-distribution")
+async def get_content_status_distribution(db: Session = Depends(get_db)):
+    """获取内容状态分布统计"""
+    # 按 status 分组计数
+    status_counts = dict(
+        db.query(ContentItem.status, func.count(ContentItem.id))
+        .group_by(ContentItem.status)
+        .all()
+    )
+
+    total = sum(status_counts.values())
+
+    return {
+        "code": 0,
+        "data": {
+            "pending": status_counts.get("pending", 0),
+            "processing": status_counts.get("processing", 0),
+            "ready": status_counts.get("ready", 0),
+            "analyzed": status_counts.get("analyzed", 0),
+            "failed": status_counts.get("failed", 0),
+            "total": total,
+        },
+        "message": "ok",
+    }
+
+
+@router.get("/storage-stats")
+async def get_storage_stats(db: Session = Depends(get_db)):
+    """获取存储空间统计"""
+    import os
+    from app.core.config import settings
+
+    # 统计媒体目录大小
+    media_dir = settings.MEDIA_DIR
+    video_bytes = 0
+    image_bytes = 0
+    audio_bytes = 0
+    other_bytes = 0
+
+    if os.path.exists(media_dir):
+        for root, dirs, files in os.walk(media_dir):
+            for f in files:
+                path = os.path.join(root, f)
+                try:
+                    size = os.path.getsize(path)
+                    ext = os.path.splitext(f)[1].lower()
+                    if ext in ('.mp4', '.mkv', '.webm', '.avi', '.mov', '.flv'):
+                        video_bytes += size
+                    elif ext in ('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'):
+                        image_bytes += size
+                    elif ext in ('.mp3', '.wav', '.aac', '.flac', '.m4a', '.ogg'):
+                        audio_bytes += size
+                    else:
+                        other_bytes += size
+                except OSError:
+                    pass
+
+    # 统计数据库大小（PostgreSQL）
+    db_size = 0
+    try:
+        result = db.execute(sqlalchemy.text(
+            "SELECT pg_database_size(current_database())"
+        )).scalar()
+        db_size = result or 0
+    except Exception:
+        pass
+
+    total_bytes = video_bytes + image_bytes + audio_bytes + other_bytes + db_size
+
+    return {
+        "code": 0,
+        "data": {
+            "media": {
+                "video_bytes": video_bytes,
+                "image_bytes": image_bytes,
+                "audio_bytes": audio_bytes,
+                "other_bytes": other_bytes,
+            },
+            "database_bytes": db_size,
+            "total_bytes": total_bytes,
+        },
+        "message": "ok",
+    }
+
+
+@router.get("/today-summary")
+async def get_today_summary(db: Session = Depends(get_db)):
+    """获取今日摘要（高频数据合并接口）"""
+    # 今日边界
+    today_start, today_end = get_local_day_boundaries()
+
+    # 1. 今日采集统计
+    today_records = (
+        db.query(CollectionRecord)
+        .filter(
+            CollectionRecord.started_at >= today_start,
+            CollectionRecord.started_at < today_end
+        )
+        .all()
+    )
+    collection_total = len(today_records)
+    collection_success = sum(1 for r in today_records if r.status == "completed")
+    collection_success_rate = round(collection_success / collection_total * 100, 1) if collection_total > 0 else 0
+    items_new_today = sum(r.items_new or 0 for r in today_records)
+
+    # 2. 内容状态分布
+    status_counts = dict(
+        db.query(ContentItem.status, func.count(ContentItem.id))
+        .group_by(ContentItem.status)
+        .all()
+    )
+
+    # 3. 失败任务数
+    failed_pipelines = db.query(func.count(PipelineExecution.id)).filter(
+        PipelineExecution.status == PipelineStatus.FAILED.value
+    ).scalar()
+
+    # 4. 运行中任务数
+    running_pipelines = db.query(func.count(PipelineExecution.id)).filter(
+        PipelineExecution.status == PipelineStatus.RUNNING.value
+    ).scalar()
+
+    return {
+        "code": 0,
+        "data": {
+            "collection_success_rate": collection_success_rate,
+            "items_new_today": items_new_today,
+            "content_status": {
+                "pending": status_counts.get("pending", 0),
+                "ready": status_counts.get("ready", 0),
+                "analyzed": status_counts.get("analyzed", 0),
+                "failed": status_counts.get("failed", 0),
+            },
+            "failed_pipelines": failed_pipelines,
+            "running_pipelines": running_pipelines,
+        },
+        "message": "ok",
+    }
 
 
 @router.get("/recent-activity")

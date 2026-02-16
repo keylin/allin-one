@@ -28,6 +28,7 @@ class StepType(str, Enum):
     注意: 没有 fetch_content!
     数据抓取是定时器的职责, 不是流水线步骤。
     """
+    EXTRACT_CONTENT = "extract_content"        # 从 raw_data 提取内容到 processed_content
     ENRICH_CONTENT = "enrich_content"          # 抓取全文 (L1/L2/L3)
     LOCALIZE_MEDIA = "localize_media"          # 媒体本地化 (图片/视频/音频)
     EXTRACT_AUDIO = "extract_audio"            # 音频提取 (待实现)

@@ -23,3 +23,15 @@ export function getRecentContent(limit = 8) {
 export function getDailyStats(date) {
   return api.get('/dashboard/daily-stats', { params: { date } })
 }
+
+export function getContentStatusDistribution() {
+  return api.get('/dashboard/content-status-distribution')
+}
+
+export function getStorageStats() {
+  return api.get('/dashboard/storage-stats')
+}
+
+export function getTodaySummary() {
+  return api.get('/dashboard/today-summary')
+}

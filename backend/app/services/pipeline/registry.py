@@ -29,6 +29,11 @@ class StepDefinition:
 # 注意: 没有 fetch_content
 
 STEP_DEFINITIONS: dict[str, StepDefinition] = {
+    "extract_content": StepDefinition(
+        step_type="extract_content",
+        display_name="提取内容",
+        description="从 raw_data 提取文本内容到 processed_content",
+    ),
     "enrich_content": StepDefinition(
         step_type="enrich_content",
         display_name="抓取全文",
@@ -121,61 +126,72 @@ STEP_DEFINITIONS: dict[str, StepDefinition] = {
 BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     {
         "name": "文章分析",
-        "description": "LLM分析 → 推送（预处理自动完成全文抓取和媒体本地化）",
+        "description": "提取内容 → 媒体本地化 → LLM分析 → 推送",
         "steps_config": json.dumps([
-            {"step_type": "analyze_content", "is_critical": True,  "config": {}},
-            {"step_type": "publish_content", "is_critical": False, "config": {"channel": "none"}},
+            {"step_type": "extract_content",  "is_critical": True,  "config": {}},
+            {"step_type": "localize_media",   "is_critical": False, "config": {}},
+            {"step_type": "analyze_content",  "is_critical": True,  "config": {}},
+            {"step_type": "publish_content",  "is_critical": False, "config": {"channel": "none"}},
         ], ensure_ascii=False),
     },
     {
         "name": "英文文章翻译分析",
-        "description": "翻译 → 分析 → 推送（预处理自动完成全文抓取和媒体本地化）",
+        "description": "提取内容 → 媒体本地化 → 翻译 → 分析 → 推送",
         "steps_config": json.dumps([
-            {"step_type": "translate_content",  "is_critical": True,  "config": {"target_language": "zh"}},
+            {"step_type": "extract_content",   "is_critical": True,  "config": {}},
+            {"step_type": "localize_media",    "is_critical": False, "config": {}},
+            {"step_type": "translate_content", "is_critical": True,  "config": {"target_language": "zh"}},
+            {"step_type": "analyze_content",   "is_critical": False, "config": {}},
+            {"step_type": "publish_content",   "is_critical": False, "config": {"channel": "none"}},
+        ], ensure_ascii=False),
+    },
+    {
+        "name": "视频下载分析",
+        "description": "提取内容 → 媒体本地化(含视频下载) → 字幕提取 → 分析 → 推送",
+        "steps_config": json.dumps([
+            {"step_type": "extract_content",    "is_critical": True,  "config": {}},
+            {"step_type": "localize_media",     "is_critical": True,  "config": {}},
+            {"step_type": "transcribe_content", "is_critical": True,  "config": {}},
             {"step_type": "analyze_content",    "is_critical": False, "config": {}},
             {"step_type": "publish_content",    "is_critical": False, "config": {"channel": "none"}},
         ], ensure_ascii=False),
     },
     {
-        "name": "视频下载分析",
-        "description": "字幕提取 → 分析 → 推送（预处理自动完成视频下载和媒体本地化）",
-        "steps_config": json.dumps([
-            {"step_type": "transcribe_content",  "is_critical": True,  "config": {}},
-            {"step_type": "analyze_content",     "is_critical": False, "config": {}},
-            {"step_type": "publish_content",     "is_critical": False, "config": {"channel": "none"}},
-        ], ensure_ascii=False),
-    },
-    {
         "name": "视频翻译分析",
-        "description": "字幕 → 翻译 → 分析 → 推送（预处理自动完成视频下载和媒体本地化）",
+        "description": "提取内容 → 媒体本地化 → 字幕提取 → 翻译 → 分析 → 推送",
         "steps_config": json.dumps([
-            {"step_type": "transcribe_content",  "is_critical": True,  "config": {}},
-            {"step_type": "translate_content",   "is_critical": False, "config": {"target_language": "zh"}},
-            {"step_type": "analyze_content",     "is_critical": False, "config": {}},
-            {"step_type": "publish_content",     "is_critical": False, "config": {"channel": "none"}},
+            {"step_type": "extract_content",    "is_critical": True,  "config": {}},
+            {"step_type": "localize_media",     "is_critical": True,  "config": {}},
+            {"step_type": "transcribe_content", "is_critical": True,  "config": {}},
+            {"step_type": "translate_content",  "is_critical": False, "config": {"target_language": "zh"}},
+            {"step_type": "analyze_content",    "is_critical": False, "config": {}},
+            {"step_type": "publish_content",    "is_critical": False, "config": {"channel": "none"}},
         ], ensure_ascii=False),
     },
     {
         "name": "仅分析",
-        "description": "直接 LLM 分析 → 推送",
+        "description": "提取内容 → LLM分析 → 推送",
         "steps_config": json.dumps([
-            {"step_type": "analyze_content", "is_critical": True,  "config": {}},
-            {"step_type": "publish_content", "is_critical": False, "config": {"channel": "none"}},
+            {"step_type": "extract_content",  "is_critical": True,  "config": {}},
+            {"step_type": "analyze_content",  "is_critical": True,  "config": {}},
+            {"step_type": "publish_content",  "is_critical": False, "config": {"channel": "none"}},
         ], ensure_ascii=False),
     },
     {
         "name": "仅推送",
-        "description": "直接推送新内容通知, 不做分析",
+        "description": "提取内容 → 推送新内容通知",
         "steps_config": json.dumps([
-            {"step_type": "publish_content", "is_critical": True, "config": {"channel": "email"}},
+            {"step_type": "extract_content",  "is_critical": True,  "config": {}},
+            {"step_type": "publish_content",  "is_critical": True,  "config": {"channel": "email"}},
         ], ensure_ascii=False),
     },
     {
         "name": "金融数据分析",
-        "description": "LLM 分析金融数据趋势 → 推送",
+        "description": "提取内容 → LLM分析金融数据趋势 → 推送",
         "steps_config": json.dumps([
-            {"step_type": "analyze_content", "is_critical": True, "config": {}},
-            {"step_type": "publish_content", "is_critical": False, "config": {"channel": "none"}},
+            {"step_type": "extract_content",  "is_critical": True,  "config": {}},
+            {"step_type": "analyze_content",  "is_critical": True,  "config": {}},
+            {"step_type": "publish_content",  "is_critical": False, "config": {"channel": "none"}},
         ], ensure_ascii=False),
     },
 ]

@@ -7,15 +7,18 @@ import {
   getRecentActivity,
   getCollectionTrend,
   getSourceHealth,
-  getRecentContent,
   getDailyStats,
+  getContentStatusDistribution,
+  getStorageStats,
 } from '@/api/dashboard'
 import { getFinanceSummary } from '@/api/finance'
 import { collectSource } from '@/api/sources'
 import { useToast } from '@/composables/useToast'
 
 const router = useRouter()
+const toast = useToast()
 
+// 数据状态
 const stats = ref({
   sources_count: 0, contents_today: 0, contents_yesterday: 0, contents_total: 0,
   pipelines_running: 0, pipelines_failed: 0, pipelines_pending: 0,
@@ -23,9 +26,9 @@ const stats = ref({
 const activities = ref([])
 const trend = ref([])
 const sourceHealthList = ref([])
-const recentContentList = ref([])
 const financeSummaries = ref([])
-const toast = useToast()
+const contentStatus = ref({ pending: 0, processing: 0, ready: 0, analyzed: 0, failed: 0, total: 0 })
+const storageStats = ref({ media: {}, database_bytes: 0, total_bytes: 0 })
 const loading = ref(true)
 const collectingId = ref(null)
 let timer = null
@@ -35,12 +38,38 @@ const selectedDate = ref(dayjs().format('YYYY-MM-DD'))
 const dailyStats = ref(null)
 const loadingDaily = ref(false)
 
-// --- 统计卡片 ---
+// --- 快速操作 ---
+async function handleCollectAll() {
+  collectingAll.value = true
+  try {
+    const res = await collectAllSources()
+    if (res.code === 0) {
+      toast.success(`已触发 ${res.data.sources_collected} 个数据源采集`)
+      fetchData()
+    } else {
+      toast.error(res.message || '采集失败')
+    }
+  } finally {
+    collectingAll.value = false
+  }
+}
+
+async function handleCollectSource(source) {
+  collectingId.value = source.id
+  try {
+    await collectSource(source.id)
+    fetchData()
+  } finally {
+    collectingId.value = null
+  }
+}
+
+// --- 统计卡片配置 ---
 const statCards = [
-  { key: 'sources_count', label: '数据源', subtitle: '已配置', accent: 'indigo', link: '/sources', icon: 'M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1' },
-  { key: 'contents_today', label: '今日采集', subtitle: '新内容', accent: 'emerald', link: '/content', icon: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z' },
-  { key: 'pipelines_running', label: '运行中', subtitle: '流水线', accent: 'amber', link: '/pipelines', icon: 'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15' },
-  { key: 'pipelines_failed', label: '失败', subtitle: '需关注', accent: 'rose', link: '/pipelines', icon: 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z' },
+  { key: 'sources_count', label: '数据源', accent: 'indigo', link: '/sources', icon: 'M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1' },
+  { key: 'contents_today', label: '今日采集', accent: 'emerald', link: '/content', icon: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z' },
+  { key: 'pipelines_running', label: '运行中', accent: 'amber', link: '/pipelines', icon: 'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15' },
+  { key: 'pipelines_failed', label: '失败', accent: 'rose', link: '/pipelines', icon: 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z' },
 ]
 
 const accentClasses = {
@@ -50,9 +79,6 @@ const accentClasses = {
   rose: { bg: 'bg-rose-50', icon: 'text-rose-600', number: 'text-rose-700' },
 }
 
-// --- 采集趋势 ---
-const trendMax = computed(() => Math.max(...trend.value.map(t => t.count), 1))
-
 // --- 今昨对比 ---
 const todayChange = computed(() => {
   const today = stats.value.contents_today
@@ -61,6 +87,21 @@ const todayChange = computed(() => {
   return today - yesterday
 })
 
+// --- 内容状态分布 ---
+const statusChartData = computed(() => {
+  const total = contentStatus.value.total || 1
+  const items = [
+    { key: 'analyzed', label: '已分析', count: contentStatus.value.analyzed, color: '#10b981', percent: Math.round(contentStatus.value.analyzed / total * 100) },
+    { key: 'ready', label: '已就绪', count: contentStatus.value.ready, color: '#0ea5e9', percent: Math.round(contentStatus.value.ready / total * 100) },
+    { key: 'pending', label: '待处理', count: contentStatus.value.pending, color: '#94a3b8', percent: Math.round(contentStatus.value.pending / total * 100) },
+    { key: 'failed', label: '失败', count: contentStatus.value.failed, color: '#f43f5e', percent: Math.round(contentStatus.value.failed / total * 100) },
+  ]
+  return items.filter(i => i.count > 0)
+})
+
+// --- 采集趋势 ---
+const trendMax = computed(() => Math.max(...trend.value.map(t => t.count), 1))
+
 // --- 数据源健康统计 ---
 const healthSummary = computed(() => {
   const h = { healthy: 0, warning: 0, error: 0, disabled: 0 }
@@ -68,7 +109,20 @@ const healthSummary = computed(() => {
   return h
 })
 
-// --- 活动表格 ---
+const unhealthySources = computed(() =>
+  sourceHealthList.value.filter(s => s.health !== 'healthy')
+)
+
+// --- 存储格式化 ---
+function formatBytes(bytes) {
+  if (!bytes || bytes === 0) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
+}
+
+// --- 活动状态样式 ---
 const statusStyles = {
   pending: 'bg-slate-100 text-slate-600',
   running: 'bg-indigo-50 text-indigo-700',
@@ -84,22 +138,6 @@ const triggerLabels = {
   scheduled: '定时', manual: '手动', api: 'API', webhook: 'Webhook',
 }
 
-const contentStatusStyles = {
-  pending: 'bg-slate-100 text-slate-500',
-  processing: 'bg-indigo-50 text-indigo-600',
-  ready: 'bg-sky-50 text-sky-600',
-  analyzed: 'bg-emerald-50 text-emerald-600',
-  failed: 'bg-rose-50 text-rose-600',
-}
-
-const contentStatusLabels = {
-  pending: '待处理',
-  processing: '处理中',
-  ready: '已就绪',
-  analyzed: '已分析',
-  failed: '失败',
-}
-
 const healthStyles = {
   healthy: { dot: 'bg-emerald-400', text: 'text-emerald-600', label: '正常' },
   warning: { dot: 'bg-amber-400', text: 'text-amber-600', label: '告警' },
@@ -107,24 +145,27 @@ const healthStyles = {
   disabled: { dot: 'bg-slate-300', text: 'text-slate-400', label: '已禁用' },
 }
 
+// --- 数据获取 ---
 async function fetchData() {
   try {
-    const [statsRes, actRes, trendRes, healthRes, contentRes, finRes] = await Promise.all([
+    const [statsRes, actRes, trendRes, healthRes, finRes, statusRes, storageRes] = await Promise.all([
       getDashboardStats(),
-      getRecentActivity(),
+      getRecentActivity(8),
       getCollectionTrend(7),
       getSourceHealth(),
-      getRecentContent(6),
       getFinanceSummary().catch(() => ({ code: -1 })),
+      getContentStatusDistribution(),
+      getStorageStats(),
     ])
     if (statsRes.code === 0) stats.value = statsRes.data
     if (actRes.code === 0) activities.value = actRes.data
     if (trendRes.code === 0) trend.value = trendRes.data
     if (healthRes.code === 0) sourceHealthList.value = healthRes.data
-    if (contentRes.code === 0) recentContentList.value = contentRes.data
     if (finRes.code === 0) financeSummaries.value = finRes.data.slice(0, 4)
+    if (statusRes.code === 0) contentStatus.value = statusRes.data
+    if (storageRes.code === 0) storageStats.value = storageRes.data
   } catch (e) {
-    toast.error('仪表盘数据加载失败，请稍后刷新重试')
+    toast.error('仪表盘数据加载失败')
   } finally {
     loading.value = false
   }
@@ -134,11 +175,7 @@ async function fetchDailyStats(date) {
   loadingDaily.value = true
   try {
     const res = await getDailyStats(date)
-    if (res.code === 0) {
-      dailyStats.value = res.data
-    }
-  } catch (e) {
-    toast.error('日统计数据加载失败')
+    if (res.code === 0) dailyStats.value = res.data
   } finally {
     loadingDaily.value = false
   }
@@ -151,20 +188,6 @@ function selectDate(date) {
 
 function formatTime(t) {
   return t ? dayjs.utc(t).local().format('MM-DD HH:mm') : '-'
-}
-
-async function handleCollect(source) {
-  collectingId.value = source.id
-  try {
-    await collectSource(source.id)
-    fetchData()
-  } finally {
-    collectingId.value = null
-  }
-}
-
-function formatDay(dateStr) {
-  return dayjs.utc(dateStr).local().format('MM/DD')
 }
 
 function formatDayLabel(dateStr) {
@@ -189,23 +212,19 @@ onUnmounted(() => {
 
 <template>
   <div class="flex flex-col h-full">
-    <!-- Scrollable content -->
     <div class="flex-1 overflow-y-auto">
-      <div class="px-4 py-4">
+      <div class="px-4 py-4 space-y-5">
 
     <!-- 统计卡片 -->
-    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
       <div
         v-for="card in statCards"
         :key="card.key"
-        class="bg-white rounded-xl border border-slate-200/60 p-5 shadow-sm hover:shadow-md hover:border-slate-300 transition-all duration-300 cursor-pointer"
+        class="bg-white rounded-xl border border-slate-200/60 p-4 shadow-sm hover:shadow-md hover:border-slate-300 transition-all duration-300 cursor-pointer"
         @click="router.push(card.link)"
       >
-        <div class="flex items-center justify-between mb-3">
-          <div
-            class="w-10 h-10 rounded-xl flex items-center justify-center"
-            :class="accentClasses[card.accent].bg"
-          >
+        <div class="flex items-center justify-between mb-2">
+          <div class="w-9 h-9 rounded-lg flex items-center justify-center" :class="accentClasses[card.accent].bg">
             <svg class="w-5 h-5" :class="accentClasses[card.accent].icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
               <path stroke-linecap="round" stroke-linejoin="round" :d="card.icon" />
             </svg>
@@ -215,63 +234,36 @@ onUnmounted(() => {
           </svg>
         </div>
         <div class="flex items-baseline gap-2">
-          <div
-            class="text-3xl font-bold tracking-tight"
-            :class="accentClasses[card.accent].number"
-          >
+          <div class="text-2xl font-bold tracking-tight" :class="accentClasses[card.accent].number">
             {{ loading ? '-' : stats[card.key] }}
           </div>
-          <!-- 今昨对比（仅"今日采集"卡片） -->
-          <div v-if="card.key === 'contents_today' && !loading && stats.contents_yesterday !== undefined" class="flex items-center gap-0.5">
-            <svg
-              v-if="todayChange > 0"
-              class="w-3 h-3 text-emerald-500"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-              stroke-width="2.5"
-            >
+          <div v-if="card.key === 'contents_today' && !loading && todayChange !== 0" class="flex items-center gap-0.5">
+            <svg v-if="todayChange > 0" class="w-3 h-3 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
               <path stroke-linecap="round" stroke-linejoin="round" d="M5 10l7-7m0 0l7 7m-7-7v18" />
             </svg>
-            <svg
-              v-else-if="todayChange < 0"
-              class="w-3 h-3 text-rose-500"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-              stroke-width="2.5"
-            >
+            <svg v-else class="w-3 h-3 text-rose-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
               <path stroke-linecap="round" stroke-linejoin="round" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
             </svg>
-            <span
-              class="text-xs font-medium"
-              :class="todayChange > 0 ? 'text-emerald-500' : todayChange < 0 ? 'text-rose-500' : 'text-slate-400'"
-            >
+            <span class="text-xs font-medium" :class="todayChange > 0 ? 'text-emerald-500' : 'text-rose-500'">
               {{ todayChange > 0 ? '+' : '' }}{{ todayChange }}
             </span>
           </div>
         </div>
-        <div class="text-sm text-slate-500 mt-1">{{ card.label }}</div>
-        <div class="text-xs text-slate-300">{{ card.subtitle }}</div>
+        <div class="text-sm text-slate-500 mt-0.5">{{ card.label }}</div>
       </div>
     </div>
 
     <!-- 金融数据概览 -->
-    <div v-if="financeSummaries.length" class="bg-white rounded-xl border border-slate-200/60 shadow-sm p-5 mb-6">
-      <div class="flex items-center justify-between mb-4">
+    <div v-if="financeSummaries.length" class="bg-white rounded-xl border border-slate-200/60 shadow-sm p-4">
+      <div class="flex items-center justify-between mb-3">
         <h3 class="text-sm font-semibold text-slate-700">金融数据概览</h3>
-        <button
-          class="text-xs text-indigo-500 hover:text-indigo-700 transition-colors"
-          @click="router.push('/finance')"
-        >
-          查看全部
-        </button>
+        <router-link to="/finance" class="text-xs text-indigo-500 hover:text-indigo-700">查看全部</router-link>
       </div>
       <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <div
           v-for="item in financeSummaries"
           :key="item.source_id"
-          class="px-3 py-2.5 rounded-lg bg-slate-50/50 cursor-pointer hover:bg-slate-100 transition-colors"
+          class="px-3 py-2 rounded-lg bg-slate-50/50 cursor-pointer hover:bg-slate-100 transition-colors"
           @click="router.push('/finance')"
         >
           <div class="text-xs text-slate-500 mb-1 truncate">{{ item.name }}</div>
@@ -279,11 +271,7 @@ onUnmounted(() => {
             <span class="text-base font-bold text-slate-900">
               {{ item.value != null ? (Math.abs(item.value) >= 1e4 ? (item.value / 1e4).toFixed(2) + '万' : item.value.toFixed(2)) : '-' }}
             </span>
-            <span
-              v-if="item.change != null"
-              class="text-xs font-medium mb-0.5"
-              :class="item.change > 0 ? 'text-red-500' : item.change < 0 ? 'text-emerald-500' : 'text-slate-400'"
-            >
+            <span v-if="item.change != null" class="text-xs font-medium mb-0.5" :class="item.change > 0 ? 'text-red-500' : item.change < 0 ? 'text-emerald-500' : 'text-slate-400'">
               {{ item.change > 0 ? '+' : '' }}{{ item.change.toFixed(2) }}
             </span>
           </div>
@@ -292,11 +280,71 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- 采集趋势 + 数据源健康 -->
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+    <!-- 内容状态分布 + 采集趋势 -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
+      <!-- 内容状态分布 -->
+      <div class="bg-white rounded-xl border border-slate-200/60 shadow-sm p-4">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-sm font-semibold text-slate-700">内容状态分布</h3>
+          <span class="text-xs text-slate-400">共 {{ contentStatus.total }} 条</span>
+        </div>
+
+        <div v-if="loading" class="flex items-center justify-center h-40">
+          <svg class="w-6 h-6 animate-spin text-slate-200" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+          </svg>
+        </div>
+
+        <div v-else class="flex items-center gap-6">
+          <!-- 环形图 -->
+          <div class="relative w-28 h-28 shrink-0">
+            <svg viewBox="0 0 36 36" class="w-full h-full -rotate-90">
+              <circle cx="18" cy="18" r="15.9" fill="none" stroke="#f1f5f9" stroke-width="3"></circle>
+              <template v-for="(item, idx) in statusChartData" :key="item.key">
+                <circle
+                  cx="18" cy="18" r="15.9"
+                  fill="none"
+                  :stroke="item.color"
+                  stroke-width="3"
+                  :stroke-dasharray="`${item.percent} ${100 - item.percent}`"
+                  :stroke-dashoffset="statusChartData.slice(0, idx).reduce((sum, i) => sum - i.percent, 0)"
+                  class="transition-all duration-500"
+                ></circle>
+              </template>
+            </svg>
+            <div class="absolute inset-0 flex items-center justify-center">
+              <div class="text-center">
+                <div class="text-lg font-bold text-slate-700">{{ contentStatus.total }}</div>
+                <div class="text-[10px] text-slate-400">总计</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 图例 -->
+          <div class="flex-1 space-y-2">
+            <router-link
+              v-for="item in statusChartData"
+              :key="item.key"
+              :to="`/content?status=${item.key}`"
+              class="flex items-center justify-between px-2 py-1.5 rounded-lg hover:bg-slate-50 transition-colors"
+            >
+              <div class="flex items-center gap-2">
+                <div class="w-2.5 h-2.5 rounded-full" :style="{ backgroundColor: item.color }"></div>
+                <span class="text-xs text-slate-600">{{ item.label }}</span>
+              </div>
+              <div class="flex items-center gap-1.5">
+                <span class="text-xs font-medium text-slate-700">{{ item.count }}</span>
+                <span class="text-[10px] text-slate-400">{{ item.percent }}%</span>
+              </div>
+            </router-link>
+          </div>
+        </div>
+      </div>
+
       <!-- 采集趋势 -->
-      <div class="lg:col-span-2 bg-white rounded-xl border border-slate-200/60 shadow-sm p-5">
-        <div class="flex items-center justify-between mb-5">
+      <div class="lg:col-span-2 bg-white rounded-xl border border-slate-200/60 shadow-sm p-4">
+        <div class="flex items-center justify-between mb-4">
           <h3 class="text-sm font-semibold text-slate-700">近 7 天采集趋势</h3>
           <span class="text-xs text-slate-400">
             总计 {{ trend.reduce((s, t) => s + t.count, 0) }} 条
@@ -310,130 +358,75 @@ onUnmounted(() => {
           </svg>
         </div>
 
-        <div v-else-if="trend.length > 0" class="flex items-end gap-2 h-40">
-          <div
-            v-for="day in trend"
-            :key="day.date"
-            class="flex-1 flex flex-col items-center gap-1.5 cursor-pointer"
-            @click="selectDate(day.date)"
-          >
-            <!-- 数量标签 -->
-            <span class="text-[10px] font-medium" :class="selectedDate === day.date ? 'text-indigo-600' : 'text-slate-500'">
-              {{ day.count || '' }}
-            </span>
-            <!-- 柱子 -->
-            <div class="w-full flex justify-center">
-              <div
-                class="w-full max-w-[36px] rounded-t-md transition-all duration-300"
-                :class="selectedDate === day.date
-                  ? 'bg-indigo-600 shadow-md'
-                  : day.count > 0
-                    ? 'bg-indigo-400 hover:bg-indigo-500'
-                    : 'bg-slate-100'"
-                :style="{ height: `${Math.max(day.count / trendMax * 100, 4)}px` }"
-                :title="`${day.date}: ${day.count} 条`"
-              ></div>
-            </div>
-            <!-- 日期 + 选中指示器 -->
-            <div class="flex flex-col items-center gap-0.5">
-              <span class="text-[10px]" :class="selectedDate === day.date ? 'text-indigo-600 font-semibold' : 'text-slate-400'">
-                {{ formatDayLabel(day.date) }}
+        <div v-else-if="trend.length > 0" class="space-y-4">
+          <!-- 柱状图 -->
+          <div class="flex items-end gap-2 h-32">
+            <div
+              v-for="day in trend"
+              :key="day.date"
+              class="flex-1 flex flex-col items-center gap-1 cursor-pointer group"
+              @click="selectDate(day.date)"
+            >
+              <span class="text-[10px] font-medium opacity-0 group-hover:opacity-100 transition-opacity" :class="selectedDate === day.date ? 'text-indigo-600' : 'text-slate-500'">
+                {{ day.count }}
               </span>
-              <div
-                v-if="selectedDate === day.date"
-                class="w-1 h-1 rounded-full bg-indigo-600"
-              ></div>
-            </div>
-          </div>
-        </div>
-
-        <!-- 日详情面板 -->
-        <div v-if="selectedDate" class="mt-6 pt-5 border-t border-slate-100">
-          <!-- 加载状态 -->
-          <div v-if="loadingDaily" class="flex items-center justify-center py-6">
-            <svg class="w-5 h-5 animate-spin text-slate-300" fill="none" viewBox="0 0 24 24">
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-            </svg>
-          </div>
-
-          <!-- 空状态 -->
-          <div v-else-if="dailyStats && dailyStats.collection_total === 0" class="flex flex-col items-center justify-center py-6">
-            <svg class="w-10 h-10 text-slate-200 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
-            </svg>
-            <p class="text-xs text-slate-400">{{ formatDayLabel(selectedDate) }}无采集记录</p>
-          </div>
-
-          <!-- 日详情内容 -->
-          <div v-else-if="dailyStats">
-            <!-- 概况行 -->
-            <div class="flex items-center gap-4 text-xs mb-4">
-              <div class="flex items-center gap-1.5">
-                <span class="text-slate-400">采集</span>
-                <span class="font-semibold text-slate-700">{{ dailyStats.collection_total }}</span>
-                <span class="text-slate-400">次</span>
+              <div class="w-full flex justify-center">
+                <div
+                  class="w-full max-w-[36px] rounded-t-md transition-all duration-300"
+                  :class="selectedDate === day.date
+                    ? 'bg-indigo-600 shadow-md'
+                    : day.count > 0
+                      ? 'bg-indigo-400 group-hover:bg-indigo-500'
+                      : 'bg-slate-100'"
+                  :style="{ height: `${Math.max(day.count / trendMax * 100, 4)}px` }"
+                  :title="`${day.date}: ${day.count} 条`"
+                ></div>
               </div>
-              <div class="w-px h-3 bg-slate-200"></div>
-              <div class="flex items-center gap-1.5">
-                <span class="text-slate-400">成功率</span>
-                <span class="font-semibold" :class="dailyStats.success_rate >= 90 ? 'text-emerald-600' : dailyStats.success_rate >= 70 ? 'text-amber-600' : 'text-rose-600'">
-                  {{ dailyStats.success_rate }}%
+              <div class="flex flex-col items-center gap-0.5">
+                <span class="text-[10px]" :class="selectedDate === day.date ? 'text-indigo-600 font-semibold' : 'text-slate-400'">
+                  {{ formatDayLabel(day.date) }}
                 </span>
-              </div>
-              <div class="w-px h-3 bg-slate-200"></div>
-              <div class="flex items-center gap-1.5">
-                <span class="text-slate-400">发现</span>
-                <span class="font-semibold text-indigo-600">{{ dailyStats.items_found }}</span>
-                <span class="text-slate-400">条</span>
-              </div>
-              <div class="w-px h-3 bg-slate-200"></div>
-              <div class="flex items-center gap-1.5">
-                <span class="text-slate-400">新增</span>
-                <span class="font-semibold text-emerald-600">{{ dailyStats.items_new }}</span>
-                <span class="text-slate-400">条</span>
+                <div v-if="selectedDate === day.date" class="w-1 h-1 rounded-full bg-indigo-600"></div>
               </div>
             </div>
+          </div>
 
-            <!-- Top 数据源排行 -->
-            <div v-if="dailyStats.top_sources.length > 0" class="space-y-2">
-              <h4 class="text-xs font-medium text-slate-500 mb-2">Top 数据源</h4>
+          <!-- 成功率指示器 -->
+          <div class="flex items-center gap-3 pt-3 border-t border-slate-100">
+            <template v-for="day in trend" :key="day.date">
               <div
-                v-for="source in dailyStats.top_sources.slice(0, 5)"
-                :key="source.source_id"
-                class="flex items-center gap-2"
+                v-if="day.collection_total > 0"
+                class="flex-1 text-center"
               >
-                <div class="flex-1 min-w-0">
-                  <div class="text-xs text-slate-700 truncate">{{ source.source_name }}</div>
-                </div>
-                <div class="flex items-center gap-2 shrink-0">
-                  <span class="text-xs font-medium text-emerald-600">+{{ source.items_new }}</span>
-                  <div class="w-16 bg-slate-100 rounded-full h-1.5 overflow-hidden">
-                    <div
-                      class="h-1.5 bg-emerald-400 rounded-full"
-                      :style="{ width: `${(source.items_new / dailyStats.items_new) * 100}%` }"
-                    ></div>
-                  </div>
+                <div class="flex items-center justify-center gap-1">
+                  <div
+                    class="w-1.5 h-1.5 rounded-full"
+                    :class="day.success_rate >= 90 ? 'bg-emerald-400' : day.success_rate >= 70 ? 'bg-amber-400' : 'bg-rose-400'"
+                  ></div>
+                  <span class="text-[10px]" :class="day.success_rate >= 90 ? 'text-emerald-600' : day.success_rate >= 70 ? 'text-amber-600' : 'text-rose-600'">
+                    {{ day.success_rate }}%
+                  </span>
                 </div>
               </div>
-            </div>
+              <div v-else class="flex-1 text-center">
+                <span class="text-[10px] text-slate-300">-</span>
+              </div>
+            </template>
           </div>
         </div>
       </div>
+    </div>
 
+    <!-- 数据源健康 + 存储空间 -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
       <!-- 数据源健康 -->
-      <div class="bg-white rounded-xl border border-slate-200/60 shadow-sm p-5">
+      <div class="bg-white rounded-xl border border-slate-200/60 shadow-sm p-4">
         <div class="flex items-center justify-between mb-4">
           <h3 class="text-sm font-semibold text-slate-700">数据源健康</h3>
-          <button
-            class="text-xs text-indigo-500 hover:text-indigo-700 transition-colors"
-            @click="router.push('/sources')"
-          >
-            查看全部
-          </button>
+          <router-link to="/sources" class="text-xs text-indigo-500 hover:text-indigo-700">查看全部</router-link>
         </div>
 
-        <div v-if="loading" class="flex items-center justify-center h-32">
+        <div v-if="loading" class="flex items-center justify-center h-24">
           <svg class="w-6 h-6 animate-spin text-slate-200" fill="none" viewBox="0 0 24 24">
             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
@@ -449,10 +442,10 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <!-- 异常源列表（只展示有问题的） -->
-          <div v-if="sourceHealthList.filter(s => s.health !== 'healthy').length > 0" class="space-y-2.5 max-h-[160px] overflow-y-auto">
+          <!-- 异常源列表 -->
+          <div v-if="unhealthySources.length > 0" class="space-y-2 max-h-[140px] overflow-y-auto">
             <div
-              v-for="s in sourceHealthList.filter(s => s.health !== 'healthy')"
+              v-for="s in unhealthySources"
               :key="s.id"
               class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg bg-slate-50/50"
             >
@@ -469,7 +462,7 @@ onUnmounted(() => {
                 v-if="s.health === 'error' || s.health === 'warning'"
                 class="px-2 py-1 text-[10px] font-medium text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors shrink-0 disabled:opacity-40"
                 :disabled="collectingId === s.id"
-                @click="handleCollect(s)"
+                @click="handleCollectSource(s)"
               >
                 {{ collectingId === s.id ? '...' : '重试' }}
               </button>
@@ -485,154 +478,181 @@ onUnmounted(() => {
           </div>
         </template>
       </div>
-    </div>
 
-    <!-- 最新内容 + 活动表格 -->
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      <!-- 最新采集内容 -->
-      <div class="bg-white rounded-xl border border-slate-200/60 shadow-sm overflow-hidden">
-        <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
-          <h3 class="text-sm font-semibold text-slate-700">最新内容</h3>
-          <button
-            class="text-xs text-indigo-500 hover:text-indigo-700 transition-colors"
-            @click="router.push('/content')"
-          >
-            查看全部
-          </button>
+      <!-- 存储空间 -->
+      <div class="bg-white rounded-xl border border-slate-200/60 shadow-sm p-4">
+        <div class="flex items-center justify-between mb-4">
+          <h3 class="text-sm font-semibold text-slate-700">存储空间</h3>
+          <span class="text-xs text-slate-400">总计 {{ formatBytes(storageStats.total_bytes) }}</span>
         </div>
 
-        <div v-if="loading" class="py-12 text-center">
-          <svg class="w-6 h-6 mx-auto animate-spin text-slate-200" fill="none" viewBox="0 0 24 24">
+        <div v-if="loading" class="flex items-center justify-center h-24">
+          <svg class="w-6 h-6 animate-spin text-slate-200" fill="none" viewBox="0 0 24 24">
             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
           </svg>
         </div>
 
-        <div v-else-if="recentContentList.length === 0" class="py-12 text-center">
-          <p class="text-sm text-slate-400">暂无内容</p>
-        </div>
-
-        <div v-else class="divide-y divide-slate-50">
-          <div
-            v-for="item in recentContentList"
-            :key="item.id"
-            class="px-5 py-3.5 hover:bg-slate-50/50 transition-colors cursor-pointer"
-            @click="router.push('/content')"
-          >
-            <div class="flex items-start gap-2.5">
-              <div class="flex-1 min-w-0">
-                <div class="text-xs font-medium text-slate-700 line-clamp-1">{{ item.title }}</div>
-                <div class="flex items-center gap-2 mt-1.5">
-                  <span
-                    class="inline-flex px-2 py-0.5 text-xs font-medium rounded-md"
-                    :class="contentStatusStyles[item.status] || 'bg-slate-100 text-slate-500'"
-                  >
-                    {{ contentStatusLabels[item.status] || item.status }}
-                  </span>
-                  <span v-if="item.source_name" class="text-[10px] text-slate-300 truncate max-w-[100px]">
-                    {{ item.source_name }}
-                  </span>
-                </div>
+        <div v-else class="space-y-3">
+          <!-- 视频 -->
+          <div class="flex items-center gap-3">
+            <div class="w-8 h-8 rounded-lg bg-purple-50 flex items-center justify-center shrink-0">
+              <svg class="w-4 h-4 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+              </svg>
+            </div>
+            <div class="flex-1">
+              <div class="flex items-center justify-between mb-1">
+                <span class="text-xs text-slate-600">视频</span>
+                <span class="text-xs font-medium text-slate-700">{{ formatBytes(storageStats.media?.video_bytes || 0) }}</span>
               </div>
-              <span class="text-[10px] text-slate-300 shrink-0 pt-0.5">{{ formatTime(item.collected_at) }}</span>
+              <div class="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                <div
+                  class="h-1.5 bg-purple-400 rounded-full"
+                  :style="{ width: `${(storageStats.media?.video_bytes || 0) / (storageStats.total_bytes || 1) * 100}%` }"
+                ></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 图片 -->
+          <div class="flex items-center gap-3">
+            <div class="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center shrink-0">
+              <svg class="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+            </div>
+            <div class="flex-1">
+              <div class="flex items-center justify-between mb-1">
+                <span class="text-xs text-slate-600">图片</span>
+                <span class="text-xs font-medium text-slate-700">{{ formatBytes(storageStats.media?.image_bytes || 0) }}</span>
+              </div>
+              <div class="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                <div
+                  class="h-1.5 bg-emerald-400 rounded-full"
+                  :style="{ width: `${(storageStats.media?.image_bytes || 0) / (storageStats.total_bytes || 1) * 100}%` }"
+                ></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 音频 -->
+          <div class="flex items-center gap-3">
+            <div class="w-8 h-8 rounded-lg bg-amber-50 flex items-center justify-center shrink-0">
+              <svg class="w-4 h-4 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+              </svg>
+            </div>
+            <div class="flex-1">
+              <div class="flex items-center justify-between mb-1">
+                <span class="text-xs text-slate-600">音频</span>
+                <span class="text-xs font-medium text-slate-700">{{ formatBytes(storageStats.media?.audio_bytes || 0) }}</span>
+              </div>
+              <div class="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                <div
+                  class="h-1.5 bg-amber-400 rounded-full"
+                  :style="{ width: `${(storageStats.media?.audio_bytes || 0) / (storageStats.total_bytes || 1) * 100}%` }"
+                ></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 数据库 -->
+          <div class="flex items-center gap-3">
+            <div class="w-8 h-8 rounded-lg bg-indigo-50 flex items-center justify-center shrink-0">
+              <svg class="w-4 h-4 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
+              </svg>
+            </div>
+            <div class="flex-1">
+              <div class="flex items-center justify-between mb-1">
+                <span class="text-xs text-slate-600">数据库</span>
+                <span class="text-xs font-medium text-slate-700">{{ formatBytes(storageStats.database_bytes) }}</span>
+              </div>
+              <div class="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                <div
+                  class="h-1.5 bg-indigo-400 rounded-full"
+                  :style="{ width: `${storageStats.database_bytes / (storageStats.total_bytes || 1) * 100}%` }"
+                ></div>
+              </div>
             </div>
           </div>
         </div>
       </div>
+    </div>
 
-      <!-- 流水线活动 -->
-      <div class="lg:col-span-2 bg-white rounded-xl border border-slate-200/60 shadow-sm overflow-hidden">
-        <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
-          <h3 class="text-sm font-semibold text-slate-700">流水线活动</h3>
-          <button
-            class="text-xs text-indigo-500 hover:text-indigo-700 transition-colors"
-            @click="router.push('/pipelines')"
-          >
-            查看全部
-          </button>
-        </div>
+    <!-- 流水线活动（精简版） -->
+    <div class="bg-white rounded-xl border border-slate-200/60 shadow-sm overflow-hidden">
+      <div class="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+        <h3 class="text-sm font-semibold text-slate-700">流水线活动</h3>
+        <router-link to="/pipelines" class="text-xs text-indigo-500 hover:text-indigo-700">查看全部</router-link>
+      </div>
 
-        <div v-if="loading" class="py-16 text-center">
-          <svg class="w-6 h-6 mx-auto animate-spin text-slate-200" fill="none" viewBox="0 0 24 24">
-            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-          </svg>
-        </div>
+      <div v-if="loading" class="py-12 text-center">
+        <svg class="w-6 h-6 mx-auto animate-spin text-slate-200" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+        </svg>
+      </div>
 
-        <div v-else-if="activities.length === 0" class="py-16 text-center">
-          <svg class="w-12 h-12 mx-auto mb-3 text-slate-200" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
-          </svg>
-          <p class="text-sm text-slate-400">暂无活动记录</p>
-        </div>
+      <div v-else-if="activities.length === 0" class="py-12 text-center">
+        <svg class="w-10 h-10 mx-auto mb-2 text-slate-200" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
+        </svg>
+        <p class="text-sm text-slate-400">暂无活动记录</p>
+      </div>
 
-        <!-- Desktop Table -->
-        <table v-else class="hidden md:table w-full">
-          <thead>
-            <tr class="border-b border-slate-100">
-              <th class="px-5 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">内容</th>
-              <th class="px-5 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">模板</th>
-              <th class="px-5 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">状态</th>
-              <th class="px-5 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">进度</th>
-              <th class="px-5 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">触发</th>
-              <th class="px-5 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">时间</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="a in activities" :key="a.id" class="border-b border-slate-50 hover:bg-slate-50/50 transition-colors duration-150">
-              <td class="px-5 py-3.5 text-xs text-slate-700 font-medium max-w-[180px] truncate">{{ a.content_title || '-' }}</td>
-              <td class="px-5 py-3.5 text-xs text-slate-500">{{ a.template_name || '-' }}</td>
-              <td class="px-5 py-3.5">
-                <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-md" :class="statusStyles[a.status] || 'bg-slate-100 text-slate-500'">
-                  {{ statusLabels[a.status] || a.status }}
-                </span>
-              </td>
-              <td class="px-5 py-3.5">
-                <div class="flex items-center gap-2">
-                  <div class="w-14 bg-slate-100 rounded-full h-1.5">
-                    <div
-                      class="h-1.5 rounded-full transition-all duration-500"
-                      :class="a.status === 'failed' ? 'bg-rose-400' : a.status === 'completed' ? 'bg-emerald-400' : 'bg-indigo-400'"
-                      :style="{ width: a.total_steps > 0 ? `${(a.current_step / a.total_steps) * 100}%` : '0%' }"
-                    ></div>
-                  </div>
-                  <span class="text-[10px] text-slate-400">{{ a.current_step }}/{{ a.total_steps }}</span>
-                </div>
-              </td>
-              <td class="px-5 py-3.5">
-                <span class="text-[10px] text-slate-400">{{ triggerLabels[a.trigger_source] || a.trigger_source }}</span>
-              </td>
-              <td class="px-5 py-3.5 text-xs text-slate-400">{{ formatTime(a.created_at) }}</td>
-            </tr>
-          </tbody>
-        </table>
-
-        <!-- Mobile Activity Cards -->
-        <div v-if="!loading && activities.length > 0" class="md:hidden divide-y divide-slate-100">
-          <div v-for="a in activities" :key="a.id" class="p-4">
-            <div class="flex items-start justify-between gap-2 mb-2">
-              <div class="flex-1 min-w-0">
-                <div class="text-sm font-medium text-slate-700 line-clamp-1">{{ a.content_title || '-' }}</div>
-                <div class="text-xs text-slate-400 mt-0.5">{{ a.template_name || '-' }}</div>
-              </div>
-              <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-md shrink-0" :class="statusStyles[a.status] || 'bg-slate-100 text-slate-500'">
+      <table v-else class="hidden md:table w-full">
+        <thead>
+          <tr class="border-b border-slate-100">
+            <th class="px-4 py-2.5 text-left text-xs font-medium text-slate-400">内容</th>
+            <th class="px-4 py-2.5 text-left text-xs font-medium text-slate-400">模板</th>
+            <th class="px-4 py-2.5 text-left text-xs font-medium text-slate-400">状态</th>
+            <th class="px-4 py-2.5 text-left text-xs font-medium text-slate-400">进度</th>
+            <th class="px-4 py-2.5 text-left text-xs font-medium text-slate-400">时间</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="a in activities" :key="a.id" class="border-b border-slate-50 hover:bg-slate-50/50 transition-colors">
+            <td class="px-4 py-2.5 text-xs text-slate-700 font-medium max-w-[180px] truncate">{{ a.content_title || '-' }}</td>
+            <td class="px-4 py-2.5 text-xs text-slate-500">{{ a.template_name || '-' }}</td>
+            <td class="px-4 py-2.5">
+              <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-md" :class="statusStyles[a.status] || 'bg-slate-100 text-slate-500'">
                 {{ statusLabels[a.status] || a.status }}
               </span>
-            </div>
-            <div class="flex items-center gap-3 mb-2">
-              <div class="flex-1 bg-slate-100 rounded-full h-1.5 overflow-hidden">
-                <div
-                  class="h-1.5 rounded-full transition-all duration-500"
-                  :class="a.status === 'failed' ? 'bg-rose-400' : a.status === 'completed' ? 'bg-emerald-400' : 'bg-indigo-400'"
-                  :style="{ width: a.total_steps > 0 ? `${(a.current_step / a.total_steps) * 100}%` : '0%' }"
-                ></div>
+            </td>
+            <td class="px-4 py-2.5">
+              <div class="flex items-center gap-2">
+                <div class="w-12 bg-slate-100 rounded-full h-1.5">
+                  <div
+                    class="h-1.5 rounded-full transition-all duration-500"
+                    :class="a.status === 'failed' ? 'bg-rose-400' : a.status === 'completed' ? 'bg-emerald-400' : 'bg-indigo-400'"
+                    :style="{ width: a.total_steps > 0 ? `${(a.current_step / a.total_steps) * 100}%` : '0%' }"
+                  ></div>
+                </div>
+                <span class="text-[10px] text-slate-400">{{ a.current_step }}/{{ a.total_steps }}</span>
               </div>
-              <span class="text-xs text-slate-400 shrink-0">{{ a.current_step }}/{{ a.total_steps }}</span>
+            </td>
+            <td class="px-4 py-2.5 text-xs text-slate-400">{{ formatTime(a.created_at) }}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- Mobile -->
+      <div v-if="!loading && activities.length > 0" class="md:hidden divide-y divide-slate-100">
+        <div v-for="a in activities" :key="a.id" class="p-3">
+          <div class="flex items-start justify-between gap-2 mb-2">
+            <div class="flex-1 min-w-0">
+              <div class="text-sm font-medium text-slate-700 line-clamp-1">{{ a.content_title || '-' }}</div>
+              <div class="text-xs text-slate-400 mt-0.5">{{ a.template_name || '-' }}</div>
             </div>
-            <div class="flex items-center gap-3 text-xs text-slate-400">
-              <span>{{ triggerLabels[a.trigger_source] || a.trigger_source }}</span>
-              <span>{{ formatTime(a.created_at) }}</span>
-            </div>
+            <span class="inline-flex px-2 py-0.5 text-xs font-medium rounded-md shrink-0" :class="statusStyles[a.status] || 'bg-slate-100 text-slate-500'">
+              {{ statusLabels[a.status] || a.status }}
+            </span>
+          </div>
+          <div class="flex items-center gap-2 text-xs text-slate-400">
+            <span>{{ a.current_step }}/{{ a.total_steps }}</span>
+            <span>{{ formatTime(a.created_at) }}</span>
           </div>
         </div>
       </div>
