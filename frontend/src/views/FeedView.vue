@@ -621,7 +621,7 @@ onUnmounted(() => {
           </div>
 
           <!-- 媒体类型 Tab -->
-          <div class="flex items-center gap-0.5 bg-slate-100 rounded-xl p-0.5 overflow-x-auto">
+          <div class="flex items-center gap-0.5 bg-slate-100 rounded-xl p-0.5">
             <button
               v-for="mt in mediaTypes"
               :key="mt.value"
@@ -686,13 +686,11 @@ onUnmounted(() => {
             </div>
 
             <!-- 虚拟底部空白区（让最后几条卡片可以向上移出视野） -->
-            <div v-else-if="!hasMore && items.length > 0" class="flex items-center justify-center text-center min-h-[80vh] pt-12 text-sm text-slate-400">
-              <div>
-                <p class="mb-1">已浏览完所有内容</p>
-                <p class="text-xs text-slate-300">
-                  {{ contentStats.read }}/{{ contentStats.total }} 已读
-                </p>
-              </div>
+            <div v-else-if="!hasMore && items.length > 0" class="flex flex-col items-center justify-center text-center min-h-[80vh] pt-12">
+              <p class="text-sm text-slate-400 font-medium antialiased">已浏览完所有内容</p>
+              <p class="mt-1 text-xs text-slate-300 antialiased">
+                {{ contentStats.read }}/{{ contentStats.total }} 已读
+              </p>
             </div>
           </div>
         </div>
