@@ -54,6 +54,9 @@ pnpm-debug.log*
 # Mac
 .DS_Store
 
+# Temporary files
+.temp/
+
 # Allin-One Specific
 backend/static/
 backend/alembic/versions_sqlite_backup/

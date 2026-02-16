@@ -44,6 +44,45 @@ docker compose up -d --build
 - Git: `feat:`, `fix:`, `refactor:`, `docs:`, `chore:` 前缀
 - **时间戳**: 全项目使用 `from app.core.time import utcnow`，禁止 `datetime.now(timezone.utc)`（详见 `backend/CLAUDE.md` 时间戳陷阱章节）
 
+## 项目组织规范
+
+### 脚本与临时文件管理
+
+项目使用标准化目录结构管理脚本和临时文件：
+
+```
+allin-one/
+├── scripts/          # 脚本目录（提交到 git）
+│   ├── init/         # 初始化脚本（数据库设置等）
+│   ├── migration/    # 数据迁移脚本（保留历史记录）
+│   ├── verify/       # 验证脚本（按功能分子目录，如 verify/timezone/）
+│   ├── utils/        # 可复用工具脚本
+│   └── README.md     # 脚本目录说明文档
+└── .temp/            # 纯临时文件（.gitignore 忽略，不提交）
+```
+
+**规则**：
+- **验证脚本**: 放在 `scripts/verify/<功能名>/`，有长期价值的提交到 git，一次性的可选择性保留
+- **临时文档**: 放在 `.temp/`，内容整理后归档到正式文档或 commit message，不提交到 git
+- **工具脚本**: 可复用的放在 `scripts/utils/`，提交到 git
+- **迁移脚本**: 放在 `scripts/migration/`，保留历史记录
+- **初始化脚本**: 放在 `scripts/init/`，如数据库初始化 SQL
+
+**示例**：
+```bash
+# 创建验证脚本
+mkdir -p scripts/verify/feature-name
+vim scripts/verify/feature-name/verify_feature.py
+
+# 临时文档（验证后删除或归档）
+echo "临时笔记" > .temp/notes.md
+
+# 工具脚本
+vim scripts/utils/cleanup_data.py
+```
+
+详细说明见 `scripts/README.md`。
+
 ## 关键决策
 
 - PostgreSQL: 单一 PG 实例，应用数据 + Procrastinate 任务队列共用 `allinone` database
