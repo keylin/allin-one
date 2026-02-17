@@ -493,15 +493,75 @@ async def apply_enrichment(content_id: str, body: EnrichApplyRequest, db: Sessio
 
 @router.post("/{content_id}/favorite")
 async def toggle_favorite(content_id: str, db: Session = Depends(get_db)):
-    """切换收藏状态"""
+    """切换收藏状态
+
+    收藏时根据 MediaItem 状态决定是否触发下载流水线：
+    - pending: 新内容，触发下载
+    - failed: 重置为 pending 后触发下载（重试失败的下载）
+    - downloaded: 已成功下载，不触发（幂等）
+    - 无 MediaItem: 纯文本内容，不触发
+    """
+    from app.models.pipeline import PipelineTemplate, TriggerSource
+    from app.services.pipeline.orchestrator import PipelineOrchestrator
+
     item = db.get(ContentItem, content_id)
     if not item:
         return error_response(404, "Content not found")
 
+    # 切换收藏状态
+    was_favorited = item.is_favorited
     item.is_favorited = not item.is_favorited
     item.updated_at = utcnow()
     db.commit()
     db.refresh(item)
+
+    # 收藏时触发媒体下载（通过流水线框架）
+    if item.is_favorited and not was_favorited:
+        # 检查各状态的 MediaItem
+        pending_count = db.query(MediaItem).filter(
+            MediaItem.content_id == content_id,
+            MediaItem.status == "pending",
+        ).count()
+
+        failed_items = db.query(MediaItem).filter(
+            MediaItem.content_id == content_id,
+            MediaItem.status == "failed",
+        ).all()
+
+        downloaded_count = db.query(MediaItem).filter(
+            MediaItem.content_id == content_id,
+            MediaItem.status == "downloaded",
+        ).count()
+
+        # 重置失败项为 pending，准备重试
+        if failed_items:
+            for mi in failed_items:
+                mi.status = "pending"
+            db.commit()
+            logger.info(f"Reset {len(failed_items)} failed MediaItems to pending for retry: {content_id}")
+
+        # 有 pending 或 failed(已重置) 的媒体，触发流水线
+        need_download_count = pending_count + len(failed_items)
+        if need_download_count > 0:
+            # 查找"媒体下载"内置模板
+            template = db.query(PipelineTemplate).filter(
+                PipelineTemplate.name == "媒体下载",
+                PipelineTemplate.is_active == True,
+            ).first()
+
+            if template:
+                orchestrator = PipelineOrchestrator(db)
+                execution = orchestrator.trigger_for_content(
+                    content=item,
+                    template_override_id=template.id,
+                    trigger=TriggerSource.FAVORITE,
+                )
+                if execution:
+                    await orchestrator.async_start_execution(execution.id)
+                    logger.info(f"Favorite triggered pipeline: content={content_id}, execution={execution.id}")
+        elif downloaded_count > 0:
+            # 已有下载完成的媒体，不触发
+            logger.info(f"Content {content_id} already has downloaded media, skip pipeline")
 
     return {"code": 0, "data": {"is_favorited": item.is_favorited}, "message": "ok"}
 

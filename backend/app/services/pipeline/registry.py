@@ -194,4 +194,11 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
             {"step_type": "publish_content",  "is_critical": False, "config": {"channel": "none"}},
         ], ensure_ascii=False),
     },
+    {
+        "name": "媒体下载",
+        "description": "仅执行媒体本地化（单个步骤），用于收藏触发或手动下载",
+        "steps_config": json.dumps([
+            {"step_type": "localize_media", "is_critical": True, "config": {}},
+        ], ensure_ascii=False),
+    },
 ]

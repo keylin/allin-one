@@ -66,10 +66,10 @@ async def download_video(body: VideoDownloadRequest, db: Session = Depends(get_d
     db.add(content)
     db.flush()
 
-    # 查找"视频下载分析"内置模板
-    template = db.query(PipelineTemplate).filter(PipelineTemplate.name == "视频下载分析").first()
+    # 查找"媒体下载"模板 - 只有 localize_media 步骤，不包含分析
+    template = db.query(PipelineTemplate).filter(PipelineTemplate.name == "媒体下载").first()
     if not template:
-        return error_response(500, "未找到视频下载分析模板，请检查内置模板是否已初始化")
+        return error_response(500, "未找到媒体下载模板，请检查内置模板是否已初始化")
 
     orchestrator = PipelineOrchestrator(db)
     try:
