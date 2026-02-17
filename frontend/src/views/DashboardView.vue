@@ -135,7 +135,7 @@ const statusLabels = {
   failed: '失败', cancelled: '已取消',
 }
 const triggerLabels = {
-  scheduled: '定时', manual: '手动', api: 'API', webhook: 'Webhook',
+  scheduled: '定时', manual: '手动', api: 'API', webhook: 'Webhook', favorite: '收藏',
 }
 
 const healthStyles = {

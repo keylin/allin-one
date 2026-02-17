@@ -45,6 +45,7 @@ const triggerLabels = {
   scheduled: '定时',
   api: 'API',
   webhook: 'Webhook',
+  favorite: '收藏',
 }
 
 const progressColors = {
