@@ -101,6 +101,7 @@ def _handle_localize_media(context: dict) -> dict:
                 "subtitleslangs": ["zh", "en", "zh-Hans", "zh-Hant"],
                 "writethumbnail": True,
                 "merge_output_format": "mp4",
+                "ignoreerrors": True,  # 字幕下载失败不中断视频下载
                 "quiet": True,
                 "no_warnings": True,
             }

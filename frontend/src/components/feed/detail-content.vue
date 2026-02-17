@@ -230,6 +230,12 @@ defineExpose({ resetViewMode })
       <span v-if="item.author" class="text-slate-400">{{ item.author }}</span>
       <span class="text-slate-300">&middot;</span>
       <span>{{ formatTime(item.published_at || item.created_at) }}</span>
+      <span v-if="item.reading_time_min" class="inline-flex items-center gap-1 text-slate-400">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+        约 {{ item.reading_time_min }} 分钟
+      </span>
       <span
         v-if="item.status && item.status !== 'ready'"
         class="inline-flex px-2 py-0.5 text-xs font-medium rounded-md"

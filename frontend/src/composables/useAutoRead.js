@@ -1,4 +1,4 @@
-import { ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useIntersectionObserver } from '@/composables/useIntersectionObserver'
 import { useDebounce } from '@/composables/useDebounce'
 import { batchMarkRead } from '@/api/content'
@@ -13,27 +13,35 @@ import { batchMarkRead } from '@/api/content'
  * @param {Ref} options.items - 内容列表 ref
  * @param {Ref} options.leftPanelRef - 左栏滚动容器 ref
  * @param {Function} options.loadStats - 刷新统计数据的回调
+ * @param {Ref} options.contentStats - 内容统计 ref（用于乐观更新）
  * @returns {Object}
  */
-export function useAutoRead({ items, leftPanelRef, loadStats }) {
+export function useAutoRead({ items, leftPanelRef, loadStats, contentStats }) {
   const hasScrolled = ref(false)
   const pendingReadIds = ref(new Set())
   const autoActivateTimer = ref(null)
   const AUTO_ACTIVATE_DELAY = 3000
 
+  // [D] O(1) 查找：用 Map 替代 find
+  const itemMap = computed(() => new Map(items.value.map(i => [i.id, i])))
+
+  // [E] 记录 itemId → DOM element 映射，用于标记后 unobserve
+  const elementMap = new Map()
+
+  // [F] 已观察的 itemId 集合，增量观察新卡片
+  const observedIds = new Set()
+
   // --- IntersectionObserver 回调 ---
-  // 简化逻辑：卡片完全滚出顶部视野 → 标记已读
   function handleCardVisible(entry) {
     if (!hasScrolled.value) return
 
     const itemId = entry.target.dataset.itemId
-    const item = items.value.find(i => i.id === itemId)
+    const item = itemMap.value.get(itemId)
 
     // 已读过或不存在则跳过
     if (!item || (item.view_count || 0) > 0) return
 
     // 卡片完全滚出顶部视野 → 标记已读
-    // root 已设为 leftPanelRef，rootBounds 即容器边界，无需手动获取
     if (!entry.isIntersecting) {
       const topEdge = entry.rootBounds ? entry.rootBounds.top : 0
       if (entry.boundingClientRect.bottom < topEdge + 10) {
@@ -46,19 +54,33 @@ export function useAutoRead({ items, leftPanelRef, loadStats }) {
   function markAsRead(itemId) {
     if (pendingReadIds.value.has(itemId)) return
 
+    const item = itemMap.value.get(itemId)
+    if (!item || (item.view_count || 0) > 0) return
+
     pendingReadIds.value.add(itemId)
 
-    // 立即更新本地状态（不等 API 返回，让用户感觉更即时）
-    const item = items.value.find(i => i.id === itemId)
-    if (item) {
-      item.view_count = 1
-      item.last_viewed_at = new Date().toISOString()
+    // 立即更新本地状态（乐观更新）
+    item.view_count = 1
+    item.last_viewed_at = new Date().toISOString()
+
+    // [C] 未读计数乐观更新
+    if (contentStats && contentStats.value) {
+      if (contentStats.value.unread > 0) contentStats.value.unread--
+      contentStats.value.read++
+    }
+
+    // [E] 标记后立即取消观察
+    const el = elementMap.get(itemId)
+    if (el) {
+      unobserve(el)
+      elementMap.delete(itemId)
+      observedIds.delete(itemId)
     }
 
     debouncedBatchSubmit()
   }
 
-  // 防抖批量提交已读（300ms 更及时）
+  // 防抖批量提交已读（300ms）
   const debouncedBatchSubmit = useDebounce(async () => {
     if (pendingReadIds.value.size === 0) return
 
@@ -67,24 +89,28 @@ export function useAutoRead({ items, leftPanelRef, loadStats }) {
 
     try {
       await batchMarkRead(ids)
-      // 刷新统计数据
-      await loadStats()
+      // loadStats 作为校准（乐观更新已在 markAsRead 中完成）
+      loadStats()
     } catch (err) {
       console.error('批量标记已读失败:', err)
-      // 失败时回滚本地状态并重新加入队列
+      // 失败时回滚本地状态
       ids.forEach(id => {
-        const item = items.value.find(i => i.id === id)
+        const item = itemMap.value.get(id)
         if (item) {
           item.view_count = 0
           item.last_viewed_at = null
         }
         pendingReadIds.value.add(id)
       })
+      // 回滚 stats
+      if (contentStats && contentStats.value) {
+        contentStats.value.unread += ids.length
+        contentStats.value.read = Math.max(0, contentStats.value.read - ids.length)
+      }
     }
   }, 300)
 
   // 初始化 IntersectionObserver
-  // 使用精确边界和多个 threshold 确保更频繁的回调
   const { observe, unobserve, disconnect } = useIntersectionObserver(
     handleCardVisible,
     {
@@ -113,20 +139,16 @@ export function useAutoRead({ items, leftPanelRef, loadStats }) {
     const container = leftPanelRef.value
     if (!container || items.value.length === 0) return
 
-    if (isContainerScrollable()) {
-      console.log('[Auto-read] 容器可滚动，等待用户滚动')
-    } else {
-      console.log('[Auto-read] 容器不可滚动，将在 3 秒后自动激活')
+    if (!isContainerScrollable()) {
       autoActivateTimer.value = setTimeout(() => {
         if (!hasScrolled.value && !isContainerScrollable()) {
-          console.log('[Auto-read] 自动激活（内容少于一页）')
           hasScrolled.value = true
         }
       }, AUTO_ACTIVATE_DELAY)
     }
   }
 
-  // 监听 items 变化，自动观察新卡片
+  // [F] 监听 items 变化，增量观察新卡片（只对新增的调用 observe）
   watch(items, () => {
     nextTick(() => {
       const container = leftPanelRef.value
@@ -135,10 +157,13 @@ export function useAutoRead({ items, leftPanelRef, loadStats }) {
       const cards = container.querySelectorAll('[data-item-id]')
       cards.forEach(card => {
         const itemId = card.dataset.itemId
-        const item = items.value.find(i => i.id === itemId)
+        if (observedIds.has(itemId)) return // 已观察，跳过
 
+        const item = itemMap.value.get(itemId)
         if (item && (item.view_count || 0) === 0) {
           observe(card)
+          observedIds.add(itemId)
+          elementMap.set(itemId, card)
         }
       })
 
@@ -151,27 +176,36 @@ export function useAutoRead({ items, leftPanelRef, loadStats }) {
     checkAndActivateAutoRead()
   }, 300)
 
-  // 左栏滚动到底部时标记最后一条未读
+  // [A] 左栏滚动到底部时标记所有可见的未读卡片
   function handleScrollBottom(distanceToBottom) {
-    if (hasScrolled.value && distanceToBottom < 50) {
-      const unreadItems = items.value.filter(i => (i.view_count || 0) === 0)
-      if (unreadItems.length > 0) {
-        const lastUnread = unreadItems[unreadItems.length - 1]
-        markAsRead(lastUnread.id)
+    if (!hasScrolled.value || distanceToBottom >= 100) return
+
+    const container = leftPanelRef.value
+    if (!container) return
+
+    const containerRect = container.getBoundingClientRect()
+
+    for (const item of items.value) {
+      if ((item.view_count || 0) > 0) continue
+
+      const el = elementMap.get(item.id)
+      if (!el) continue
+
+      const rect = el.getBoundingClientRect()
+      // 卡片在容器可视区域内
+      if (rect.bottom > containerRect.top && rect.top < containerRect.bottom) {
+        markAsRead(item.id)
       }
     }
   }
 
   onMounted(() => {
-    // 监听首次滚动，激活自动标记已读
     const container = leftPanelRef.value
     if (container) {
       container.addEventListener('scroll', () => {
         hasScrolled.value = true
       }, { once: true })
     }
-
-    // 监听窗口大小变化
     window.addEventListener('resize', handleResize)
   })
 
@@ -179,6 +213,8 @@ export function useAutoRead({ items, leftPanelRef, loadStats }) {
     disconnect()
     pendingReadIds.value.clear()
     hasScrolled.value = false
+    observedIds.clear()
+    elementMap.clear()
     if (autoActivateTimer.value) {
       clearTimeout(autoActivateTimer.value)
     }

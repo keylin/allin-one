@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { listContent, getContent, analyzeContent, toggleFavorite, listSourceOptions, incrementView, enrichContent, applyEnrichment, getContentStats } from '@/api/content'
+import { listContent, getContent, analyzeContent, toggleFavorite, listSourceOptions, enrichContent, applyEnrichment, getContentStats, markAllRead } from '@/api/content'
 import { useToast } from '@/composables/useToast'
 import { useSwipe } from '@/composables/useSwipe'
 import { useAutoRead } from '@/composables/useAutoRead'
@@ -34,6 +34,63 @@ const showUnreadOnly = ref(route.query.unread !== '0')
 const sourceOptions = ref([])
 const showSourceDropdown = ref(false)
 let searchTimer = null
+
+// 标签筛选
+const filterTag = ref(route.query.tag || '')
+
+// 日期范围筛选
+const dateRange = ref(route.query.date_range || '')
+
+const dateRangeOptions = [
+  { value: '', label: '全部时间' },
+  { value: 'today', label: '今天' },
+  { value: '3d', label: '近 3 天' },
+  { value: '7d', label: '近 7 天' },
+  { value: '30d', label: '近 30 天' },
+]
+
+function getDateParams() {
+  if (!dateRange.value) return {}
+  const now = new Date()
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  let dateFrom
+  switch (dateRange.value) {
+    case 'today':
+      dateFrom = today
+      break
+    case '3d':
+      dateFrom = new Date(today.getTime() - 2 * 86400000)
+      break
+    case '7d':
+      dateFrom = new Date(today.getTime() - 6 * 86400000)
+      break
+    case '30d':
+      dateFrom = new Date(today.getTime() - 29 * 86400000)
+      break
+    default:
+      return {}
+  }
+  const fmt = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  return { date_from: fmt(dateFrom) }
+}
+
+// 密度模式
+const densityMode = ref(localStorage.getItem('feed_density') || 'comfortable')
+
+function toggleDensity() {
+  densityMode.value = densityMode.value === 'comfortable' ? 'compact' : 'comfortable'
+  localStorage.setItem('feed_density', densityMode.value)
+}
+
+// 快捷键帮助浮层
+const showShortcutHelp = ref(false)
+
+// 新内容到达提醒
+const newContentCount = ref(0)
+let lastKnownTotal = null
+
+// 阅读进度
+const scrollProgress = ref(0)
 
 // 滚动容器 ref
 const leftPanelRef = ref(null)
@@ -97,16 +154,17 @@ const {
   getContentId: () => selectedId.value,
 })
 
-// --- Auto-read composable ---
-const { handleScrollBottom } = useAutoRead({
+// --- Auto-read composable (pass contentStats for optimistic update) ---
+const { markAsRead, handleScrollBottom } = useAutoRead({
   items,
   leftPanelRef,
   loadStats,
+  contentStats,
 })
 
 // 是否有活跃筛选
 const hasActiveFilters = computed(() => {
-  return searchQuery.value.trim() || filterSources.value.length > 0 || filterStatus.value || showFavoritesOnly.value || showUnreadOnly.value
+  return searchQuery.value.trim() || filterSources.value.length > 0 || filterStatus.value || showFavoritesOnly.value || showUnreadOnly.value || dateRange.value || filterTag.value
 })
 
 const activeSourceNames = computed(() => {
@@ -147,6 +205,8 @@ function syncQueryParams() {
   if (sortBy.value !== 'published_at') query.sort_by = sortBy.value
   if (showFavoritesOnly.value) query.favorites = '1'
   if (!showUnreadOnly.value) query.unread = '0'
+  if (dateRange.value) query.date_range = dateRange.value
+  if (filterTag.value) query.tag = filterTag.value
   router.replace({ query }).catch(() => {})
 }
 
@@ -173,6 +233,12 @@ async function fetchItems(reset = false) {
     if (filterStatus.value) params.status = filterStatus.value
     if (showFavoritesOnly.value) params.is_favorited = true
     if (showUnreadOnly.value) params.is_unread = true
+
+    // 日期范围
+    const dp = getDateParams()
+    if (dp.date_from) params.date_from = dp.date_from
+    // 标签筛选
+    if (filterTag.value) params.tag = filterTag.value
 
     const res = await listContent(params)
     if (res.code === 0) {
@@ -214,7 +280,7 @@ watch(searchQuery, () => {
 })
 
 // 筛选联动
-watch([filterSources, filterStatus, showFavoritesOnly, showUnreadOnly], () => {
+watch([filterSources, filterStatus, showFavoritesOnly, showUnreadOnly, dateRange, filterTag], () => {
   fetchItems(true)
 })
 
@@ -223,6 +289,9 @@ function clearSearch() { searchQuery.value = ''; fetchItems(true) }
 function clearStatus() { filterStatus.value = '' }
 function clearFavorites() { showFavoritesOnly.value = false }
 function clearUnread() { showUnreadOnly.value = false }
+function clearDateRange() { dateRange.value = '' }
+function clearTag() { filterTag.value = '' }
+function handleTagClick(tag) { filterTag.value = tag }
 function toggleFavorites() {
   showFavoritesOnly.value = !showFavoritesOnly.value
   if (showFavoritesOnly.value) showUnreadOnly.value = false
@@ -237,6 +306,8 @@ function clearAllFilters() {
   filterStatus.value = ''
   showFavoritesOnly.value = false
   showUnreadOnly.value = false
+  dateRange.value = ''
+  filterTag.value = ''
   fetchItems(true)
 }
 
@@ -265,11 +336,8 @@ function selectItem(item) {
   clearChat()
   // 右栏滚回顶部
   if (rightPanelRef.value) rightPanelRef.value.scrollTop = 0
-  incrementView(item.id).then(() => {
-    if (!item.view_count || item.view_count === 0) {
-      loadStats()
-    }
-  }).catch(() => {})
+  // [B] 点击选中走 markAsRead 统一路径（乐观更新）
+  markAsRead(item.id)
   loadDetail(item.id)
 }
 
@@ -277,14 +345,41 @@ function closeMobileDetail() {
   showMobileDetail.value = false
 }
 
+// [6] 收藏乐观更新
 async function handleFavorite(id) {
-  const res = await toggleFavorite(id)
-  if (res.code === 0) {
-    const item = items.value.find(i => i.id === id)
-    if (item) item.is_favorited = res.data.is_favorited
-    if (detailContent.value && detailContent.value.id === id) {
-      detailContent.value.is_favorited = res.data.is_favorited
+  const item = items.value.find(i => i.id === id)
+  if (!item) return
+
+  // 乐观更新
+  const wasFavorited = item.is_favorited
+  item.is_favorited = !wasFavorited
+  if (detailContent.value && detailContent.value.id === id) {
+    detailContent.value.is_favorited = !wasFavorited
+  }
+
+  try {
+    const res = await toggleFavorite(id)
+    if (res.code === 0) {
+      // 用服务器返回值校准
+      item.is_favorited = res.data.is_favorited
+      if (detailContent.value && detailContent.value.id === id) {
+        detailContent.value.is_favorited = res.data.is_favorited
+      }
+    } else {
+      // 失败回滚
+      item.is_favorited = wasFavorited
+      if (detailContent.value && detailContent.value.id === id) {
+        detailContent.value.is_favorited = wasFavorited
+      }
+      toastError('收藏操作失败')
     }
+  } catch {
+    // 网络错误回滚
+    item.is_favorited = wasFavorited
+    if (detailContent.value && detailContent.value.id === id) {
+      detailContent.value.is_favorited = wasFavorited
+    }
+    toastError('网络错误，收藏操作已回滚')
   }
 }
 
@@ -352,10 +447,48 @@ function closeEnrichModal() {
   enriching.value = false
 }
 
-// --- Left panel scroll → infinite load ---
+// --- Mark all read ---
+const markingAllRead = ref(false)
+
+async function handleMarkAllRead() {
+  if (markingAllRead.value || contentStats.value.unread === 0) return
+  markingAllRead.value = true
+  try {
+    const params = {}
+    if (filterSources.value.length) params.source_id = filterSources.value.join(',')
+    if (filterStatus.value) params.status = filterStatus.value
+    if (activeMediaType.value === 'video') params.has_video = true
+    if (searchQuery.value.trim()) params.q = searchQuery.value.trim()
+    const dp = getDateParams()
+    if (dp.date_from) params.date_from = dp.date_from
+
+    const res = await markAllRead(params)
+    if (res.code === 0) {
+      // 更新本地列表状态
+      items.value.forEach(item => {
+        if ((item.view_count || 0) === 0) {
+          item.view_count = 1
+          item.last_viewed_at = new Date().toISOString()
+        }
+      })
+      await loadStats()
+      toastSuccess(`已标记 ${res.data.updated} 条为已读`)
+    }
+  } catch {
+    toastError('标记全部已读失败')
+  } finally {
+    markingAllRead.value = false
+  }
+}
+
+// --- Left panel scroll → infinite load + progress ---
 function handleLeftScroll(e) {
   const el = e.target
   const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+
+  // 进度条
+  const maxScroll = el.scrollHeight - el.clientHeight
+  scrollProgress.value = maxScroll > 0 ? Math.min(100, (el.scrollTop / maxScroll) * 100) : 0
 
   if (distanceToBottom < 200) {
     loadMore()
@@ -364,12 +497,41 @@ function handleLeftScroll(e) {
   handleScrollBottom(distanceToBottom)
 }
 
-// --- Keyboard navigation (arrow up/down) ---
+// --- [5] Detail panel navigation ---
+function navigateDetail(direction) {
+  const idx = selectedIndex.value
+  if (idx === -1) return
+
+  const newIdx = idx + direction
+  if (newIdx < 0 || newIdx >= items.value.length) return
+
+  const targetItem = items.value[newIdx]
+  selectItem(targetItem)
+  if (newIdx >= items.value.length - 3 && hasMore.value) loadMore()
+  nextTick(() => scrollCardIntoView(newIdx))
+}
+
+// --- [2] Keyboard shortcuts ---
 function handleKeydown(e) {
   const tag = e.target.tagName
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
 
-  if (e.key === 'ArrowDown') {
+  // ? — show shortcut help
+  if (e.key === '?') {
+    e.preventDefault()
+    showShortcutHelp.value = !showShortcutHelp.value
+    return
+  }
+
+  // Escape — close help / enrich modal
+  if (e.key === 'Escape') {
+    if (showShortcutHelp.value) { showShortcutHelp.value = false; return }
+    if (showEnrichModal.value) { closeEnrichModal(); return }
+    return
+  }
+
+  // j / ArrowDown — next item
+  if (e.key === 'j' || e.key === 'ArrowDown') {
     e.preventDefault()
     const idx = selectedIndex.value
     if (idx < items.value.length - 1) {
@@ -378,7 +540,11 @@ function handleKeydown(e) {
       if (idx + 1 >= items.value.length - 3 && hasMore.value) loadMore()
       nextTick(() => scrollCardIntoView(idx + 1))
     }
-  } else if (e.key === 'ArrowUp') {
+    return
+  }
+
+  // k / ArrowUp — prev item
+  if (e.key === 'k' || e.key === 'ArrowUp') {
     e.preventDefault()
     const idx = selectedIndex.value
     if (idx > 0) {
@@ -386,6 +552,41 @@ function handleKeydown(e) {
       selectItem(prevItem)
       nextTick(() => scrollCardIntoView(idx - 1))
     }
+    return
+  }
+
+  // s — toggle favorite
+  if (e.key === 's') {
+    if (selectedId.value) handleFavorite(selectedId.value)
+    return
+  }
+
+  // o — open original URL
+  if (e.key === 'o') {
+    if (detailContent.value?.url) {
+      window.open(detailContent.value.url, '_blank', 'noopener')
+    }
+    return
+  }
+
+  // m — toggle read/unread
+  if (e.key === 'm') {
+    if (selectedId.value) {
+      const item = items.value.find(i => i.id === selectedId.value)
+      if (item) {
+        if ((item.view_count || 0) === 0) {
+          markAsRead(item.id)
+        }
+        // Note: toggling back to unread would need an API call; for now just mark read
+      }
+    }
+    return
+  }
+
+  // a — trigger analyze
+  if (e.key === 'a') {
+    handleAnalyze()
+    return
   }
 }
 
@@ -402,17 +603,34 @@ function handleClickOutside() {
 }
 
 // 加载统计数据
+let statsLoading = false
 async function loadStats() {
+  if (statsLoading) return
+  statsLoading = true
   try {
     const res = await getContentStats()
     if (res.code === 0) {
+      const newTotal = res.data.total || 0
+
+      // 检测新内容到达（仅 polling 触发时，非初始加载）
+      if (lastKnownTotal !== null && newTotal > lastKnownTotal) {
+        newContentCount.value += newTotal - lastKnownTotal
+      }
+      lastKnownTotal = newTotal
+
       contentStats.value = {
         read: res.data.read || 0,
         unread: res.data.unread || 0,
-        total: res.data.total || 0,
+        total: newTotal,
       }
     }
   } catch (_) { /* ignore */ }
+  finally { statsLoading = false }
+}
+
+function loadNewContent() {
+  newContentCount.value = 0
+  fetchItems(true)
 }
 
 // --- Stats polling ---
@@ -422,7 +640,7 @@ function startStatsPolling() {
   if (statsPollingTimer) return
   statsPollingTimer = setInterval(() => {
     loadStats()
-  }, 60000) // 60秒
+  }, 60000)
 }
 
 function stopStatsPolling() {
@@ -473,9 +691,9 @@ onUnmounted(() => {
         @scroll="handleLeftScroll"
       >
         <div class="px-4 pt-3 pb-2 space-y-2.5 sticky top-0 bg-white z-10 border-b border-slate-100">
-          <!-- 计数 + 排序 -->
+          <!-- 计数 + 排序 + 密度切换 -->
           <div class="flex items-center justify-between">
-            <div class="flex items-center gap-3">
+            <div class="flex items-center gap-2">
               <p class="text-xs text-slate-400">
                 <span v-if="contentStats.unread > 0" class="inline-flex items-center gap-1">
                   <span class="inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1.5 text-xs font-medium rounded-full bg-indigo-100 text-indigo-700">
@@ -485,14 +703,55 @@ onUnmounted(() => {
                 </span>
                 <span v-else class="text-slate-300">已全部阅读</span>
               </p>
+              <!-- 全部已读按钮 -->
+              <button
+                v-if="contentStats.unread > 0"
+                class="text-xs text-slate-400 hover:text-indigo-600 transition-colors disabled:opacity-40"
+                :disabled="markingAllRead"
+                title="标记全部已读"
+                @click="handleMarkAllRead"
+              >
+                <span v-if="markingAllRead">标记中...</span>
+                <span v-else class="flex items-center gap-0.5">
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  全部已读
+                </span>
+              </button>
             </div>
-            <select
-              :value="sortBy"
-              @change="switchSort($event.target.value)"
-              class="bg-slate-50 text-xs text-slate-600 rounded-lg px-2.5 py-1.5 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all appearance-none cursor-pointer"
-            >
-              <option v-for="sort in sortOptions" :key="sort.value" :value="sort.value">{{ sort.label }}</option>
-            </select>
+            <div class="flex items-center gap-1.5">
+              <!-- 密度切换 -->
+              <button
+                class="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-all"
+                :title="densityMode === 'compact' ? '切换舒适模式' : '切换紧凑模式'"
+                @click="toggleDensity"
+              >
+                <svg v-if="densityMode === 'compact'" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5M3.75 17.25h16.5" />
+                </svg>
+                <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 5.25h16.5m-16.5 4.5h16.5m-16.5 4.5h16.5m-16.5 4.5h16.5" />
+                </svg>
+              </button>
+              <!-- 快捷键帮助 -->
+              <button
+                class="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-all"
+                title="快捷键 (?)"
+                @click="showShortcutHelp = !showShortcutHelp"
+              >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9 5.25h.008v.008H12v-.008z" />
+                </svg>
+              </button>
+              <select
+                :value="sortBy"
+                @change="switchSort($event.target.value)"
+                class="bg-slate-50 text-xs text-slate-600 rounded-lg px-2.5 py-1.5 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all appearance-none cursor-pointer"
+              >
+                <option v-for="sort in sortOptions" :key="sort.value" :value="sort.value">{{ sort.label }}</option>
+              </select>
+            </div>
           </div>
 
           <!-- 搜索 + 筛选 -->
@@ -563,6 +822,14 @@ onUnmounted(() => {
               </Transition>
             </div>
 
+            <!-- 日期范围 -->
+            <select
+              v-model="dateRange"
+              class="bg-slate-50 text-xs text-slate-600 rounded-lg px-2.5 py-2 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all appearance-none cursor-pointer shrink-0"
+            >
+              <option v-for="dr in dateRangeOptions" :key="dr.value" :value="dr.value">{{ dr.label }}</option>
+            </select>
+
             <!-- 状态下拉 -->
             <select
               v-model="filterStatus"
@@ -619,6 +886,13 @@ onUnmounted(() => {
               <button @click="toggleSourceFilter(filterSources[i])" class="ml-0.5 hover:text-indigo-900 transition-colors">&times;</button>
             </span>
             <span
+              v-if="dateRange"
+              class="inline-flex items-center gap-1 px-2.5 py-1 bg-cyan-100 text-cyan-700 text-xs font-medium rounded-full shadow-sm border border-cyan-200/50"
+            >
+              {{ dateRangeOptions.find(d => d.value === dateRange)?.label }}
+              <button @click="clearDateRange" class="ml-0.5 hover:text-cyan-900 transition-colors">&times;</button>
+            </span>
+            <span
               v-if="filterStatus"
               class="inline-flex items-center gap-1 px-2.5 py-1 bg-indigo-100 text-indigo-700 text-xs font-medium rounded-full shadow-sm border border-indigo-200/50"
             >
@@ -631,6 +905,13 @@ onUnmounted(() => {
             >
               未读
               <button @click="clearUnread" class="ml-0.5 hover:text-blue-900 transition-colors">&times;</button>
+            </span>
+            <span
+              v-if="filterTag"
+              class="inline-flex items-center gap-1 px-2.5 py-1 bg-violet-100 text-violet-700 text-xs font-medium rounded-full shadow-sm border border-violet-200/50"
+            >
+              #{{ filterTag }}
+              <button @click="clearTag" class="ml-0.5 hover:text-violet-900 transition-colors">&times;</button>
             </span>
             <span
               v-if="showFavoritesOnly"
@@ -663,8 +944,35 @@ onUnmounted(() => {
           </div>
         </div>
 
+        <!-- 阅读进度条 -->
+        <div
+          v-if="items.length > 0 && scrollProgress > 0"
+          class="sticky top-0 z-20 h-0.5 bg-slate-100"
+        >
+          <div
+            class="h-full bg-indigo-400 transition-[width] duration-150 ease-out"
+            :style="{ width: scrollProgress + '%' }"
+          ></div>
+        </div>
+
+        <!-- 新内容横幅 -->
+        <div
+          v-if="newContentCount > 0"
+          class="sticky top-0 z-20 mx-4 mt-2"
+        >
+          <button
+            class="w-full flex items-center justify-center gap-2 px-4 py-2 bg-indigo-50 text-indigo-700 text-sm font-medium rounded-xl border border-indigo-200 hover:bg-indigo-100 transition-all"
+            @click="loadNewContent"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+            </svg>
+            {{ newContentCount }} 条新内容 — 点击加载
+          </button>
+        </div>
+
         <!-- 卡片列表 -->
-        <div class="px-4 py-3">
+        <div class="px-4" :class="densityMode === 'compact' ? 'py-1.5' : 'py-3'">
           <!-- Loading skeleton -->
           <div v-if="loading" class="space-y-3">
             <div v-for="i in 4" :key="i" class="animate-pulse bg-white rounded-xl border border-slate-200 p-4">
@@ -695,16 +1003,18 @@ onUnmounted(() => {
           </div>
 
           <!-- Feed 卡片列表 -->
-          <div v-else class="space-y-3">
+          <div v-else :class="densityMode === 'compact' ? 'space-y-1' : 'space-y-3'">
             <FeedCard
               v-for="item in items"
               :key="item.id"
               :item="item"
               :selected="selectedId === item.id"
+              :compact="densityMode === 'compact'"
               :data-item-id="item.id"
               data-feed-card
               @click="selectItem"
               @favorite="handleFavorite"
+              @tag-click="handleTagClick"
             />
 
             <!-- 加载更多 -->
@@ -740,7 +1050,7 @@ onUnmounted(() => {
               </svg>
             </div>
             <p class="text-base text-slate-500 font-medium">选择一篇文章查看</p>
-            <p class="text-sm text-slate-400 mt-1">使用 ↑↓ 键快速切换</p>
+            <p class="text-sm text-slate-400 mt-1">使用 j/k 或 ↑↓ 键快速切换，按 ? 查看快捷键</p>
           </div>
         </div>
 
@@ -755,6 +1065,35 @@ onUnmounted(() => {
         <!-- 详情内容 -->
         <div v-else-if="detailContent" class="flex-1 min-w-0 flex flex-col">
           <div ref="rightPanelRef" class="flex-1 overflow-y-auto overflow-x-hidden p-6 space-y-6">
+            <!-- [5] 详情面板导航栏 -->
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <button
+                  class="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                  :disabled="selectedIndex <= 0"
+                  title="上一篇 (k/↑)"
+                  @click="navigateDetail(-1)"
+                >
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+                  </svg>
+                </button>
+                <span class="text-xs text-slate-400 tabular-nums min-w-[3rem] text-center">
+                  {{ selectedIndex + 1 }} / {{ items.length }}
+                </span>
+                <button
+                  class="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                  :disabled="selectedIndex >= items.length - 1"
+                  title="下一篇 (j/↓)"
+                  @click="navigateDetail(1)"
+                >
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+
             <DetailContent
               ref="detailContentRef"
               :item="detailContent"
@@ -825,8 +1164,8 @@ onUnmounted(() => {
           class="fixed inset-0 z-40 bg-white flex flex-col md:hidden"
           :style="isSwiping ? { transform: `translateX(${Math.max(0, swipeOffset)}px)` } : {}"
         >
-          <!-- 移动端返回栏 -->
-          <div class="flex items-center gap-3 px-4 py-3 border-b border-slate-100 shrink-0">
+          <!-- 移动端返回栏 + 导航 -->
+          <div class="flex items-center justify-between px-4 py-3 border-b border-slate-100 shrink-0">
             <button
               class="p-2 -ml-2 rounded-lg text-slate-500 hover:bg-slate-50 transition-colors"
               @click="closeMobileDetail"
@@ -835,7 +1174,27 @@ onUnmounted(() => {
                 <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
               </svg>
             </button>
-            <span class="text-sm font-medium text-slate-600 truncate">返回列表</span>
+            <div class="flex items-center gap-2">
+              <button
+                class="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-all disabled:opacity-30"
+                :disabled="selectedIndex <= 0"
+                @click="navigateDetail(-1)"
+              >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+                </svg>
+              </button>
+              <span class="text-xs text-slate-400 tabular-nums">{{ selectedIndex + 1 }}/{{ items.length }}</span>
+              <button
+                class="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-all disabled:opacity-30"
+                :disabled="selectedIndex >= items.length - 1"
+                @click="navigateDetail(1)"
+              >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+                </svg>
+              </button>
+            </div>
           </div>
 
           <!-- 移动端详情内容 -->
@@ -898,5 +1257,74 @@ onUnmounted(() => {
         </div>
       </Transition>
     </div>
+
+    <!-- 快捷键帮助浮层 -->
+    <Teleport to="body">
+      <Transition
+        enter-active-class="transition-opacity duration-150 ease-out"
+        enter-from-class="opacity-0"
+        enter-to-class="opacity-100"
+        leave-active-class="transition-opacity duration-100 ease-in"
+        leave-from-class="opacity-100"
+        leave-to-class="opacity-0"
+      >
+        <div
+          v-if="showShortcutHelp"
+          class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+          @click.self="showShortcutHelp = false"
+        >
+          <div class="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
+            <div class="flex items-center justify-between mb-4">
+              <h3 class="text-base font-bold text-slate-900">快捷键</h3>
+              <button
+                class="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-all"
+                @click="showShortcutHelp = false"
+              >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div class="space-y-2.5 text-sm">
+              <div class="flex items-center justify-between">
+                <span class="text-slate-600">下一篇</span>
+                <div class="flex gap-1">
+                  <kbd class="px-2 py-0.5 bg-slate-100 rounded text-xs font-mono text-slate-600 border border-slate-200">j</kbd>
+                  <kbd class="px-2 py-0.5 bg-slate-100 rounded text-xs font-mono text-slate-600 border border-slate-200">↓</kbd>
+                </div>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-slate-600">上一篇</span>
+                <div class="flex gap-1">
+                  <kbd class="px-2 py-0.5 bg-slate-100 rounded text-xs font-mono text-slate-600 border border-slate-200">k</kbd>
+                  <kbd class="px-2 py-0.5 bg-slate-100 rounded text-xs font-mono text-slate-600 border border-slate-200">↑</kbd>
+                </div>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-slate-600">收藏/取消</span>
+                <kbd class="px-2 py-0.5 bg-slate-100 rounded text-xs font-mono text-slate-600 border border-slate-200">s</kbd>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-slate-600">打开原文</span>
+                <kbd class="px-2 py-0.5 bg-slate-100 rounded text-xs font-mono text-slate-600 border border-slate-200">o</kbd>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-slate-600">标记已读</span>
+                <kbd class="px-2 py-0.5 bg-slate-100 rounded text-xs font-mono text-slate-600 border border-slate-200">m</kbd>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-slate-600">重新分析</span>
+                <kbd class="px-2 py-0.5 bg-slate-100 rounded text-xs font-mono text-slate-600 border border-slate-200">a</kbd>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-slate-600">快捷键帮助</span>
+                <kbd class="px-2 py-0.5 bg-slate-100 rounded text-xs font-mono text-slate-600 border border-slate-200">?</kbd>
+              </div>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>
+

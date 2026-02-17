@@ -60,6 +60,7 @@ class TriggerSource(str, Enum):
     MANUAL = "manual"          # 用户手动触发
     API = "api"
     WEBHOOK = "webhook"
+    FAVORITE = "favorite"      # 收藏时自动触发媒体下载
 
 
 # ============ 辅助函数 ============

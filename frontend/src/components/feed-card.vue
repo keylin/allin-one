@@ -5,16 +5,17 @@ import { formatTimeShort } from '@/utils/time'
 const props = defineProps({
   item: { type: Object, required: true },
   selected: { type: Boolean, default: false },
+  compact: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['click', 'favorite'])
+const emit = defineEmits(['click', 'favorite', 'tag-click'])
 
 const statusConfig = {
-  pending: { label: '待处理', class: 'bg-slate-100 text-slate-500' },
-  processing: { label: '处理中', class: 'bg-indigo-50 text-indigo-600' },
-  ready: { label: '已就绪', class: 'bg-sky-50 text-sky-600' },
-  analyzed: { label: '已分析', class: 'bg-emerald-50 text-emerald-600' },
-  failed: { label: '失败', class: 'bg-rose-50 text-rose-600' },
+  pending: { label: '待处理', class: 'bg-slate-100 text-slate-600 ring-1 ring-slate-200' },
+  processing: { label: '处理中', class: 'bg-indigo-100 text-indigo-700 ring-1 ring-indigo-200 animate-pulse' },
+  ready: { label: '已就绪', class: 'bg-sky-100 text-sky-700 ring-1 ring-sky-200' },
+  analyzed: { label: '已分析', class: 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200' },
+  failed: { label: '失败', class: 'bg-rose-100 text-rose-700 ring-1 ring-rose-200' },
 }
 
 const mediaIcons = {
@@ -61,7 +62,7 @@ const sentimentColor = computed(() => {
   return 'bg-slate-300'
 })
 
-const showThumbnail = computed(() => props.item.has_thumbnail || (derivedMediaType.value === 'video' && props.item.has_thumbnail))
+const showThumbnail = computed(() => !props.compact && (props.item.has_thumbnail || (derivedMediaType.value === 'video' && props.item.has_thumbnail)))
 const thumbnailUrl = computed(() => showThumbnail.value ? `/api/video/${props.item.id}/thumbnail` : null)
 
 // 计算已读状态
@@ -73,39 +74,80 @@ function onThumbError(e) {
 </script>
 
 <template>
+  <!-- 紧凑模式 -->
   <article
-    class="group bg-white rounded-xl border overflow-hidden cursor-pointer relative"
+    v-if="compact"
+    class="group bg-white rounded-lg border border-slate-200/80 border-l-2 overflow-hidden cursor-pointer relative transition-all duration-150 ease-out"
     :class="[
-      // 基础过渡
-      'transition-all duration-200 ease-out',
-
-      // 选中状态（优先级最高）
+      (selected || !isRead) ? 'border-l-indigo-500' : 'border-l-transparent',
       selected
-        ? 'bg-indigo-50/80 border-indigo-300 shadow-sm'
-        : 'border-slate-200/80 hover:shadow-md hover:border-slate-300 hover:-translate-y-0.5',
-
-      // 已读样式: 整体变灰
-      isRead && 'opacity-60'
+        ? 'bg-indigo-50/60 border-indigo-200 ring-1 ring-indigo-200/50 shadow-sm'
+        : 'border-slate-200/80 hover:bg-slate-50 hover:border-slate-300',
     ]"
     @click="emit('click', item)"
   >
-    <!-- 选中态左侧竖条 -->
-    <div
-      v-if="selected"
-      class="absolute left-0 top-0 bottom-0 w-1 bg-indigo-500 rounded-l-lg"
-    ></div>
+    <div class="flex items-center gap-2 py-1.5 px-3">
+      <!-- 媒体类型图标 -->
+      <svg :class="mediaColor" class="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+        <path stroke-linecap="round" stroke-linejoin="round" :d="mediaIcon" />
+      </svg>
 
-    <!-- 未读状态小圆点 -->
-    <div
-      v-if="!isRead"
-      class="absolute left-2 top-1/2 -translate-y-1/2 w-1.5 h-4 bg-blue-500 rounded-full"
-    ></div>
+      <!-- 标题 -->
+      <h3
+        class="flex-1 min-w-0 text-sm leading-tight truncate transition-colors duration-200"
+        :class="[
+          isRead
+            ? 'text-slate-400 font-normal group-hover:text-slate-600'
+            : 'text-slate-800 font-semibold group-hover:text-indigo-700',
+        ]"
+      >
+        {{ item.title }}
+      </h3>
+
+      <!-- 元信息 -->
+      <span class="text-xs text-slate-400 shrink-0 truncate max-w-[80px]">{{ item.source_name || '' }}</span>
+      <span v-if="relTime" class="text-xs text-slate-400 shrink-0 whitespace-nowrap">{{ relTime }}</span>
+
+      <!-- 状态 badge -->
+      <span
+        v-if="item.status !== 'ready' && item.status !== 'analyzed'"
+        :class="currentStatus.class"
+        class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium leading-none shrink-0"
+      >
+        {{ currentStatus.label }}
+      </span>
+
+      <!-- 收藏 -->
+      <button
+        class="shrink-0 p-0.5 rounded transition-all duration-200"
+        :class="item.is_favorited ? 'text-amber-400 hover:text-amber-500' : 'text-slate-200 hover:text-amber-400'"
+        @click.stop="emit('favorite', item.id)"
+      >
+        <svg class="w-3.5 h-3.5" :fill="item.is_favorited ? 'currentColor' : 'none'" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
+        </svg>
+      </button>
+    </div>
+  </article>
+
+  <!-- 舒适模式 -->
+  <article
+    v-else
+    class="group bg-white rounded-xl border border-slate-200/80 border-l-[3px] overflow-hidden cursor-pointer relative"
+    :class="[
+      'transition-all duration-200 ease-out',
+      (selected || !isRead) ? 'border-l-indigo-500' : 'border-l-transparent',
+      selected
+        ? 'bg-indigo-50/60 border-indigo-200 ring-1 ring-indigo-200/50 shadow-sm'
+        : 'border-slate-200/80 hover:shadow-md hover:border-slate-300 hover:-translate-y-0.5',
+    ]"
+    @click="emit('click', item)"
+  >
     <div class="flex">
       <!-- 视频封面（左侧） -->
       <div
         v-if="showThumbnail"
         class="relative shrink-0 w-28 md:w-36 bg-slate-100 overflow-hidden"
-        :class="isRead && 'grayscale'"
       >
         <img
           :src="thumbnailUrl"
@@ -125,10 +167,7 @@ function onThumbError(e) {
       </div>
 
       <!-- 内容区域 -->
-      <div
-        class="flex-1 min-w-0 py-3"
-        :class="showThumbnail ? 'px-4' : (isRead ? 'px-4' : 'pl-6 pr-4')"
-      >
+      <div class="flex-1 min-w-0 py-3 px-4">
         <!-- 第一行：标题 + 收藏 -->
         <div class="flex items-start gap-2">
           <!-- 媒体类型小图标 + sentiment 色点 -->
@@ -144,15 +183,19 @@ function onThumbError(e) {
           </div>
 
           <h3
-            class="flex-1 min-w-0 text-sm leading-snug group-hover:text-indigo-700 transition-colors duration-200 line-clamp-1"
-            :class="isRead ? 'text-slate-500 font-medium' : 'text-slate-800 font-semibold'"
+            :class="[
+              isRead
+                ? 'text-slate-400 font-normal group-hover:text-slate-600'
+                : 'text-slate-800 font-semibold group-hover:text-indigo-700',
+              'flex-1 min-w-0 text-sm leading-snug transition-colors duration-200 line-clamp-1'
+            ]"
           >
             {{ item.title }}
           </h3>
 
           <button
             class="shrink-0 p-1 rounded-lg transition-all duration-200"
-            :class="item.is_favorited ? 'text-amber-500 hover:bg-amber-50' : 'text-slate-300 hover:text-amber-500 hover:bg-slate-50 md:opacity-0 md:group-hover:opacity-100'"
+            :class="item.is_favorited ? 'text-amber-400 hover:text-amber-500 hover:bg-amber-50' : 'text-slate-200 hover:text-amber-400 hover:bg-slate-50'"
             @click.stop="emit('favorite', item.id)"
           >
             <svg class="w-4 h-4" :fill="item.is_favorited ? 'currentColor' : 'none'" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
@@ -163,7 +206,7 @@ function onThumbError(e) {
 
         <!-- 第二行：摘要 -->
         <div class="mt-1">
-          <p v-if="summaryText" class="text-xs text-slate-500 leading-relaxed line-clamp-2">
+          <p v-if="summaryText" :class="isRead ? 'text-xs text-slate-300 leading-relaxed line-clamp-2' : 'text-xs text-slate-500 leading-relaxed line-clamp-2'">
             {{ summaryText }}
           </p>
           <p v-else-if="item.status === 'pending'" class="text-xs text-slate-400 italic">
@@ -174,37 +217,34 @@ function onThumbError(e) {
           </p>
         </div>
 
-        <!-- 第三行：元信息 + 状态 + 标签 -->
-        <div class="mt-1.5 flex items-center gap-x-3 flex-wrap text-xs text-slate-400">
-          <span class="truncate max-w-[120px] font-medium text-slate-500">{{ item.source_name || '未知来源' }}</span>
-
-          <span v-if="item.author" class="truncate max-w-[80px]">{{ item.author }}</span>
-
-          <span v-if="item.view_count > 0" class="inline-flex items-center gap-0.5">
-            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.64 0 8.577 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.64 0-8.577-3.007-9.963-7.178z" />
-              <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-            </svg>
-            {{ item.view_count }}
-          </span>
-
-          <span v-if="relTime">{{ relTime }}</span>
-
-          <!-- 状态 badge (隐藏 ready 状态) -->
-          <span
-            v-if="item.status !== 'ready'"
-            :class="currentStatus.class"
-            class="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium leading-none"
-          >
-            {{ currentStatus.label }}
-          </span>
-
-          <!-- 标签 -->
-          <span
-            v-for="tag in tags"
-            :key="tag"
-            class="text-indigo-500/70 truncate max-w-[80px]"
-          >#{{ tag }}</span>
+        <!-- 第三行：元信息（左右分组） -->
+        <div class="mt-1.5 flex items-center justify-between text-xs">
+          <!-- 左：来源 + 时间 -->
+          <div class="flex items-center gap-1.5 min-w-0 text-slate-400">
+            <span class="truncate max-w-[120px]" :class="isRead ? 'text-slate-300' : 'text-slate-500 font-medium'">
+              {{ item.source_name || '未知来源' }}
+            </span>
+            <span v-if="relTime" class="text-slate-300">&middot;</span>
+            <span v-if="relTime" class="shrink-0 whitespace-nowrap">{{ relTime }}</span>
+          </div>
+          <!-- 右：状态 + 标签 -->
+          <div class="flex items-center gap-1.5 shrink-0">
+            <span
+              v-if="item.status !== 'ready'"
+              :class="currentStatus.class"
+              class="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium leading-none"
+            >
+              {{ currentStatus.label }}
+            </span>
+            <span
+              v-for="tag in tags"
+              :key="tag"
+              class="inline-flex items-center px-1.5 py-0.5 rounded-md text-[11px] font-medium bg-violet-50 text-violet-600 hover:bg-violet-100 hover:text-violet-700 cursor-pointer transition-colors duration-150"
+              @click.stop="emit('tag-click', tag)"
+            >
+              #{{ tag }}
+            </span>
+          </div>
         </div>
       </div>
     </div>

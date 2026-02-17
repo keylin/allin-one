@@ -37,7 +37,7 @@ def _get_defer_app() -> procrastinate.App:
     return _defer_app
 
 
-def sync_defer(task, **kwargs):
+def sync_defer(task, queueing_lock: str | None = None, **kwargs):
     """在同步上下文中提交任务到 Procrastinate
 
     通过独立的 SyncPsycopgConnector 入队, 不依赖异步事件循环。
@@ -45,6 +45,7 @@ def sync_defer(task, **kwargs):
 
     Args:
         task: Procrastinate task (decorated function)
+        queueing_lock: 可选的排队锁，防止同一锁的任务并发执行
         **kwargs: Task arguments
 
     Returns:
@@ -52,10 +53,13 @@ def sync_defer(task, **kwargs):
     """
     app = _get_defer_app()
     queue = task.queue or "default"
-    return app.configure_task(task.name, queue=queue).defer(**kwargs)
+    config_kwargs = {"queue": queue}
+    if queueing_lock:
+        config_kwargs["queueing_lock"] = queueing_lock
+    return app.configure_task(task.name, **config_kwargs).defer(**kwargs)
 
 
-async def async_defer(task, **kwargs):
+async def async_defer(task, queueing_lock: str | None = None, **kwargs):
     """在异步上下文中提交任务到 Procrastinate
 
     通过 proc_app (PsycopgConnector) 的异步 API 入队。
@@ -63,10 +67,14 @@ async def async_defer(task, **kwargs):
 
     Args:
         task: Procrastinate task (decorated function)
+        queueing_lock: 可选的排队锁，防止同一锁的任务并发执行
         **kwargs: Task arguments
 
     Returns:
         Job ID
     """
     queue = task.queue or "default"
-    return await proc_app.configure_task(task.name, queue=queue).defer_async(**kwargs)
+    config_kwargs = {"queue": queue}
+    if queueing_lock:
+        config_kwargs["queueing_lock"] = queueing_lock
+    return await proc_app.configure_task(task.name, **config_kwargs).defer_async(**kwargs)

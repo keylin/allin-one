@@ -6,6 +6,7 @@ import { listPromptTemplates } from '@/api/prompt-templates'
 import { listContent } from '@/api/content'
 import { testStep } from '@/api/pipelines'
 import { useModelOptions } from '@/composables/useModelOptions'
+import { useToast } from '@/composables/useToast'
 import PipelineTemplateFormModal from '@/components/pipeline-template-form-modal.vue'
 import ConfirmDialog from '@/components/confirm-dialog.vue'
 
@@ -64,7 +65,13 @@ function startCreatePT() {
   showPTFormModal.value = true
 }
 
+const { warning } = useToast()
+
 function startEditPT(tpl) {
+  if (tpl.is_builtin) {
+    warning('内置模板不支持编辑')
+    return
+  }
   editingPT.value = tpl
   showPTFormModal.value = true
 }

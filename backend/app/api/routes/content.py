@@ -65,6 +65,25 @@ def _extract_summary_fields(item: ContentItem) -> dict:
     return result
 
 
+def _estimate_reading_time(item: ContentItem) -> int | None:
+    """估算阅读时间（分钟），中文 300 字/分，英文 200 词/分"""
+    text = item.processed_content or ""
+    if not text:
+        return None
+    # 去除 HTML 标签
+    plain = re.sub(r'<[^>]+>', '', text).strip()
+    if not plain:
+        return None
+    # 统计中文字符数
+    chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', plain))
+    # 统计英文单词数（非中文部分）
+    non_chinese = re.sub(r'[\u4e00-\u9fff]', ' ', plain)
+    english_words = len(non_chinese.split())
+    # 计算阅读时间
+    minutes = chinese_chars / 300 + english_words / 200
+    return max(1, round(minutes))
+
+
 def _build_media_summaries(media_items) -> list[dict]:
     """构建媒体项轻量摘要列表"""
     summaries = []
@@ -120,6 +139,7 @@ async def list_content(
     is_unread: bool | None = Query(None, description="未读过滤: true=未读, false=已读"),
     date_from: str | None = Query(None, description="起始日期 YYYY-MM-DD"),
     date_to: str | None = Query(None, description="结束日期 YYYY-MM-DD"),
+    tag: str | None = Query(None, description="按标签筛选"),
     sort_by: str | None = Query(None, description="排序字段: collected_at / published_at / updated_at / title"),
     sort_order: str | None = Query(None, description="排序方向: desc / asc"),
     db: Session = Depends(get_db),
@@ -163,6 +183,14 @@ async def list_content(
             query = query.filter(ContentItem.collected_at <= dt)
         except ValueError:
             pass
+
+    if tag:
+        from sqlalchemy import cast
+        from sqlalchemy.dialects.postgresql import JSONB
+        # analysis_result 是 Text 列存 JSON，需 CAST 为 JSONB 才能用 JSON 操作符
+        query = query.filter(
+            cast(ContentItem.analysis_result, JSONB)["tags"].astext.contains(tag)
+        )
 
     # 排序: 白名单校验，非法值 fallback collected_at desc
     col = SORT_COLUMNS.get(sort_by, ContentItem.collected_at)
@@ -210,6 +238,7 @@ async def list_content(
             mi.media_type == "video" and mi.status == "downloaded"
             for mi in mi_list
         )
+        data["reading_time_min"] = _estimate_reading_time(item)
         result_list.append(data)
 
     return {
@@ -329,6 +358,58 @@ async def batch_toggle_favorite(body: ContentBatchDelete, db: Session = Depends(
     return {"code": 0, "data": {"updated": updated}, "message": "ok"}
 
 
+class MarkAllReadRequest(BaseModel):
+    source_id: str | None = None
+    status: str | None = None
+    has_video: bool | None = None
+    q: str | None = None
+    date_from: str | None = None
+    date_to: str | None = None
+
+
+@router.post("/mark-all-read")
+async def mark_all_read(body: MarkAllReadRequest, db: Session = Depends(get_db)):
+    """将筛选条件下的所有未读内容标记为已读"""
+    query = db.query(ContentItem).filter(
+        (ContentItem.view_count == 0) | (ContentItem.view_count.is_(None))
+    )
+
+    if body.source_id:
+        ids = [s.strip() for s in body.source_id.split(",") if s.strip()]
+        if len(ids) == 1:
+            query = query.filter(ContentItem.source_id == ids[0])
+        elif ids:
+            query = query.filter(ContentItem.source_id.in_(ids))
+    if body.status:
+        query = query.filter(ContentItem.status == body.status)
+    if body.has_video:
+        query = query.filter(
+            ContentItem.media_items.any(MediaItem.media_type == "video")
+        )
+    if body.q:
+        query = query.filter(ContentItem.title.ilike(f"%{body.q}%"))
+    if body.date_from:
+        try:
+            dt = datetime.fromisoformat(body.date_from).replace(tzinfo=None)
+            query = query.filter(ContentItem.collected_at >= dt)
+        except ValueError:
+            pass
+    if body.date_to:
+        try:
+            dt = datetime.fromisoformat(body.date_to).replace(
+                hour=23, minute=59, second=59, tzinfo=None)
+            query = query.filter(ContentItem.collected_at <= dt)
+        except ValueError:
+            pass
+
+    updated = query.update(
+        {ContentItem.view_count: 1, ContentItem.last_viewed_at: utcnow()},
+        synchronize_session=False,
+    )
+    db.commit()
+    return {"code": 0, "data": {"updated": updated}, "message": f"已标记 {updated} 条为已读"}
+
+
 @router.get("/stats")
 async def content_stats(db: Session = Depends(get_db)):
     """内容库统计：按状态分组 + 今日新增 + 已读/未读"""
@@ -399,6 +480,7 @@ async def get_content(content_id: str, db: Session = Depends(get_db)):
     source = db.get(SourceConfig, item.source_id)
     data["source_name"] = source.name if source else None
     data["media_items"] = _build_media_summaries(media_items)
+    data["reading_time_min"] = _estimate_reading_time(item)
     return {"code": 0, "data": data, "message": "ok"}
 
 

@@ -48,6 +48,10 @@ export function batchMarkRead(ids) {
   return api.post('/content/batch-read', { ids })
 }
 
+export function markAllRead(params = {}) {
+  return api.post('/content/mark-all-read', params)
+}
+
 export function batchFavorite(ids) {
   return api.post('/content/batch-favorite', { ids })
 }
