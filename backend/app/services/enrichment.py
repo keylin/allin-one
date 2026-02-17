@@ -108,7 +108,7 @@ def _extract_with_trafilatura(html: str, url: str | None = None) -> str | None:
         include_tables=True,
         include_comments=False,
         include_formatting=True,
-        favor_recall=True,
+        favor_precision=True,
     )
     return result
 
