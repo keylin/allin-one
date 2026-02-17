@@ -1,4 +1,4 @@
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, watch, onUnmounted } from 'vue'
 
 /**
  * 触摸手势处理 composable
@@ -81,23 +81,36 @@ export function useSwipe(targetRef, options = {}) {
     touchEndY.value = 0
   }
 
-  onMounted(() => {
-    const el = targetRef.value
-    if (!el) return
+  // 动态绑定/解绑：targetRef 可能由 v-if 延迟渲染，用 watch 替代 onMounted
+  let currentEl = null
 
-    // 使用 passive: true 提升滚动性能
+  function attachListeners(el) {
+    if (!el || el === currentEl) return
+    detachListeners()
+    currentEl = el
     el.addEventListener('touchstart', handleTouchStart, { passive: true })
     el.addEventListener('touchmove', handleTouchMove, { passive: true })
     el.addEventListener('touchend', handleTouchEnd, { passive: true })
-  })
+  }
+
+  function detachListeners() {
+    if (!currentEl) return
+    currentEl.removeEventListener('touchstart', handleTouchStart)
+    currentEl.removeEventListener('touchmove', handleTouchMove)
+    currentEl.removeEventListener('touchend', handleTouchEnd)
+    currentEl = null
+  }
+
+  watch(() => targetRef.value, (el) => {
+    if (el) {
+      attachListeners(el)
+    } else {
+      detachListeners()
+    }
+  }, { immediate: true })
 
   onUnmounted(() => {
-    const el = targetRef.value
-    if (!el) return
-
-    el.removeEventListener('touchstart', handleTouchStart)
-    el.removeEventListener('touchmove', handleTouchMove)
-    el.removeEventListener('touchend', handleTouchEnd)
+    detachListeners()
   })
 
   return { isSwiping, swipeOffset }

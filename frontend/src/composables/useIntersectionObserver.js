@@ -21,9 +21,11 @@ export function useIntersectionObserver(callback, options = {}) {
 
   onMounted(() => {
     if ('IntersectionObserver' in window) {
+      const resolvedRoot = defaultOptions.root?.value ?? defaultOptions.root ?? null
+      const observerOptions = { ...defaultOptions, root: resolvedRoot }
       observer.value = new IntersectionObserver((entries) => {
         entries.forEach(entry => callback(entry, observer.value))
-      }, defaultOptions)
+      }, observerOptions)
     } else {
       console.warn('IntersectionObserver 不支持，自动标记已读功能已降级')
     }

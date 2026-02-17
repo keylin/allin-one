@@ -33,9 +33,12 @@ export function useAutoRead({ items, leftPanelRef, loadStats }) {
     if (!item || (item.view_count || 0) > 0) return
 
     // 卡片完全滚出顶部视野 → 标记已读
-    // boundingClientRect.bottom < 0 表示卡片完全在视口上方
-    if (!entry.isIntersecting && entry.boundingClientRect.bottom < 0) {
-      markAsRead(itemId)
+    // root 已设为 leftPanelRef，rootBounds 即容器边界，无需手动获取
+    if (!entry.isIntersecting) {
+      const topEdge = entry.rootBounds ? entry.rootBounds.top : 0
+      if (entry.boundingClientRect.bottom < topEdge + 10) {
+        markAsRead(itemId)
+      }
     }
   }
 
@@ -85,6 +88,7 @@ export function useAutoRead({ items, leftPanelRef, loadStats }) {
   const { observe, unobserve, disconnect } = useIntersectionObserver(
     handleCardVisible,
     {
+      root: leftPanelRef,
       threshold: [0, 0.1],
       rootMargin: '0px 0px 0px 0px'
     }
