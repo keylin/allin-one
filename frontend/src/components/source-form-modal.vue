@@ -146,12 +146,6 @@ function serializeConfig() {
   return Object.keys(cfg).length ? JSON.stringify(cfg) : null
 }
 
-// 需要 URL 字段的类型（排除 rss.hub，改用 rsshub_route）
-const needsUrl = computed(() => {
-  const urlTypes = ['rss.standard', 'web.scraper', 'account.generic']
-  return urlTypes.includes(form.value.source_type)
-})
-
 // 有结构化配置的类型
 const hasStructuredConfig = computed(() => ['rss.hub', 'rss.standard', 'web.scraper', 'api.akshare', 'account.bilibili', 'account.generic'].includes(form.value.source_type))
 
@@ -313,107 +307,7 @@ const sectionClass = 'space-y-4 p-4 bg-slate-50/50 rounded-xl border border-slat
           </select>
         </div>
 
-        <!-- URL（按类型显示） -->
-        <div v-if="needsUrl">
-          <label :class="labelClass">
-            {{ form.source_type === 'rss.standard' ? 'Feed URL *' : 'URL' }}
-          </label>
-          <input
-            v-model="form.url"
-            type="text"
-            :class="inputClass"
-            :placeholder="form.source_type === 'rss.standard' ? 'https://example.com/feed.xml' : '订阅或采集地址'"
-            :required="form.source_type === 'rss.standard'"
-          />
-        </div>
-
-        <!-- 描述 -->
-        <div>
-          <label :class="labelClass">描述</label>
-          <textarea v-model="form.description" rows="2" :class="[inputClass, 'resize-none']" placeholder="可选描述"></textarea>
-        </div>
-
-        <!-- 后置处理模板 -->
-        <div>
-          <label :class="labelClass">后置处理流水线</label>
-          <select v-model="form.pipeline_template_id" :class="selectClass">
-            <option value="">不绑定（仅自动预处理）</option>
-            <option v-for="t in templates" :key="t.id" :value="t.id">{{ t.name }}</option>
-          </select>
-          <p class="mt-1 text-xs text-slate-400">预处理（媒体下载）自动执行，此处配置后续的分析、翻译、推送等</p>
-        </div>
-
-        <!-- 定时采集 -->
-        <div :class="sectionClass">
-          <h4 class="text-sm font-semibold text-slate-800">定时调度</h4>
-          <div class="flex items-center gap-3">
-            <input
-              v-model="form.schedule_enabled"
-              type="checkbox"
-              id="schedule_enabled"
-              class="h-4 w-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"
-            />
-            <label for="schedule_enabled" class="text-sm font-medium text-slate-700">启用定时采集</label>
-          </div>
-
-          <template v-if="form.schedule_enabled">
-            <div>
-              <label :class="labelClass">调度模式</label>
-              <select v-model="form.schedule_mode" :class="selectClass">
-                <option value="auto">智能调度（根据活跃度自动调整）</option>
-                <option value="fixed">固定间隔</option>
-                <option value="manual">仅手动采集</option>
-              </select>
-            </div>
-
-            <!-- 固定模式：显示间隔输入框 -->
-            <div v-if="form.schedule_mode === 'fixed'">
-              <label :class="labelClass">采集间隔 (秒)</label>
-              <input v-model.number="form.schedule_interval_override" type="number" min="60" :class="inputClass" placeholder="例: 3600 (1小时)" />
-            </div>
-
-            <!-- 自动模式：显示系统计算的间隔（只读） -->
-            <div v-else-if="form.schedule_mode === 'auto' && form.calculated_interval">
-              <label :class="labelClass">当前计算间隔</label>
-              <div class="px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-600">
-                {{ formatInterval(form.calculated_interval) }}
-                <span class="text-xs text-slate-400 ml-2">(系统根据采集历史自动调整)</span>
-              </div>
-            </div>
-
-            <!-- 手动模式：提示信息 -->
-            <div v-else-if="form.schedule_mode === 'manual'">
-              <p class="text-sm text-slate-500 px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl">
-                手动模式下，数据源不会自动采集，仅通过手动触发或 API 调用采集。
-              </p>
-            </div>
-          </template>
-
-          <p class="text-xs text-slate-400">
-            智能调度根据数据源的历史采集情况（新增内容数、成功率、趋势）动态调整采集频率。
-          </p>
-        </div>
-
-        <!-- 内容保留 -->
-        <div :class="sectionClass">
-          <h4 class="text-sm font-semibold text-slate-800">内容保留</h4>
-          <div class="flex items-center gap-3">
-            <input
-              v-model="form.auto_cleanup_enabled"
-              type="checkbox"
-              id="auto_cleanup_enabled"
-              class="h-4 w-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"
-            />
-            <label for="auto_cleanup_enabled" class="text-sm font-medium text-slate-700">启用自动清理</label>
-          </div>
-          <div v-if="form.auto_cleanup_enabled">
-            <label :class="labelClass">保留天数</label>
-            <input v-model.number="form.retention_days" type="number" min="1" :class="inputClass" placeholder="留空则使用全局默认值" />
-          </div>
-          <p class="text-xs text-slate-400">超过保留期的内容将自动删除，收藏或有笔记的内容不受影响</p>
-        </div>
-
-        <!-- ========== 结构化配置区域 ========== -->
+        <!-- ========== 核心配置层（类型相关，紧跟类型选择） ========== -->
 
         <!-- RSSHub -->
         <div v-if="form.source_type === 'rss.hub'" :class="sectionClass">
@@ -437,12 +331,25 @@ const sectionClass = 'space-y-4 p-4 bg-slate-50/50 rounded-xl border border-slat
         <!-- RSS Standard -->
         <div v-else-if="form.source_type === 'rss.standard'" :class="sectionClass">
           <h4 class="text-sm font-semibold text-slate-800">RSS/Atom 配置</h4>
-          <p class="text-sm text-slate-500">在上方 URL 栏填写 Feed 地址即可，无需额外配置。</p>
+          <div>
+            <label :class="labelClass">Feed URL *</label>
+            <input
+              v-model="form.url"
+              type="text"
+              :class="inputClass"
+              placeholder="https://example.com/feed.xml"
+              required
+            />
+          </div>
         </div>
 
         <!-- Web Scraper -->
         <div v-else-if="form.source_type === 'web.scraper'" :class="sectionClass">
           <h4 class="text-sm font-semibold text-slate-800">网页抓取配置</h4>
+          <div>
+            <label :class="labelClass">目标 URL *</label>
+            <input v-model="form.url" type="text" :class="inputClass" placeholder="https://example.com/articles" />
+          </div>
           <div>
             <label :class="labelClass">条目选择器 *</label>
             <input v-model="configForm.item_selector" type="text" :class="inputClass" placeholder=".article-item" />
@@ -657,6 +564,105 @@ const sectionClass = 'space-y-4 p-4 bg-slate-50/50 rounded-xl border border-slat
             <template v-else>系统通知类型无需额外配置。</template>
           </p>
         </div>
+
+        <!-- ========== 辅助配置层 ========== -->
+
+        <!-- 描述 -->
+        <div>
+          <label :class="labelClass">描述</label>
+          <textarea v-model="form.description" rows="2" :class="[inputClass, 'resize-none']" placeholder="可选描述"></textarea>
+        </div>
+
+        <!-- 后置处理模板 -->
+        <div>
+          <label :class="labelClass">后置处理流水线</label>
+          <select v-model="form.pipeline_template_id" :class="selectClass">
+            <option value="">不绑定（仅自动预处理）</option>
+            <option v-for="t in templates" :key="t.id" :value="t.id">{{ t.name }}</option>
+          </select>
+          <p class="mt-1 text-xs text-slate-400">预处理（媒体下载）自动执行，此处配置后续的分析、翻译、推送等</p>
+        </div>
+
+        <!-- 高级设置（折叠面板） -->
+        <details class="group">
+          <summary class="flex items-center justify-between cursor-pointer select-none p-4 bg-slate-50/50 rounded-xl border border-slate-100 hover:bg-slate-50 transition-colors">
+            <span class="text-sm font-semibold text-slate-800">高级设置</span>
+            <svg class="w-4 h-4 text-slate-400 transition-transform group-open:rotate-180" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+            </svg>
+          </summary>
+          <div class="mt-4 space-y-5 pl-1">
+            <!-- 定时采集 -->
+            <div>
+              <h4 class="text-sm font-medium text-slate-700 mb-2">定时调度</h4>
+              <div class="flex items-center gap-3">
+                <input
+                  v-model="form.schedule_enabled"
+                  type="checkbox"
+                  id="schedule_enabled"
+                  class="h-4 w-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"
+                />
+                <label for="schedule_enabled" class="text-sm text-slate-600">启用定时采集</label>
+              </div>
+
+              <template v-if="form.schedule_enabled">
+                <div class="mt-3">
+                  <label :class="labelClass">调度模式</label>
+                  <select v-model="form.schedule_mode" :class="selectClass">
+                    <option value="auto">智能调度（根据活跃度自动调整）</option>
+                    <option value="fixed">固定间隔</option>
+                    <option value="manual">仅手动采集</option>
+                  </select>
+                </div>
+
+                <!-- 固定模式：显示间隔输入框 -->
+                <div v-if="form.schedule_mode === 'fixed'" class="mt-3">
+                  <label :class="labelClass">采集间隔 (秒)</label>
+                  <input v-model.number="form.schedule_interval_override" type="number" min="60" :class="inputClass" placeholder="例: 3600 (1小时)" />
+                </div>
+
+                <!-- 自动模式：显示系统计算的间隔（只读） -->
+                <div v-else-if="form.schedule_mode === 'auto' && form.calculated_interval" class="mt-3">
+                  <label :class="labelClass">当前计算间隔</label>
+                  <div class="px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-600">
+                    {{ formatInterval(form.calculated_interval) }}
+                    <span class="text-xs text-slate-400 ml-2">(系统根据采集历史自动调整)</span>
+                  </div>
+                </div>
+
+                <!-- 手动模式：提示信息 -->
+                <div v-else-if="form.schedule_mode === 'manual'" class="mt-3">
+                  <p class="text-sm text-slate-500 px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl">
+                    手动模式下，数据源不会自动采集，仅通过手动触发或 API 调用采集。
+                  </p>
+                </div>
+              </template>
+
+              <p class="mt-2 text-xs text-slate-400">
+                智能调度根据数据源的历史采集情况（新增内容数、成功率、趋势）动态调整采集频率。
+              </p>
+            </div>
+
+            <!-- 内容保留 -->
+            <div>
+              <h4 class="text-sm font-medium text-slate-700 mb-2">内容保留</h4>
+              <div class="flex items-center gap-3">
+                <input
+                  v-model="form.auto_cleanup_enabled"
+                  type="checkbox"
+                  id="auto_cleanup_enabled"
+                  class="h-4 w-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"
+                />
+                <label for="auto_cleanup_enabled" class="text-sm text-slate-600">启用自动清理</label>
+              </div>
+              <div v-if="form.auto_cleanup_enabled" class="mt-3">
+                <label :class="labelClass">保留天数</label>
+                <input v-model.number="form.retention_days" type="number" min="1" :class="inputClass" placeholder="留空则使用全局默认值" />
+              </div>
+              <p class="mt-2 text-xs text-slate-400">超过保留期的内容将自动删除，收藏或有笔记的内容不受影响</p>
+            </div>
+          </div>
+        </details>
 
         <!-- 按钮 -->
         <div class="flex justify-end gap-3 pt-5 border-t border-slate-100">

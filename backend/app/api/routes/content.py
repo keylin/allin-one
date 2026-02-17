@@ -3,13 +3,16 @@
 import json
 import logging
 import re
+import shutil
 from datetime import datetime
+from pathlib import Path
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, noload
 from sqlalchemy import func
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.time import utcnow
 from app.core.timezone_utils import get_local_day_boundaries
@@ -244,6 +247,12 @@ async def delete_all_content(db: Session = Depends(get_db)):
     deleted = db.query(ContentItem).delete(synchronize_session=False)
     db.commit()
 
+    # 清理磁盘文件：删除整个 media 目录后重建
+    media_dir = Path(settings.MEDIA_DIR)
+    if media_dir.is_dir():
+        shutil.rmtree(media_dir, ignore_errors=True)
+        media_dir.mkdir(parents=True, exist_ok=True)
+
     logger.info(f"Deleted all content: {deleted} items")
     return {"code": 0, "data": {"deleted": deleted}, "message": f"已删除全部 {deleted} 条内容"}
 
@@ -251,10 +260,12 @@ async def delete_all_content(db: Session = Depends(get_db)):
 @router.post("/batch-delete")
 async def batch_delete(body: ContentBatchDelete, db: Session = Depends(get_db)):
     """批量删除内容（级联删除关联流水线）"""
+    content_ids = body.ids  # 保存，后续用于删除物理文件
+
     # 找到关联的 pipeline_execution ids
     execution_ids = [
         eid for (eid,) in db.query(PipelineExecution.id)
-        .filter(PipelineExecution.content_id.in_(body.ids))
+        .filter(PipelineExecution.content_id.in_(content_ids))
         .all()
     ]
     if execution_ids:
@@ -268,15 +279,28 @@ async def batch_delete(body: ContentBatchDelete, db: Session = Depends(get_db)):
 
     # 删除关联的 MediaItem（bulk delete 不触发 ORM cascade）
     db.query(MediaItem).filter(
-        MediaItem.content_id.in_(body.ids)
+        MediaItem.content_id.in_(content_ids)
     ).delete(synchronize_session=False)
 
     deleted = (
         db.query(ContentItem)
-        .filter(ContentItem.id.in_(body.ids))
+        .filter(ContentItem.id.in_(content_ids))
         .delete(synchronize_session=False)
     )
     db.commit()
+
+    # 清理磁盘文件
+    media_base = Path(settings.MEDIA_DIR)
+    for content_id in content_ids:
+        # 删除 media/{content_id}/ 目录
+        media_dir = media_base / content_id
+        if media_dir.is_dir():
+            shutil.rmtree(media_dir, ignore_errors=True)
+
+        # 删除 media/audio/{content_id}/ 目录
+        audio_dir = media_base / "audio" / content_id
+        if audio_dir.is_dir():
+            shutil.rmtree(audio_dir, ignore_errors=True)
 
     logger.info(f"Batch deleted {deleted} content items ({len(execution_ids)} pipelines)")
     return {"code": 0, "data": {"deleted": deleted}, "message": "ok"}
