@@ -77,21 +77,29 @@ function onThumbError(e) {
     class="group bg-white rounded-xl border overflow-hidden cursor-pointer relative"
     :class="[
       // 基础过渡
-      'transition-all duration-300',
+      'transition-all duration-200 ease-out',
 
       // 选中状态（优先级最高）
       selected
-        ? 'ring-2 ring-indigo-500 border-indigo-300 shadow-md'
-        : 'border-slate-200/80 hover:shadow-md hover:border-slate-300',
-
-      // 未读样式: 左边框 + 正常色
-      !isRead && 'border-l-4 border-l-indigo-500',
+        ? 'bg-indigo-50/80 border-indigo-300 shadow-sm'
+        : 'border-slate-200/80 hover:shadow-md hover:border-slate-300 hover:-translate-y-0.5',
 
       // 已读样式: 整体变灰
       isRead && 'opacity-60'
     ]"
     @click="emit('click', item)"
   >
+    <!-- 选中态左侧竖条 -->
+    <div
+      v-if="selected"
+      class="absolute left-0 top-0 bottom-0 w-1 bg-indigo-500 rounded-l-lg"
+    ></div>
+
+    <!-- 未读状态小圆点 -->
+    <div
+      v-if="!isRead"
+      class="absolute left-2 top-1/2 -translate-y-1/2 w-1.5 h-4 bg-blue-500 rounded-full"
+    ></div>
     <div class="flex">
       <!-- 视频封面（左侧） -->
       <div
@@ -117,7 +125,10 @@ function onThumbError(e) {
       </div>
 
       <!-- 内容区域 -->
-      <div class="flex-1 min-w-0 px-4 py-3">
+      <div
+        class="flex-1 min-w-0 py-3"
+        :class="showThumbnail ? 'px-4' : (isRead ? 'px-4' : 'pl-6 pr-4')"
+      >
         <!-- 第一行：标题 + 收藏 -->
         <div class="flex items-start gap-2">
           <!-- 媒体类型小图标 + sentiment 色点 -->

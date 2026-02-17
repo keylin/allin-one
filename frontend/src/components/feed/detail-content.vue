@@ -281,7 +281,7 @@ defineExpose({ resetViewMode })
   />
 
   <!-- AI 分析结果 -->
-  <div v-if="item.analysis_result" class="bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl p-4 md:p-6 border border-indigo-100">
+  <div v-if="item.analysis_result" class="bg-slate-50 rounded-xl p-4 md:p-6 border-l-4 border-l-indigo-400">
     <h3 class="text-sm md:text-base font-semibold text-slate-900 mb-3 md:mb-4 flex items-center gap-2">
       <svg class="w-4 md:w-5 h-4 md:h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
         <path stroke-linecap="round" stroke-linejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
@@ -292,7 +292,7 @@ defineExpose({ resetViewMode })
   </div>
 
   <!-- 正文内容（智能选择最佳版本） -->
-  <div v-if="displayedBodyHtml" class="bg-slate-50 rounded-xl p-4 md:p-6">
+  <div v-if="displayedBodyHtml" class="bg-white rounded-xl p-5 md:p-8 shadow-sm border border-slate-100">
     <div class="flex items-center justify-between mb-3 md:mb-4">
       <h3 class="text-sm md:text-base font-semibold text-slate-900 flex items-center gap-2">
         <svg class="w-4 md:w-5 h-4 md:h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">

@@ -415,6 +415,23 @@ async function loadStats() {
   } catch (_) { /* ignore */ }
 }
 
+// --- Stats polling ---
+let statsPollingTimer = null
+
+function startStatsPolling() {
+  if (statsPollingTimer) return
+  statsPollingTimer = setInterval(() => {
+    loadStats()
+  }, 60000) // 60秒
+}
+
+function stopStatsPolling() {
+  if (statsPollingTimer) {
+    clearInterval(statsPollingTimer)
+    statsPollingTimer = null
+  }
+}
+
 // 初始化手势
 const { isSwiping, swipeOffset } = useSwipe(mobileDetailRef, {
   threshold: 80,
@@ -426,6 +443,7 @@ const { isSwiping, swipeOffset } = useSwipe(mobileDetailRef, {
 onMounted(async () => {
   fetchItems(true)
   loadStats()
+  startStatsPolling()
   try {
     const res = await listSourceOptions()
     if (res.code === 0) sourceOptions.value = res.data
@@ -436,6 +454,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   clearTimeout(searchTimer)
+  stopStatsPolling()
   cancelChat()
   document.removeEventListener('keydown', handleKeydown)
   document.removeEventListener('click', handleClickOutside)
@@ -457,7 +476,15 @@ onUnmounted(() => {
           <!-- 计数 + 排序 -->
           <div class="flex items-center justify-between">
             <div class="flex items-center gap-3">
-              <p class="text-xs text-slate-400">{{ totalCount }} 条内容</p>
+              <p class="text-xs text-slate-400">
+                <span v-if="contentStats.unread > 0" class="inline-flex items-center gap-1">
+                  <span class="inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1.5 text-xs font-medium rounded-full bg-indigo-100 text-indigo-700">
+                    {{ contentStats.unread }}
+                  </span>
+                  <span>未读</span>
+                </span>
+                <span v-else class="text-slate-300">已全部阅读</span>
+              </p>
             </div>
             <select
               :value="sortBy"
@@ -578,43 +605,43 @@ onUnmounted(() => {
           <div v-if="hasActiveFilters" class="flex items-center gap-1.5 flex-wrap">
             <span
               v-if="searchQuery.trim()"
-              class="inline-flex items-center gap-1 px-2 py-0.5 bg-indigo-50 text-indigo-700 text-xs font-medium rounded-full"
+              class="inline-flex items-center gap-1 px-2.5 py-1 bg-indigo-100 text-indigo-700 text-xs font-medium rounded-full shadow-sm border border-indigo-200/50"
             >
               搜索:{{ searchQuery.trim() }}
-              <button @click="clearSearch" class="ml-0.5 hover:text-indigo-900">&times;</button>
+              <button @click="clearSearch" class="ml-0.5 hover:text-indigo-900 transition-colors">&times;</button>
             </span>
             <span
               v-for="(name, i) in activeSourceNames"
               :key="'src-' + i"
-              class="inline-flex items-center gap-1 px-2 py-0.5 bg-indigo-50 text-indigo-700 text-xs font-medium rounded-full"
+              class="inline-flex items-center gap-1 px-2.5 py-1 bg-indigo-100 text-indigo-700 text-xs font-medium rounded-full shadow-sm border border-indigo-200/50"
             >
               {{ name }}
-              <button @click="toggleSourceFilter(filterSources[i])" class="ml-0.5 hover:text-indigo-900">&times;</button>
+              <button @click="toggleSourceFilter(filterSources[i])" class="ml-0.5 hover:text-indigo-900 transition-colors">&times;</button>
             </span>
             <span
               v-if="filterStatus"
-              class="inline-flex items-center gap-1 px-2 py-0.5 bg-indigo-50 text-indigo-700 text-xs font-medium rounded-full"
+              class="inline-flex items-center gap-1 px-2.5 py-1 bg-indigo-100 text-indigo-700 text-xs font-medium rounded-full shadow-sm border border-indigo-200/50"
             >
               状态:{{ statusOptions.find(s => s.value === filterStatus)?.label }}
-              <button @click="clearStatus" class="ml-0.5 hover:text-indigo-900">&times;</button>
+              <button @click="clearStatus" class="ml-0.5 hover:text-indigo-900 transition-colors">&times;</button>
             </span>
             <span
               v-if="showUnreadOnly"
-              class="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-50 text-blue-700 text-xs font-medium rounded-full"
+              class="inline-flex items-center gap-1 px-2.5 py-1 bg-blue-100 text-blue-700 text-xs font-medium rounded-full shadow-sm border border-blue-200/50"
             >
               未读
-              <button @click="clearUnread" class="ml-0.5 hover:text-blue-900">&times;</button>
+              <button @click="clearUnread" class="ml-0.5 hover:text-blue-900 transition-colors">&times;</button>
             </span>
             <span
               v-if="showFavoritesOnly"
-              class="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-50 text-amber-700 text-xs font-medium rounded-full"
+              class="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-100 text-amber-700 text-xs font-medium rounded-full shadow-sm border border-amber-200/50"
             >
               收藏
-              <button @click="clearFavorites" class="ml-0.5 hover:text-amber-900">&times;</button>
+              <button @click="clearFavorites" class="ml-0.5 hover:text-amber-900 transition-colors">&times;</button>
             </span>
             <button
               @click="clearAllFilters"
-              class="text-xs text-slate-400 hover:text-slate-600 transition-colors"
+              class="text-xs text-slate-400 hover:text-slate-600 transition-colors px-2 py-1"
             >
               清除全部
             </button>
@@ -638,25 +665,31 @@ onUnmounted(() => {
 
         <!-- 卡片列表 -->
         <div class="px-4 py-3">
-          <!-- Loading -->
-          <div v-if="loading" class="flex items-center justify-center py-16">
-            <svg class="w-8 h-8 animate-spin text-slate-300" fill="none" viewBox="0 0 24 24">
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-            </svg>
+          <!-- Loading skeleton -->
+          <div v-if="loading" class="space-y-3">
+            <div v-for="i in 4" :key="i" class="animate-pulse bg-white rounded-xl border border-slate-200 p-4">
+              <div class="flex items-start gap-2">
+                <div class="w-4 h-4 bg-slate-200 rounded shrink-0"></div>
+                <div class="flex-1 space-y-2">
+                  <div class="h-4 bg-slate-200 rounded w-3/4"></div>
+                  <div class="h-3 bg-slate-100 rounded w-1/2"></div>
+                  <div class="h-3 bg-slate-100 rounded w-2/3"></div>
+                </div>
+              </div>
+            </div>
           </div>
 
           <!-- Empty -->
           <div v-else-if="items.length === 0" class="text-center py-16">
-            <div class="w-16 h-16 bg-slate-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
-              <svg class="w-8 h-8 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+            <div class="w-20 h-20 bg-gradient-to-br from-indigo-50 to-purple-50 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-inner">
+              <svg class="w-10 h-10 text-indigo-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M12 7.5h1.5m-1.5 3h1.5m-7.5 3h7.5m-7.5 3h7.5m3-9h3.375c.621 0 1.125.504 1.125 1.125V18a2.25 2.25 0 01-2.25 2.25M16.5 7.5V18a2.25 2.25 0 002.25 2.25M16.5 7.5V4.875c0-.621-.504-1.125-1.125-1.125H4.125C3.504 3.75 3 4.254 3 4.875V18a2.25 2.25 0 002.25 2.25h13.5M6 7.5h3v3H6v-3z" />
               </svg>
             </div>
-            <p class="text-sm text-slate-500 font-medium mb-1">
+            <p class="text-base text-slate-600 font-medium mb-1">
               {{ hasActiveFilters ? '没有找到匹配的内容' : '暂无内容' }}
             </p>
-            <p class="text-xs text-slate-400">
+            <p class="text-sm text-slate-400">
               {{ hasActiveFilters ? '试试调整筛选条件' : '添加数据源后内容会自动出现在这里' }}
             </p>
           </div>
@@ -701,13 +734,13 @@ onUnmounted(() => {
         <!-- 空状态 -->
         <div v-if="!selectedId" class="flex-1 flex items-center justify-center">
           <div class="text-center">
-            <div class="w-20 h-20 bg-slate-50 rounded-2xl flex items-center justify-center mx-auto mb-4">
-              <svg class="w-10 h-10 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
+            <div class="w-24 h-24 bg-gradient-to-br from-indigo-50 to-purple-50 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-inner">
+              <svg class="w-12 h-12 text-indigo-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
               </svg>
             </div>
-            <p class="text-sm text-slate-400 font-medium">选择一篇文章查看</p>
-            <p class="text-xs text-slate-300 mt-1">使用 ↑↓ 键快速切换</p>
+            <p class="text-base text-slate-500 font-medium">选择一篇文章查看</p>
+            <p class="text-sm text-slate-400 mt-1">使用 ↑↓ 键快速切换</p>
           </div>
         </div>
 

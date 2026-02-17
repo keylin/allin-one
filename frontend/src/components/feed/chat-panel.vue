@@ -23,10 +23,10 @@ const emit = defineEmits(['update:input', 'send', 'cancel', 'clear', 'keydown'])
       :class="msg.role === 'user' ? 'justify-end' : 'justify-start'"
     >
       <div
-        class="max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed"
+        class="max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed transition-all duration-200"
         :class="msg.role === 'user'
-          ? 'bg-indigo-600 text-white rounded-br-md'
-          : 'bg-slate-100 text-slate-700 rounded-bl-md'"
+          ? 'bg-indigo-600 text-white rounded-br-md shadow-sm'
+          : 'bg-slate-50 text-slate-700 rounded-bl-md border border-slate-200/50'"
       >
         <div
           v-if="msg.role === 'assistant'"
@@ -54,7 +54,7 @@ const emit = defineEmits(['update:input', 'send', 'cancel', 'clear', 'keydown'])
   margin-bottom: 0;
 }
 .chat-markdown :deep(code) {
-  background: rgba(0,0,0,0.06);
+  background: rgba(0,0,0,0.04);
   padding: 0.15em 0.3em;
   border-radius: 0.25em;
   font-size: 0.9em;
