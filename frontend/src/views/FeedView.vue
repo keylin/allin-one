@@ -246,7 +246,7 @@ async function fetchItems(reset = false) {
         items.value = res.data
         totalCount.value = res.total
       } else {
-        items.value.push(...res.data)
+        items.value = [...items.value, ...res.data]
       }
       hasMore.value = items.value.length < res.total
     }
