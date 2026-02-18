@@ -165,7 +165,7 @@ defineExpose({ resetViewMode })
   <div>
     <div class="flex items-start justify-between gap-3">
       <h2 class="text-base md:text-xl font-bold text-slate-900 mb-1 md:mb-2 min-w-0 line-clamp-2" :title="item.title">{{ item.title }}</h2>
-      <div class="flex items-center gap-1 shrink-0">
+      <div class="hidden md:flex items-center gap-1 shrink-0">
         <a
           v-if="item.url"
           :href="item.url"
@@ -204,6 +204,29 @@ defineExpose({ resetViewMode })
       </div>
     </div>
     <div class="flex items-center gap-1.5 md:gap-2 text-xs md:text-sm text-slate-400 flex-wrap">
+      <!-- 移动端收藏+跳转 -->
+      <div class="flex items-center gap-0.5 md:hidden -ml-1">
+        <button
+          class="p-1 rounded-md transition-all"
+          :class="item.is_favorited ? 'text-amber-500' : 'text-slate-400'"
+          @click="emit('favorite')"
+        >
+          <svg class="w-4 h-4" :fill="item.is_favorited ? 'currentColor' : 'none'" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.563.563 0 00-.586 0L6.982 20.54a.562.562 0 01-.84-.61l1.285-5.386a.562.562 0 00-.182-.557l-4.204-3.602a.563.563 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z" />
+          </svg>
+        </button>
+        <a
+          v-if="item.url"
+          :href="item.url"
+          target="_blank"
+          rel="noopener"
+          class="p-1 rounded-md text-slate-400 hover:text-indigo-600 transition-all"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+          </svg>
+        </a>
+      </div>
       <span class="inline-flex items-center gap-1.5 font-medium text-slate-500">
         <span class="w-2 h-2 rounded-full bg-indigo-400 shrink-0"></span>
         {{ item.source_name || '未知来源' }}
@@ -298,7 +321,7 @@ defineExpose({ resetViewMode })
   </div>
 
   <!-- 正文内容（智能选择最佳版本） -->
-  <div v-if="displayedBodyHtml" class="bg-white rounded-xl p-4 md:p-8 shadow-sm border border-slate-100 relative">
+  <div v-if="displayedBodyHtml" class="bg-white rounded-xl p-4 md:p-6 shadow-sm border border-slate-100 relative">
     <div v-if="hasBothVersions" class="absolute top-4 right-4 z-10">
       <button
         class="inline-flex items-center gap-1.5 px-2.5 md:px-3 py-1 text-xs font-medium rounded-lg border border-slate-200 text-slate-500 hover:text-slate-700 hover:border-slate-300 bg-white transition-all shadow-sm"
@@ -314,7 +337,7 @@ defineExpose({ resetViewMode })
   </div>
 
   <!-- Slot for chat messages -->
-  <slot></slot>
+  <div class="!mt-3"><slot></slot></div>
 
   <!-- 富化对比弹窗 -->
   <Teleport to="body">

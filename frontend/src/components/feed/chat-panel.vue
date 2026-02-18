@@ -10,7 +10,7 @@ const emit = defineEmits(['update:input', 'send', 'cancel', 'clear', 'keydown'])
 
 <template>
   <!-- AI 对话消息（嵌入内容区域） -->
-  <div v-if="messages.length" class="space-y-3 pt-2">
+  <div v-if="messages.length" class="space-y-3 pt-0">
     <div class="flex items-center gap-2 text-xs text-slate-400">
       <div class="flex-1 border-t border-slate-200"></div>
       <span>AI 对话</span>

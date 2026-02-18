@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { listContent, getContent, analyzeContent, toggleFavorite, listSourceOptions, enrichContent, applyEnrichment, getContentStats, markAllRead } from '@/api/content'
 import { useToast } from '@/composables/useToast'
 import { useSwipe } from '@/composables/useSwipe'
+import { usePullToRefresh } from '@/composables/usePullToRefresh'
 import { useAutoRead } from '@/composables/useAutoRead'
 import { useContentChat } from '@/composables/useContentChat'
 import FeedCard from '@/components/feed-card.vue'
@@ -653,11 +654,21 @@ function stopStatsPolling() {
 }
 
 // 初始化手势
-const { isSwiping, swipeOffset } = useSwipe(mobileDetailRef, {
+useSwipe(mobileDetailRef, {
   threshold: 80,
   onSwipeRight: () => {
     closeMobileDetail()
   }
+})
+
+// 下拉刷新
+const { isPulling, pullDistance, isRefreshing } = usePullToRefresh(leftPanelRef, {
+  onRefresh: async () => { await fetchItems(true); await loadStats() }
+})
+
+const pullOffset = computed(() => {
+  if (isRefreshing.value) return 48
+  return isPulling.value ? pullDistance.value : 0
 })
 
 onMounted(async () => {
@@ -688,10 +699,39 @@ onUnmounted(() => {
       <!-- 左栏：列表 -->
       <div
         ref="leftPanelRef"
-        class="w-full md:w-[480px] md:shrink-0 md:border-r border-slate-200 overflow-y-auto"
+        class="w-full md:w-[480px] md:shrink-0 md:border-r border-slate-200 overflow-y-auto relative"
         :class="{ 'hidden md:block': showMobileDetail }"
         @scroll="handleLeftScroll"
       >
+        <!-- 下拉刷新指示器 -->
+        <div
+          v-if="isPulling || isRefreshing"
+          class="absolute top-0 inset-x-0 flex items-center justify-center z-30 pointer-events-none"
+          :style="{ height: pullOffset + 'px' }"
+        >
+          <!-- 刷新中：spinner -->
+          <svg v-if="isRefreshing" class="w-5 h-5 animate-spin text-indigo-500" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+          </svg>
+          <!-- 拉动中：箭头（超过阈值旋转 180°） -->
+          <svg
+            v-else
+            class="w-5 h-5 text-slate-400 transition-transform duration-200"
+            :style="{ transform: pullDistance >= 64 ? 'rotate(180deg)' : 'rotate(0deg)' }"
+            fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+          </svg>
+        </div>
+
+        <!-- 内容 wrapper，拉动时 translateY 下移 -->
+        <div
+          :style="{
+            transform: `translateY(${pullOffset}px)`,
+            transition: (isPulling ? 'none' : 'transform 0.3s ease-out')
+          }"
+        >
         <div class="px-3 md:px-4 pt-2 md:pt-3 pb-1.5 md:pb-2 space-y-1.5 md:space-y-2.5 sticky top-0 bg-white z-10 border-b border-slate-100">
           <!-- 计数 + 排序 + 密度切换 -->
           <div class="flex items-center justify-between">
@@ -1019,6 +1059,7 @@ onUnmounted(() => {
             </div>
           </div>
         </div>
+        </div><!-- /content wrapper (translateY) -->
       </div>
 
       <!-- 右栏：详情 (桌面端始终显示, 移动端滑入覆盖) -->
@@ -1046,7 +1087,7 @@ onUnmounted(() => {
 
         <!-- 详情内容 -->
         <div v-else-if="detailContent" class="flex-1 min-w-0 flex flex-col">
-          <div ref="rightPanelRef" class="flex-1 overflow-y-auto overflow-x-hidden p-6 space-y-6">
+          <div ref="rightPanelRef" class="flex-1 overflow-y-auto overflow-x-hidden p-6 space-y-4">
             <DetailContent
               ref="detailContentRef"
               :item="detailContent"
@@ -1125,7 +1166,6 @@ onUnmounted(() => {
           v-if="showMobileDetail && selectedId"
           ref="mobileDetailRef"
           class="fixed inset-x-0 top-0 h-[100dvh] z-40 bg-white flex flex-col md:hidden"
-          :style="isSwiping ? { transform: `translateX(${Math.max(0, swipeOffset)}px)` } : {}"
         >
           <!-- 移动端返回 -->
           <button
