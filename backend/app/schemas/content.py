@@ -29,6 +29,7 @@ class ContentResponse(BaseModel):
     published_at: Optional[datetime] = None
     collected_at: Optional[datetime] = None
     is_favorited: bool = False
+    favorited_at: Optional[datetime] = None
     user_note: Optional[str] = None
     view_count: int = 0
     last_viewed_at: Optional[datetime] = None

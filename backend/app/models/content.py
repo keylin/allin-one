@@ -170,6 +170,7 @@ class ContentItem(Base):
     collected_at = Column(DateTime, default=_utcnow)  # 采集时间
 
     is_favorited = Column(Boolean, default=False)
+    favorited_at = Column(DateTime, nullable=True)
     user_note = Column(Text)
 
     view_count = Column(Integer, default=0)

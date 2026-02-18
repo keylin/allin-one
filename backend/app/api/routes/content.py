@@ -124,6 +124,7 @@ SORT_COLUMNS = {
     'title': ContentItem.title,
     'view_count': ContentItem.view_count,
     'last_viewed_at': ContentItem.last_viewed_at,
+    'favorited_at': ContentItem.favorited_at,
 }
 
 
@@ -355,9 +356,10 @@ async def batch_mark_read(body: ContentBatchDelete, db: Session = Depends(get_db
 @router.post("/batch-favorite")
 async def batch_toggle_favorite(body: ContentBatchDelete, db: Session = Depends(get_db)):
     """批量收藏"""
+    now = utcnow()
     updated = db.query(ContentItem).filter(
         ContentItem.id.in_(body.ids)
-    ).update({ContentItem.is_favorited: True, ContentItem.updated_at: utcnow()},
+    ).update({ContentItem.is_favorited: True, ContentItem.favorited_at: now, ContentItem.updated_at: now},
              synchronize_session=False)
     db.commit()
     return {"code": 0, "data": {"updated": updated}, "message": "ok"}
@@ -611,6 +613,7 @@ async def toggle_favorite(content_id: str, db: Session = Depends(get_db)):
     # 切换收藏状态
     was_favorited = item.is_favorited
     item.is_favorited = not item.is_favorited
+    item.favorited_at = utcnow() if item.is_favorited else None
     item.updated_at = utcnow()
     db.commit()
     db.refresh(item)
