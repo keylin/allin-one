@@ -5,7 +5,7 @@ import { listContent, getContent, analyzeContent, toggleFavorite, listSourceOpti
 import { useToast } from '@/composables/useToast'
 import { useSwipe } from '@/composables/useSwipe'
 import { useAutoRead } from '@/composables/useAutoRead'
-import { useFeedChat } from '@/composables/useFeedChat'
+import { useContentChat } from '@/composables/useContentChat'
 import FeedCard from '@/components/feed-card.vue'
 import DetailContent from '@/components/feed/detail-content.vue'
 import ChatPanel from '@/components/feed/chat-panel.vue'
@@ -143,14 +143,16 @@ const {
   chatMessages,
   chatInput,
   chatStreaming,
+  chatLoading: chatHistoryLoading,
   chatInputRef,
   chatMessagesEndRef,
   cancelChat,
-  clearChat,
+  loadHistory,
+  clearHistory,
   sendChat,
   handleChatKeydown,
   renderChatMarkdown,
-} = useFeedChat({
+} = useContentChat({
   getContentId: () => selectedId.value,
 })
 
@@ -333,7 +335,7 @@ function selectItem(item) {
   // Reset view mode on sub-components
   if (detailContentRef.value) detailContentRef.value.resetViewMode()
   if (mobileDetailContentRef.value) mobileDetailContentRef.value.resetViewMode()
-  clearChat()
+  loadHistory(item.id)
   // 右栏滚回顶部
   if (rightPanelRef.value) rightPanelRef.value.scrollTop = 0
   // [B] 点击选中走 markAsRead 统一路径（乐观更新）
@@ -690,7 +692,7 @@ onUnmounted(() => {
         :class="{ 'hidden md:block': showMobileDetail }"
         @scroll="handleLeftScroll"
       >
-        <div class="px-3 md:px-4 pt-3 pb-2 space-y-2.5 sticky top-0 bg-white z-10 border-b border-slate-100">
+        <div class="px-3 md:px-4 pt-2 md:pt-3 pb-1.5 md:pb-2 space-y-1.5 md:space-y-2.5 sticky top-0 bg-white z-10 border-b border-slate-100">
           <!-- 计数 + 排序 + 密度切换 -->
           <div class="flex items-center justify-between">
             <div class="flex items-center gap-2">
@@ -720,7 +722,75 @@ onUnmounted(() => {
                 </span>
               </button>
             </div>
-            <div class="flex items-center gap-1.5">
+            <div class="flex items-center gap-1 md:gap-1.5">
+              <!-- 来源多选按钮 -->
+              <div class="relative shrink-0">
+                <button
+                  class="flex items-center gap-1 px-2 py-1.5 md:px-3 md:py-2 text-xs font-medium rounded-lg border transition-all duration-200"
+                  :class="filterSources.length
+                    ? 'text-indigo-700 bg-indigo-50 border-indigo-200'
+                    : 'text-slate-600 bg-slate-50 border-slate-200 hover:border-slate-300'"
+                  @click.stop="showSourceDropdown = !showSourceDropdown"
+                >
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 3c2.755 0 5.455.232 8.083.678.533.09.917.556.917 1.096v1.044a2.25 2.25 0 01-.659 1.591l-5.432 5.432a2.25 2.25 0 00-.659 1.591v2.927a2.25 2.25 0 01-1.244 2.013L9.75 21v-6.568a2.25 2.25 0 00-.659-1.591L3.659 7.409A2.25 2.25 0 013 5.818V4.774c0-.54.384-1.006.917-1.096A48.32 48.32 0 0112 3z" />
+                  </svg>
+                  <span class="hidden md:inline">来源</span><span v-if="filterSources.length">({{ filterSources.length }})</span>
+                  <svg class="w-3 h-3 transition-transform hidden md:block" :class="{ 'rotate-180': showSourceDropdown }" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+
+                <!-- 来源多选下拉 -->
+                <Transition
+                  enter-active-class="transition-all duration-150 ease-out"
+                  enter-from-class="opacity-0 scale-95"
+                  enter-to-class="opacity-100 scale-100"
+                  leave-active-class="transition-all duration-100 ease-in"
+                  leave-from-class="opacity-100 scale-100"
+                  leave-to-class="opacity-0 scale-95"
+                >
+                  <div
+                    v-if="showSourceDropdown"
+                    class="absolute right-0 top-full mt-1 w-56 bg-white rounded-xl shadow-lg border border-slate-200 py-1 z-30 max-h-64 overflow-y-auto"
+                    @click.stop
+                  >
+                    <div v-if="filterSources.length" class="px-3 py-1.5 border-b border-slate-100">
+                      <button @click="clearSources" class="text-xs text-indigo-600 hover:text-indigo-800">清除所有来源</button>
+                    </div>
+                    <label
+                      v-for="s in sourceOptions"
+                      :key="s.id"
+                      class="flex items-center gap-2 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 cursor-pointer transition-colors"
+                    >
+                      <input
+                        type="checkbox"
+                        :checked="filterSources.includes(String(s.id))"
+                        class="w-3.5 h-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500/20"
+                        @change="toggleSourceFilter(s.id)"
+                      />
+                      <span class="truncate">{{ s.name }}</span>
+                    </label>
+                    <div v-if="!sourceOptions.length" class="px-3 py-3 text-xs text-slate-400 text-center">暂无来源</div>
+                  </div>
+                </Transition>
+              </div>
+
+              <!-- 未读 toggle -->
+              <button
+                class="p-1.5 md:p-2 rounded-lg transition-all duration-200 border shrink-0"
+                :class="showUnreadOnly
+                  ? 'text-blue-600 bg-blue-50 border-blue-200'
+                  : 'text-slate-400 hover:text-slate-600 bg-slate-50 border-slate-200 hover:border-slate-300'"
+                :title="showUnreadOnly ? '显示全部' : '只看未读'"
+                @click="toggleUnread"
+              >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.64 0 8.577 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.64 0-8.577-3.007-9.963-7.178z" />
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+              </button>
+
               <!-- 密度切换（移动端隐藏） -->
               <button
                 class="hidden md:inline-flex p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-all"
@@ -754,10 +824,10 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <!-- 搜索 + 筛选 -->
-          <div class="flex items-center gap-2 flex-wrap">
+          <!-- 搜索 + 高级筛选（桌面端） -->
+          <div class="hidden md:flex items-center gap-2 flex-wrap">
             <!-- 搜索框 -->
-            <div class="relative flex-1 min-w-0 hidden md:block">
+            <div class="relative flex-1 min-w-0">
               <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
               </svg>
@@ -769,94 +839,25 @@ onUnmounted(() => {
               />
             </div>
 
-            <!-- 来源多选按钮 -->
-            <div class="relative shrink-0">
-              <button
-                class="flex items-center gap-1 px-3 py-2 text-xs font-medium rounded-lg border transition-all duration-200"
-                :class="filterSources.length
-                  ? 'text-indigo-700 bg-indigo-50 border-indigo-200'
-                  : 'text-slate-600 bg-slate-50 border-slate-200 hover:border-slate-300'"
-                @click.stop="showSourceDropdown = !showSourceDropdown"
-              >
-                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M12 3c2.755 0 5.455.232 8.083.678.533.09.917.556.917 1.096v1.044a2.25 2.25 0 01-.659 1.591l-5.432 5.432a2.25 2.25 0 00-.659 1.591v2.927a2.25 2.25 0 01-1.244 2.013L9.75 21v-6.568a2.25 2.25 0 00-.659-1.591L3.659 7.409A2.25 2.25 0 013 5.818V4.774c0-.54.384-1.006.917-1.096A48.32 48.32 0 0112 3z" />
-                </svg>
-                来源{{ filterSources.length ? `(${filterSources.length})` : '' }}
-                <svg class="w-3 h-3 transition-transform" :class="{ 'rotate-180': showSourceDropdown }" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
-                </svg>
-              </button>
-
-              <!-- 来源多选下拉 -->
-              <Transition
-                enter-active-class="transition-all duration-150 ease-out"
-                enter-from-class="opacity-0 scale-95"
-                enter-to-class="opacity-100 scale-100"
-                leave-active-class="transition-all duration-100 ease-in"
-                leave-from-class="opacity-100 scale-100"
-                leave-to-class="opacity-0 scale-95"
-              >
-                <div
-                  v-if="showSourceDropdown"
-                  class="absolute left-0 md:right-0 md:left-auto top-full mt-1 w-56 bg-white rounded-xl shadow-lg border border-slate-200 py-1 z-30 max-h-64 overflow-y-auto"
-                  @click.stop
-                >
-                  <div v-if="filterSources.length" class="px-3 py-1.5 border-b border-slate-100">
-                    <button @click="clearSources" class="text-xs text-indigo-600 hover:text-indigo-800">清除所有来源</button>
-                  </div>
-                  <label
-                    v-for="s in sourceOptions"
-                    :key="s.id"
-                    class="flex items-center gap-2 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 cursor-pointer transition-colors"
-                  >
-                    <input
-                      type="checkbox"
-                      :checked="filterSources.includes(String(s.id))"
-                      class="w-3.5 h-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500/20"
-                      @change="toggleSourceFilter(s.id)"
-                    />
-                    <span class="truncate">{{ s.name }}</span>
-                  </label>
-                  <div v-if="!sourceOptions.length" class="px-3 py-3 text-xs text-slate-400 text-center">暂无来源</div>
-                </div>
-              </Transition>
-            </div>
-
-            <!-- 日期范围（移动端隐藏） -->
+            <!-- 日期范围 -->
             <select
               v-model="dateRange"
-              class="hidden md:block bg-slate-50 text-xs text-slate-600 rounded-lg px-2.5 py-2 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all appearance-none cursor-pointer shrink-0"
+              class="bg-slate-50 text-xs text-slate-600 rounded-lg px-2.5 py-2 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all appearance-none cursor-pointer shrink-0"
             >
               <option v-for="dr in dateRangeOptions" :key="dr.value" :value="dr.value">{{ dr.label }}</option>
             </select>
 
-            <!-- 状态下拉（移动端隐藏） -->
+            <!-- 状态下拉 -->
             <select
               v-model="filterStatus"
-              class="hidden md:block bg-slate-50 text-xs text-slate-600 rounded-lg px-2.5 py-2 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all appearance-none cursor-pointer shrink-0"
+              class="bg-slate-50 text-xs text-slate-600 rounded-lg px-2.5 py-2 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all appearance-none cursor-pointer shrink-0"
             >
               <option v-for="st in statusOptions" :key="st.value" :value="st.value">{{ st.label }}</option>
             </select>
-
-            <!-- 未读 toggle -->
-            <button
-              class="p-2 rounded-lg transition-all duration-200 border shrink-0"
-              :class="showUnreadOnly
-                ? 'text-blue-600 bg-blue-50 border-blue-200'
-                : 'text-slate-400 hover:text-slate-600 bg-slate-50 border-slate-200 hover:border-slate-300'"
-              :title="showUnreadOnly ? '显示全部' : '只看未读'"
-              @click="toggleUnread"
-            >
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.64 0 8.577 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.64 0-8.577-3.007-9.963-7.178z" />
-                <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
-            </button>
-
           </div>
 
           <!-- 活跃筛选 tags -->
-          <div v-if="hasActiveFilters" class="flex items-center gap-1.5 flex-wrap">
+          <div v-if="hasActiveFilters" class="hidden md:flex items-center gap-1.5 flex-wrap">
             <span
               v-if="searchQuery.trim()"
               class="inline-flex items-center gap-1 px-2.5 py-1 bg-indigo-100 text-indigo-700 text-xs font-medium rounded-full shadow-sm border border-indigo-200/50"
@@ -909,8 +910,8 @@ onUnmounted(() => {
             </button>
           </div>
 
-          <!-- 媒体类型 Tab -->
-          <div class="flex items-center gap-0.5 bg-slate-100 rounded-xl p-0.5">
+          <!-- 媒体类型 Tab（桌面端） -->
+          <div class="hidden md:flex items-center gap-0.5 bg-slate-100 rounded-xl p-0.5">
             <button
               v-for="mt in mediaTypes"
               :key="mt.value"
@@ -953,7 +954,7 @@ onUnmounted(() => {
         </div>
 
         <!-- 卡片列表 -->
-        <div class="px-3 md:px-4" :class="densityMode === 'compact' ? 'py-1.5' : 'py-3'">
+        <div class="px-3 md:px-4" :class="densityMode === 'compact' ? 'py-1.5' : 'py-2 md:py-3'">
           <!-- Loading skeleton -->
           <div v-if="loading" class="space-y-3">
             <div v-for="i in 4" :key="i" class="animate-pulse bg-white rounded-xl border border-slate-200 p-4">
@@ -984,7 +985,7 @@ onUnmounted(() => {
           </div>
 
           <!-- Feed 卡片列表 -->
-          <div v-else :class="densityMode === 'compact' ? 'space-y-1' : 'space-y-3'">
+          <div v-else :class="densityMode === 'compact' ? 'space-y-1' : 'space-y-2 md:space-y-3'">
             <FeedCard
               v-for="item in items"
               :key="item.id"
@@ -1076,6 +1077,16 @@ onUnmounted(() => {
           <!-- AI 对话输入栏 -->
           <div class="px-4 py-3 border-t border-slate-100 shrink-0 bg-white">
             <div class="flex items-end gap-2">
+              <button
+                v-if="chatMessages.length > 0"
+                class="shrink-0 p-2.5 rounded-xl text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all"
+                title="清除对话"
+                @click="clearHistory"
+              >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                </svg>
+              </button>
               <textarea
                 ref="chatInputRef"
                 v-model="chatInput"
@@ -1113,41 +1124,18 @@ onUnmounted(() => {
         <div
           v-if="showMobileDetail && selectedId"
           ref="mobileDetailRef"
-          class="fixed inset-0 z-40 bg-white flex flex-col md:hidden"
+          class="fixed inset-x-0 top-0 h-[100dvh] z-40 bg-white flex flex-col md:hidden"
           :style="isSwiping ? { transform: `translateX(${Math.max(0, swipeOffset)}px)` } : {}"
         >
-          <!-- 移动端返回栏 + 导航 -->
-          <div class="flex items-center justify-between px-4 py-3 border-b border-slate-100 shrink-0">
-            <button
-              class="p-2 -ml-2 rounded-lg text-slate-500 hover:bg-slate-50 transition-colors"
-              @click="closeMobileDetail"
-            >
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
-              </svg>
-            </button>
-            <div class="flex items-center gap-2">
-              <button
-                class="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-all disabled:opacity-30"
-                :disabled="selectedIndex <= 0"
-                @click="navigateDetail(-1)"
-              >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
-                </svg>
-              </button>
-              <span class="text-xs text-slate-400 tabular-nums">{{ selectedIndex + 1 }}/{{ items.length }}</span>
-              <button
-                class="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-all disabled:opacity-30"
-                :disabled="selectedIndex >= items.length - 1"
-                @click="navigateDetail(1)"
-              >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
-                </svg>
-              </button>
-            </div>
-          </div>
+          <!-- 移动端返回 -->
+          <button
+            class="shrink-0 self-start p-2 m-2 rounded-lg text-slate-400 active:bg-slate-100 transition-colors"
+            @click="closeMobileDetail"
+          >
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+            </svg>
+          </button>
 
           <!-- 移动端详情内容 -->
           <div v-if="detailLoading && !detailContent" class="flex-1 flex items-center justify-center">
@@ -1185,11 +1173,21 @@ onUnmounted(() => {
             <!-- AI 对话输入栏（移动端） -->
             <div class="px-4 py-3 border-t border-slate-100 shrink-0 bg-white">
               <div class="flex items-end gap-2">
+                <button
+                  v-if="chatMessages.length > 0"
+                  class="shrink-0 p-2.5 rounded-xl text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all"
+                  title="清除对话"
+                  @click="clearHistory"
+                >
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                  </svg>
+                </button>
                 <textarea
                   v-model="chatInput"
                   :disabled="chatStreaming"
                   rows="1"
-                  class="flex-1 resize-none rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all disabled:opacity-50 max-h-[6rem] overflow-y-auto"
+                  class="flex-1 resize-none rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-[16px] md:text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all disabled:opacity-50 max-h-[6rem] overflow-y-auto"
                   placeholder="讨论这篇内容..."
                   @keydown="handleChatKeydown"
                   @input="e => { e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 96) + 'px' }"

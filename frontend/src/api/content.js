@@ -56,8 +56,30 @@ export function batchFavorite(ids) {
   return api.post('/content/batch-favorite', { ids })
 }
 
+export function submitContent(data) {
+  return api.post('/content/submit', data)
+}
+
+export function uploadContent(formData) {
+  return api.post('/content/upload', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+}
+
 export function listSourceOptions() {
   return api.get('/sources/options')
+}
+
+export function getChatHistory(contentId) {
+  return api.get(`/content/${contentId}/chat/history`)
+}
+
+export function saveChatHistory(contentId, messages) {
+  return api.put(`/content/${contentId}/chat/history`, { messages })
+}
+
+export function deleteChatHistory(contentId) {
+  return api.delete(`/content/${contentId}/chat/history`)
 }
 
 /**

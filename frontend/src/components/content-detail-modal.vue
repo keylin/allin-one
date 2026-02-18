@@ -2,6 +2,8 @@
 import { ref, computed, watch, watchEffect, toRef, onBeforeUnmount } from 'vue'
 import { getContent, analyzeContent } from '@/api/content'
 import { useScrollLock } from '@/composables/useScrollLock'
+import { useContentChat } from '@/composables/useContentChat'
+import ChatPanel from '@/components/feed/chat-panel.vue'
 import MarkdownIt from 'markdown-it'
 import DOMPurify from 'dompurify'
 import dayjs from 'dayjs'
@@ -26,6 +28,23 @@ const transitioning = ref(false)
 const videoRef = ref(null)
 const videoError = ref(false)
 
+// --- Chat composable ---
+const {
+  chatMessages,
+  chatInput,
+  chatStreaming,
+  chatLoading: chatHistoryLoading,
+  chatMessagesEndRef,
+  cancelChat,
+  loadHistory,
+  clearHistory,
+  sendChat,
+  handleChatKeydown,
+  renderChatMarkdown,
+} = useContentChat({
+  getContentId: () => props.contentId,
+})
+
 // DOMPurify: 所有链接强制新窗口打开
 DOMPurify.addHook('afterSanitizeAttributes', (node) => {
   if (node.tagName === 'A') {
@@ -45,6 +64,7 @@ const md = new MarkdownIt({
 watchEffect((onCleanup) => {
   if (props.visible) {
     const handler = (e) => {
+      if (['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return
       if (e.key === 'ArrowLeft' && props.hasPrev) {
         e.preventDefault()
         emit('prev')
@@ -64,6 +84,7 @@ watch(() => props.contentId, async (newId) => {
     contentViewMode.value = 'best'
     transitioning.value = true
     await loadContent()
+    loadHistory(newId)
     transitioning.value = false
   }
 }, { immediate: true })
@@ -73,7 +94,10 @@ watch(() => props.visible, async (val) => {
   if (val && props.contentId) {
     transitioning.value = true
     await loadContent()
+    loadHistory(props.contentId)
     transitioning.value = false
+  } else if (!val) {
+    cancelChat()
   }
 })
 
@@ -342,7 +366,51 @@ function formatTime(t) {
               <div class="prose prose-sm max-w-none markdown-content text-slate-700 mt-2" v-html="displayedBodyHtml"></div>
             </div>
 
+            <!-- AI 对话 -->
+            <ChatPanel
+              :messages="chatMessages.map(m => ({ ...m, renderedContent: m.role === 'assistant' ? renderChatMarkdown(m.content || '') : '' }))"
+              :loading="chatStreaming"
+              :input="chatInput"
+            >
+              <template #messages-end>
+                <div ref="chatMessagesEndRef"></div>
+              </template>
+            </ChatPanel>
 
+          </div>
+        </div>
+
+        <!-- Chat input -->
+        <div v-if="content" class="px-3 py-2.5 md:px-6 md:py-3 border-t border-slate-100 shrink-0 bg-white">
+          <div class="flex items-end gap-2">
+            <button
+              v-if="chatMessages.length > 0"
+              class="shrink-0 p-2 rounded-xl text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all"
+              title="清除对话"
+              @click="clearHistory"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+              </svg>
+            </button>
+            <textarea
+              v-model="chatInput"
+              :disabled="chatStreaming"
+              rows="1"
+              class="flex-1 resize-none rounded-xl border border-slate-200 bg-slate-50 px-4 py-2 text-[16px] md:text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all disabled:opacity-50 max-h-[6rem] overflow-y-auto"
+              placeholder="讨论这篇内容..."
+              @keydown="handleChatKeydown"
+              @input="e => { e.target.style.height = 'auto'; e.target.style.height = Math.min(e.target.scrollHeight, 96) + 'px' }"
+            ></textarea>
+            <button
+              class="shrink-0 p-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+              :disabled="!chatInput.trim() || chatStreaming"
+              @click="sendChat"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
+              </svg>
+            </button>
           </div>
         </div>
 

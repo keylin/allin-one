@@ -1,12 +1,15 @@
 """Content API - 内容管理"""
 
+import hashlib
 import json
 import logging
+import mimetypes
 import re
 import shutil
+import uuid
 from datetime import datetime
 from pathlib import Path
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, noload
@@ -16,11 +19,11 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.time import utcnow
 from app.core.timezone_utils import get_local_day_boundaries
-from app.models.content import SourceConfig, ContentItem, MediaItem
-from app.models.pipeline import PipelineExecution, PipelineStep
+from app.models.content import SourceConfig, ContentItem, MediaItem, ContentStatus, SourceCategory, get_source_category
+from app.models.pipeline import PipelineExecution, PipelineStep, PipelineTemplate, TriggerSource
 from app.schemas import (
     ContentResponse, ContentDetailResponse, ContentNoteUpdate, ContentBatchDelete,
-    MediaItemSummary, error_response,
+    MediaItemSummary, ContentSubmit, ContentSubmitResponse, error_response,
 )
 
 logger = logging.getLogger(__name__)
@@ -481,6 +484,198 @@ async def content_stats(db: Session = Depends(get_db)):
     }
 
 
+# ---- 用户提交内容 ----
+
+@router.post("/submit")
+async def submit_content(body: ContentSubmit, db: Session = Depends(get_db)):
+    """用户主动提交文本内容到 USER 分类数据源"""
+    from app.services.pipeline.orchestrator import PipelineOrchestrator
+
+    # 校验源存在且为 USER 分类
+    source = db.get(SourceConfig, body.source_id)
+    if not source:
+        return error_response(404, "数据源不存在")
+    if get_source_category(source.source_type) != SourceCategory.USER:
+        return error_response(400, "只能向用户数据类型的源提交内容")
+
+    # 生成 external_id
+    hash_input = f"{body.title}:{body.content or ''}:{utcnow().isoformat()}"
+    external_id = hashlib.md5(hash_input.encode()).hexdigest()
+
+    # 构建 raw_data
+    raw_data = json.dumps({
+        "title": body.title,
+        "content": body.content,
+        "url": body.url,
+        "submitted_at": utcnow().isoformat(),
+    }, ensure_ascii=False)
+
+    content = ContentItem(
+        source_id=source.id,
+        title=body.title,
+        external_id=external_id,
+        url=body.url,
+        raw_data=raw_data,
+        processed_content=body.content,
+        status=ContentStatus.PENDING.value,
+    )
+    db.add(content)
+    db.flush()
+
+    # 确定模板: 参数指定 > 源绑定
+    template_id = body.pipeline_template_id or source.pipeline_template_id
+    execution_id = None
+
+    if template_id:
+        orchestrator = PipelineOrchestrator(db)
+        try:
+            execution = orchestrator.trigger_for_content(
+                content=content,
+                template_override_id=template_id,
+                trigger=TriggerSource.MANUAL,
+            )
+            if execution:
+                content.status = ContentStatus.PROCESSING.value
+                db.commit()
+                await orchestrator.async_start_execution(execution.id)
+                execution_id = execution.id
+            else:
+                db.commit()
+        except Exception as e:
+            db.commit()
+            logger.exception(f"Submit content pipeline trigger failed: {e}")
+    else:
+        content.status = ContentStatus.READY.value
+        db.commit()
+
+    logger.info(f"Content submitted: {content.id} (source={source.name})")
+    return {
+        "code": 0,
+        "data": ContentSubmitResponse(
+            content_id=content.id,
+            pipeline_execution_id=execution_id,
+        ).model_dump(),
+        "message": "内容提交成功",
+    }
+
+
+@router.post("/upload")
+async def upload_content(
+    file: UploadFile = File(...),
+    source_id: str = Form(...),
+    title: str = Form(None),
+    pipeline_template_id: str = Form(None),
+    db: Session = Depends(get_db),
+):
+    """用户上传文件到 file.upload 类型数据源"""
+    from app.services.pipeline.orchestrator import PipelineOrchestrator
+
+    # 校验源存在且为 file.upload 类型
+    source = db.get(SourceConfig, source_id)
+    if not source:
+        return error_response(404, "数据源不存在")
+    if source.source_type != "file.upload":
+        return error_response(400, "文件上传需要 file.upload 类型的数据源")
+
+    # 生成 content ID 和保存路径
+    content_id = uuid.uuid4().hex
+    upload_dir = Path(settings.DATA_DIR) / "uploads" / content_id
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    filename = file.filename or "unnamed"
+    file_path = upload_dir / filename
+
+    # 保存文件
+    file_content = await file.read()
+    file_path.write_bytes(file_content)
+    file_size = len(file_content)
+
+    # 确定 MIME 类型
+    mime_type, _ = mimetypes.guess_type(filename)
+    mime_type = mime_type or "application/octet-stream"
+
+    # 生成 external_id
+    external_id = hashlib.md5(f"{filename}:{file_size}:{utcnow().isoformat()}".encode()).hexdigest()
+
+    # 构建 raw_data
+    raw_data = json.dumps({
+        "file_path": str(file_path),
+        "filename": filename,
+        "file_size": file_size,
+        "mime_type": mime_type,
+    }, ensure_ascii=False)
+
+    content = ContentItem(
+        id=content_id,
+        source_id=source.id,
+        title=title or filename,
+        external_id=external_id,
+        raw_data=raw_data,
+        status=ContentStatus.PENDING.value,
+    )
+    db.add(content)
+    db.flush()
+
+    # 创建 MediaItem (根据 MIME 前缀)
+    media_type_map = {"image": "image", "video": "video", "audio": "audio"}
+    media_type_prefix = mime_type.split("/")[0]
+    media_type = media_type_map.get(media_type_prefix)
+    if media_type:
+        media_item = MediaItem(
+            content_id=content_id,
+            media_type=media_type,
+            original_url=str(file_path),
+            local_path=str(file_path),
+            filename=filename,
+            status="downloaded",
+            metadata_json=json.dumps({
+                "file_size": file_size,
+                "mime_type": mime_type,
+            }),
+        )
+        db.add(media_item)
+        db.flush()
+
+    # Pipeline 触发
+    template_id = pipeline_template_id or source.pipeline_template_id
+    execution_id = None
+
+    if template_id:
+        orchestrator = PipelineOrchestrator(db)
+        try:
+            execution = orchestrator.trigger_for_content(
+                content=content,
+                template_override_id=template_id,
+                trigger=TriggerSource.MANUAL,
+            )
+            if execution:
+                content.status = ContentStatus.PROCESSING.value
+                db.commit()
+                await orchestrator.async_start_execution(execution.id)
+                execution_id = execution.id
+            else:
+                db.commit()
+        except Exception as e:
+            db.commit()
+            logger.exception(f"Upload content pipeline trigger failed: {e}")
+    else:
+        content.status = ContentStatus.READY.value
+        db.commit()
+
+    logger.info(f"File uploaded: {content_id} ({filename}, {file_size} bytes)")
+    return {
+        "code": 0,
+        "data": {
+            **ContentSubmitResponse(
+                content_id=content_id,
+                pipeline_execution_id=execution_id,
+            ).model_dump(),
+            "file_path": str(file_path),
+        },
+        "message": "文件上传成功",
+    }
+
+
 # ---- 单个内容操作（参数路径必须在字面路径之后） ----
 
 @router.get("/{content_id}")
@@ -507,8 +702,6 @@ async def get_content(content_id: str, db: Session = Depends(get_db)):
 @router.post("/{content_id}/analyze")
 async def analyze_content(content_id: str, db: Session = Depends(get_db)):
     """手动触发 LLM 分析"""
-    from app.models.content import ContentStatus
-    from app.models.pipeline import PipelineTemplate, TriggerSource
     from app.services.pipeline.orchestrator import PipelineOrchestrator
 
     item = db.get(ContentItem, content_id)
@@ -603,7 +796,6 @@ async def toggle_favorite(content_id: str, db: Session = Depends(get_db)):
     - downloaded: 已成功下载，不触发（幂等）
     - 无 MediaItem: 纯文本内容，不触发
     """
-    from app.models.pipeline import PipelineTemplate, TriggerSource
     from app.services.pipeline.orchestrator import PipelineOrchestrator
 
     item = db.get(ContentItem, content_id)
@@ -691,6 +883,57 @@ async def update_note(content_id: str, body: ContentNoteUpdate, db: Session = De
         return error_response(404, "Content not found")
 
     item.user_note = body.user_note
+    item.updated_at = utcnow()
+    db.commit()
+
+    return {"code": 0, "data": None, "message": "ok"}
+
+
+# ---- 对话历史持久化 ----
+
+class ChatHistoryUpdate(BaseModel):
+    messages: list[dict]  # [{role: "user", content: "..."}, ...]
+
+
+@router.get("/{content_id}/chat/history")
+async def get_chat_history(content_id: str, db: Session = Depends(get_db)):
+    """获取内容的对话历史"""
+    item = db.get(ContentItem, content_id)
+    if not item:
+        return error_response(404, "Content not found")
+
+    messages = []
+    if item.chat_history:
+        try:
+            messages = json.loads(item.chat_history)
+        except (json.JSONDecodeError, TypeError):
+            messages = []
+
+    return {"code": 0, "data": {"messages": messages}, "message": "ok"}
+
+
+@router.put("/{content_id}/chat/history")
+async def save_chat_history(content_id: str, body: ChatHistoryUpdate, db: Session = Depends(get_db)):
+    """保存完整对话历史（全量覆盖）"""
+    item = db.get(ContentItem, content_id)
+    if not item:
+        return error_response(404, "Content not found")
+
+    item.chat_history = json.dumps(body.messages, ensure_ascii=False)
+    item.updated_at = utcnow()
+    db.commit()
+
+    return {"code": 0, "data": None, "message": "ok"}
+
+
+@router.delete("/{content_id}/chat/history")
+async def delete_chat_history(content_id: str, db: Session = Depends(get_db)):
+    """清除对话历史"""
+    item = db.get(ContentItem, content_id)
+    if not item:
+        return error_response(404, "Content not found")
+
+    item.chat_history = None
     item.updated_at = utcnow()
     db.commit()
 

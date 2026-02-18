@@ -49,6 +49,29 @@ class SourceType(str, Enum):
     SYSTEM_NOTIFICATION = "system.notification"  # 系统消息
 
 
+class SourceCategory(str, Enum):
+    """数据源大类"""
+    NETWORK = "network"   # 网络数据 — Collector 自动采集
+    USER = "user"         # 用户数据 — 用户/系统主动提交
+
+
+_SOURCE_CATEGORY_MAP = {
+    "rss": SourceCategory.NETWORK,
+    "api": SourceCategory.NETWORK,
+    "web": SourceCategory.NETWORK,
+    "account": SourceCategory.NETWORK,
+    "file": SourceCategory.USER,
+    "user": SourceCategory.USER,
+    "system": SourceCategory.USER,
+}
+
+
+def get_source_category(source_type: str) -> SourceCategory:
+    """根据 source_type 前缀推导分类"""
+    prefix = source_type.split(".")[0]
+    return _SOURCE_CATEGORY_MAP.get(prefix, SourceCategory.NETWORK)
+
+
 class MediaType(str, Enum):
     """媒体项类型"""
     IMAGE = "image"
@@ -172,6 +195,7 @@ class ContentItem(Base):
     is_favorited = Column(Boolean, default=False)
     favorited_at = Column(DateTime, nullable=True)
     user_note = Column(Text)
+    chat_history = Column(Text, nullable=True)  # JSON: [{"role":"user","content":"..."},{"role":"assistant","content":"..."}]
 
     view_count = Column(Integer, default=0)
     last_viewed_at = Column(DateTime, nullable=True)     # 最后浏览时间
