@@ -178,7 +178,7 @@ defineExpose({ resetViewMode })
   <!-- 标题 + 操作按钮 + 元信息 -->
   <div>
     <div class="flex items-start justify-between gap-3">
-      <h2 class="text-lg md:text-xl font-bold text-slate-900 mb-2 min-w-0 truncate" :title="item.title">{{ item.title }}</h2>
+      <h2 class="text-base md:text-xl font-bold text-slate-900 mb-1 md:mb-2 min-w-0 line-clamp-2" :title="item.title">{{ item.title }}</h2>
       <div class="flex items-center gap-1 shrink-0">
         <a
           v-if="item.url"
@@ -217,21 +217,16 @@ defineExpose({ resetViewMode })
         </button>
       </div>
     </div>
-    <div class="flex items-center gap-2 text-sm text-slate-400 flex-wrap">
-      <a v-if="item.url" :href="item.url" target="_blank" rel="noopener"
-         class="inline-flex items-center gap-1 text-slate-400 hover:text-indigo-600 transition-colors"
-         :title="item.url">
-        <span class="text-xs">跳转来源</span>
-      </a>
+    <div class="flex items-center gap-1.5 md:gap-2 text-xs md:text-sm text-slate-400 flex-wrap">
       <span class="inline-flex items-center gap-1.5 font-medium text-slate-500">
         <span class="w-2 h-2 rounded-full bg-indigo-400 shrink-0"></span>
         {{ item.source_name || '未知来源' }}
       </span>
-      <span v-if="item.author" class="text-slate-400">{{ item.author }}</span>
+      <span v-if="item.author" class="text-slate-400 hidden md:inline">{{ item.author }}</span>
       <span class="text-slate-300">&middot;</span>
       <span v-if="item.published_at" title="发布时间">发布于 {{ formatTime(item.published_at) }}</span>
-      <span v-if="item.created_at" title="采集时间" class="text-slate-400">采集于 {{ formatTime(item.created_at) }}</span>
-      <span v-if="item.reading_time_min" class="inline-flex items-center gap-1 text-slate-400">
+      <span v-if="item.created_at" title="采集时间" class="text-slate-400 hidden md:inline">采集于 {{ formatTime(item.created_at) }}</span>
+      <span v-if="item.reading_time_min" class="inline-flex items-center gap-1 text-slate-400 hidden md:inline-flex">
         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
           <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
         </svg>
@@ -246,7 +241,20 @@ defineExpose({ resetViewMode })
       </span>
     </div>
     <!-- 操作按钮组（富化对比 + 收藏） -->
-    <div class="mt-3 flex items-center gap-2">
+    <div class="mt-3 hidden md:flex items-center gap-2">
+      <!-- 查看来源按钮 -->
+      <a
+        v-if="item.url"
+        :href="item.url"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:border-slate-300 hover:text-slate-800 transition-all"
+      >
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+        </svg>
+        查看来源
+      </a>
       <!-- 富化对比按钮 -->
       <button
         v-if="item.url"
@@ -261,6 +269,18 @@ defineExpose({ resetViewMode })
           <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
         </svg>
         {{ enriching ? '富化中...' : '富化对比' }}
+      </button>
+
+      <!-- 切换原文/处理版按钮 -->
+      <button
+        v-if="hasBothVersions"
+        class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:border-slate-300 hover:text-slate-800 transition-all"
+        @click="toggleContentView"
+      >
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" />
+        </svg>
+        {{ currentViewLabel === '处理版' ? '查看原文' : '查看处理版' }}
       </button>
 
       <!-- 收藏按钮 -->
@@ -299,7 +319,7 @@ defineExpose({ resetViewMode })
   </div>
 
   <!-- 正文内容（智能选择最佳版本） -->
-  <div v-if="displayedBodyHtml" class="bg-white rounded-xl p-5 md:p-8 shadow-sm border border-slate-100 relative">
+  <div v-if="displayedBodyHtml" class="bg-white rounded-xl p-4 md:p-8 shadow-sm border border-slate-100 relative">
     <div v-if="hasBothVersions" class="absolute top-4 right-4 z-10">
       <button
         class="inline-flex items-center gap-1.5 px-2.5 md:px-3 py-1 text-xs font-medium rounded-lg border border-slate-200 text-slate-500 hover:text-slate-700 hover:border-slate-300 bg-white transition-all shadow-sm"

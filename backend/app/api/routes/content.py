@@ -155,10 +155,15 @@ async def list_content(
             query = query.filter(ContentItem.source_id.in_(ids))
     if status:
         query = query.filter(ContentItem.status == status)
-    if has_video:
-        query = query.filter(
-            ContentItem.media_items.any(MediaItem.media_type == "video")
-        )
+    if has_video is not None:
+        if has_video:
+            query = query.filter(
+                ContentItem.media_items.any(MediaItem.media_type == "video")
+            )
+        else:
+            query = query.filter(
+                ~ContentItem.media_items.any(MediaItem.media_type == "video")
+            )
     if q:
         pattern = f"%{q}%"
         query = query.filter(ContentItem.title.ilike(pattern))
@@ -382,10 +387,15 @@ async def mark_all_read(body: MarkAllReadRequest, db: Session = Depends(get_db))
             query = query.filter(ContentItem.source_id.in_(ids))
     if body.status:
         query = query.filter(ContentItem.status == body.status)
-    if body.has_video:
-        query = query.filter(
-            ContentItem.media_items.any(MediaItem.media_type == "video")
-        )
+    if body.has_video is not None:
+        if body.has_video:
+            query = query.filter(
+                ContentItem.media_items.any(MediaItem.media_type == "video")
+            )
+        else:
+            query = query.filter(
+                ~ContentItem.media_items.any(MediaItem.media_type == "video")
+            )
     if body.q:
         query = query.filter(ContentItem.title.ilike(f"%{body.q}%"))
     if body.date_from:
@@ -444,6 +454,13 @@ async def content_stats(db: Session = Depends(get_db)):
         .scalar()
     )
 
+    # 收藏统计
+    favorited_count = (
+        db.query(func.count(ContentItem.id))
+        .filter(ContentItem.is_favorited == True)
+        .scalar()
+    )
+
     return {
         "code": 0,
         "data": {
@@ -456,6 +473,7 @@ async def content_stats(db: Session = Depends(get_db)):
             "failed": status_counts.get("failed", 0),
             "unread": unread_count,
             "read": read_count,
+            "favorited": favorited_count,
         },
         "message": "ok",
     }

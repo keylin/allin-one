@@ -273,58 +273,31 @@ const statusStyles = {
   >
     <div
       v-if="visible"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm md:p-4"
       @click.self="emit('close')"
     >
-      <div class="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+      <div class="bg-white md:rounded-2xl shadow-2xl md:max-w-4xl w-full h-full md:h-auto md:max-h-[90vh] overflow-hidden flex flex-col">
         <!-- Header -->
-        <div class="flex items-start justify-between p-6 border-b border-slate-100">
-          <div class="flex items-start gap-3 flex-1 min-w-0">
-            <!-- 上下篇导航按钮 -->
-            <div class="flex items-center gap-1 flex-shrink-0 mt-0.5">
-              <button
-                :disabled="!hasPrev"
-                class="p-2 rounded-lg transition-colors"
-                :class="hasPrev ? 'text-slate-400 hover:text-slate-600 hover:bg-slate-50' : 'opacity-30 cursor-not-allowed pointer-events-none text-slate-300'"
-                title="上一篇 (←)"
-                @click="emit('prev')"
+        <div class="flex items-start justify-between p-3 md:p-6 border-b border-slate-100">
+          <div class="flex-1 min-w-0 pr-2 md:pr-4">
+            <h2 class="text-base md:text-xl font-bold text-slate-900 mb-1 md:mb-2 line-clamp-2">{{ content?.title || '内容详情' }}</h2>
+            <div class="flex items-center gap-1.5 md:gap-3 text-xs md:text-sm text-slate-400 flex-wrap">
+              <span v-if="content?.source_name" class="font-medium text-slate-500">{{ content.source_name }}</span>
+              <span v-if="content?.published_at" title="发布时间">发布于 {{ formatTime(content.published_at) }}</span>
+              <span v-if="content?.author" class="hidden md:inline">{{ content.author }}</span>
+              <span v-if="content?.created_at" title="采集时间" class="text-slate-400/80 hidden md:inline">采集于 {{ formatTime(content.created_at) }}</span>
+              <span
+                v-if="content?.status"
+                class="inline-flex px-1.5 md:px-2 py-0.5 text-[10px] md:text-xs font-medium rounded-md"
+                :class="statusStyles[content.status] || 'bg-slate-100 text-slate-600'"
               >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
-                </svg>
-              </button>
-              <button
-                :disabled="!hasNext"
-                class="p-2 rounded-lg transition-colors"
-                :class="hasNext ? 'text-slate-400 hover:text-slate-600 hover:bg-slate-50' : 'opacity-30 cursor-not-allowed pointer-events-none text-slate-300'"
-                title="下一篇 (→)"
-                @click="emit('next')"
-              >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
-                </svg>
-              </button>
-            </div>
-
-            <div class="flex-1 min-w-0 pr-4">
-              <h2 class="text-xl font-bold text-slate-900 mb-2">{{ content?.title || '内容详情' }}</h2>
-              <div class="flex items-center gap-3 text-sm text-slate-400">
-                <span v-if="content?.author">{{ content.author }}</span>
-                <span v-if="content?.published_at" title="发布时间">发布于 {{ formatTime(content.published_at) }}</span>
-                <span v-if="content?.created_at" title="采集时间" class="text-slate-400/80">采集于 {{ formatTime(content.created_at) }}</span>
-                <span
-                  v-if="content?.status"
-                  class="inline-flex px-2 py-0.5 text-xs font-medium rounded-md"
-                  :class="statusStyles[content.status] || 'bg-slate-100 text-slate-600'"
-                >
-                  {{ statusLabels[content.status] || content.status }}
-                </span>
-              </div>
+                {{ statusLabels[content.status] || content.status }}
+              </span>
             </div>
           </div>
           <button
             @click="emit('close')"
-            class="flex-shrink-0 p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-lg transition-colors"
+            class="flex-shrink-0 p-1.5 md:p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-lg transition-colors"
           >
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
               <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -333,7 +306,7 @@ const statusStyles = {
         </div>
 
         <!-- Content -->
-        <div class="flex-1 overflow-y-auto p-6">
+        <div class="flex-1 overflow-y-auto p-3 md:p-6">
           <div v-if="loading" class="flex items-center justify-center py-16">
             <svg class="w-8 h-8 animate-spin text-slate-200" fill="none" viewBox="0 0 24 24">
               <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -367,7 +340,7 @@ const statusStyles = {
             </div>
 
             <!-- AI 分析结果 -->
-            <div v-if="content.analysis_result" class="bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl p-6 border border-indigo-100">
+            <div v-if="content.analysis_result" class="bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl p-4 md:p-6 border border-indigo-100">
               <h3 class="text-base font-semibold text-slate-900 mb-4 flex items-center gap-2">
                 <svg class="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
@@ -378,7 +351,7 @@ const statusStyles = {
             </div>
 
             <!-- 正文内容（智能选择最佳版本） -->
-            <div v-if="displayedBodyHtml" class="bg-slate-50 rounded-xl p-6 relative">
+            <div v-if="displayedBodyHtml" class="bg-slate-50 rounded-xl p-4 md:p-6 relative">
               <div v-if="hasBothVersions" class="absolute top-4 right-4 z-10">
                 <button
                   class="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg border border-slate-200 text-slate-500 hover:text-slate-700 hover:border-slate-300 bg-white transition-all shadow-sm"
@@ -398,11 +371,11 @@ const statusStyles = {
         </div>
 
         <!-- Footer -->
-        <div class="flex items-center justify-between p-6 border-t border-slate-100">
-          <div class="flex items-center gap-2">
+        <div class="flex items-center justify-between px-3 py-2.5 md:p-6 border-t border-slate-100">
+          <div class="flex items-center gap-1 md:gap-2">
             <button
               v-if="content"
-              class="px-4 py-2 text-sm font-medium text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors disabled:opacity-40"
+              class="px-2.5 md:px-4 py-1.5 md:py-2 text-xs md:text-sm font-medium text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors disabled:opacity-40"
               :disabled="analyzing"
               @click="handleAnalyze"
             >
@@ -410,7 +383,7 @@ const statusStyles = {
             </button>
             <button
               v-if="content"
-              class="px-4 py-2 text-sm font-medium rounded-lg transition-colors"
+              class="px-2.5 md:px-4 py-1.5 md:py-2 text-xs md:text-sm font-medium rounded-lg transition-colors"
               :class="content.is_favorited ? 'text-amber-600 hover:bg-amber-50' : 'text-slate-500 hover:bg-slate-100'"
               @click="handleFavorite"
             >
@@ -418,14 +391,36 @@ const statusStyles = {
             </button>
           </div>
 
-          <!-- 位置指示器 -->
-          <span v-if="totalCount > 0" class="text-xs text-slate-400">
-            第 {{ currentIndex + 1 }} / {{ totalCount }} 篇
-          </span>
+          <!-- 位置指示器 + 导航 -->
+          <div v-if="totalCount > 0" class="flex items-center gap-0.5">
+            <button
+              :disabled="!hasPrev"
+              class="p-1 md:p-1.5 rounded-md transition-colors"
+              :class="hasPrev ? 'text-slate-400 hover:text-slate-600 hover:bg-slate-100' : 'opacity-30 cursor-not-allowed text-slate-300'"
+              title="上一篇 (←)"
+              @click="emit('prev')"
+            >
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+              </svg>
+            </button>
+            <span class="text-[10px] md:text-xs text-slate-400 tabular-nums px-1">{{ currentIndex + 1 }}/{{ totalCount }}</span>
+            <button
+              :disabled="!hasNext"
+              class="p-1 md:p-1.5 rounded-md transition-colors"
+              :class="hasNext ? 'text-slate-400 hover:text-slate-600 hover:bg-slate-100' : 'opacity-30 cursor-not-allowed text-slate-300'"
+              title="下一篇 (→)"
+              @click="emit('next')"
+            >
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+              </svg>
+            </button>
+          </div>
 
           <button
             @click="emit('close')"
-            class="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 rounded-lg transition-colors"
+            class="px-2.5 md:px-4 py-1.5 md:py-2 text-xs md:text-sm font-medium text-slate-600 hover:bg-slate-50 rounded-lg transition-colors"
           >
             关闭
           </button>

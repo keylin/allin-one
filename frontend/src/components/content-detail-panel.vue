@@ -15,7 +15,7 @@ const content = ref(null)
 const loading = ref(false)
 const analyzing = ref(false)
 const videoError = ref(false)
-const contentViewMode = ref('best') // 'best' | 'processed' | 'raw'
+const activeTab = ref('read') // 'read' | 'analysis' | 'original' | 'raw'
 
 DOMPurify.addHook('afterSanitizeAttributes', (node) => {
   if (node.tagName === 'A') {
@@ -26,10 +26,32 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
 
 const md = new MarkdownIt({ html: true, linkify: true, typographer: true })
 
+const availableTabs = computed(() => {
+  const tabs = []
+  if (content.value?.processed_content) {
+    tabs.push({ id: 'read', label: '阅读' })
+    tabs.push({ id: 'processed_data', label: '处理数据' })
+  }
+  if (content.value?.analysis_result) {
+    tabs.push({ id: 'analysis_data', label: '分析数据' })
+  }
+  if (content.value?.raw_data) {
+    tabs.push({ id: 'raw_data', label: '原始数据' })
+  }
+  return tabs
+})
+
 watch(() => props.contentId, async (newId) => {
-  contentViewMode.value = 'best'
   if (newId) {
     await loadContent()
+    activeTab.value = 'read'
+    // 智能选择默认 Tab
+    if (content.value) {
+      if (content.value.processed_content) activeTab.value = 'read'
+      else if (content.value.analysis_result) activeTab.value = 'analysis_data'
+      else if (content.value.raw_data) activeTab.value = 'raw_data'
+      else activeTab.value = 'read'
+    }
   } else {
     content.value = null
   }
@@ -90,35 +112,6 @@ const renderedContent = computed(() => {
   }
   return `<pre class="whitespace-pre-wrap">${text}</pre>`
 })
-
-// 是否两个版本都有内容，支持切换
-const hasBothVersions = computed(() => {
-  return !!content.value?.processed_content && hasRawContent.value
-})
-
-// 当前展示的正文 HTML
-const displayedBodyHtml = computed(() => {
-  const mode = contentViewMode.value
-  if (mode === 'raw' && hasRawContent.value) return renderedRawContent.value
-  if (mode === 'processed' && content.value?.processed_content) return renderedContent.value
-  if (content.value?.processed_content) return renderedContent.value
-  if (hasRawContent.value) return renderedRawContent.value
-  return ''
-})
-
-const currentViewLabel = computed(() => {
-  if (contentViewMode.value === 'raw') return '原文'
-  if (contentViewMode.value === 'processed') return '处理版'
-  return content.value?.processed_content ? '处理版' : '原文'
-})
-
-function toggleContentView() {
-  if (contentViewMode.value === 'raw' || (contentViewMode.value === 'best' && !content.value?.processed_content)) {
-    contentViewMode.value = 'processed'
-  } else {
-    contentViewMode.value = 'raw'
-  }
-}
 
 const renderedRawContent = computed(() => {
   if (!content.value?.raw_data) return ''
@@ -226,51 +219,60 @@ defineExpose({ content })
 
       </div>
 
-      <!-- Video player -->
-      <div v-if="content.media_items?.some(m => m.media_type === 'video')" class="bg-black rounded-xl overflow-hidden">
-        <video
-          :key="content.id"
-          controls
-          preload="metadata"
-          class="w-full max-h-[60vh]"
-          :poster="`/api/video/${content.id}/thumbnail`"
-          @error="videoError = true"
-        >
-          <source :src="`/api/video/${content.id}/stream`" type="video/mp4" />
-        </video>
-        <div v-if="videoError" class="flex items-center justify-center py-8 text-slate-400 text-sm bg-slate-900">
-          <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
-          </svg>
-          视频文件未找到
-        </div>
-      </div>
-
-      <!-- AI analysis -->
-      <div v-if="content.analysis_result" class="bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl p-6 border border-indigo-100">
-        <h3 class="text-base font-semibold text-slate-900 mb-4 flex items-center gap-2">
-          <svg class="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-          </svg>
-          AI 分析
-        </h3>
-        <div class="prose prose-sm max-w-none markdown-content" v-html="renderedAnalysis"></div>
-      </div>
-
-      <!-- 正文内容（智能选择最佳版本） -->
-      <div v-if="displayedBodyHtml" class="bg-slate-50 rounded-xl p-6 relative">
-        <div v-if="hasBothVersions" class="absolute top-4 right-4 z-10">
+      <!-- Tabs -->
+      <div class="border-b border-slate-100 mb-4">
+        <div class="flex gap-4">
           <button
-            class="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg border border-slate-200 text-slate-500 hover:text-slate-700 hover:border-slate-300 bg-white transition-all shadow-sm"
-            @click="toggleContentView"
+            v-for="tab in availableTabs"
+            :key="tab.id"
+            class="pb-2 text-sm font-medium transition-colors border-b-2"
+            :class="activeTab === tab.id ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-500 hover:text-slate-700'"
+            @click="activeTab = tab.id"
           >
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" />
-            </svg>
-            {{ currentViewLabel === '处理版' ? '查看原文' : '查看处理版' }}
+            {{ tab.label }}
           </button>
         </div>
-        <div class="prose prose-sm max-w-none markdown-content text-slate-700 mt-2" v-html="displayedBodyHtml"></div>
+      </div>
+
+      <!-- Tab Content: Read -->
+      <div v-if="activeTab === 'read'" class="space-y-6">
+        <!-- Video player -->
+        <div v-if="content.media_items?.some(m => m.media_type === 'video')" class="bg-black rounded-xl overflow-hidden">
+          <video
+            :key="content.id"
+            controls
+            preload="metadata"
+            class="w-full max-h-[60vh]"
+            :poster="`/api/video/${content.id}/thumbnail`"
+            @error="videoError = true"
+          >
+            <source :src="`/api/video/${content.id}/stream`" type="video/mp4" />
+          </video>
+          <div v-if="videoError" class="flex items-center justify-center py-8 text-slate-400 text-sm bg-slate-900">
+            <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+            </svg>
+            视频文件未找到
+          </div>
+        </div>
+
+        <!-- Processed Content -->
+        <div class="prose prose-sm max-w-none markdown-content text-slate-700" v-html="renderedContent"></div>
+      </div>
+
+      <!-- Tab Content: Processed Data -->
+      <div v-if="activeTab === 'processed_data'" class="bg-slate-900 rounded-xl p-4 overflow-hidden">
+        <pre class="text-xs text-slate-200 font-mono whitespace-pre overflow-auto max-h-[70vh] custom-scrollbar">{{ content.processed_content }}</pre>
+      </div>
+
+      <!-- Tab Content: Analysis Data -->
+      <div v-if="activeTab === 'analysis_data'" class="bg-slate-900 rounded-xl p-4 overflow-hidden">
+        <pre class="text-xs text-slate-200 font-mono whitespace-pre overflow-auto max-h-[70vh] custom-scrollbar">{{ typeof content.analysis_result === 'object' ? JSON.stringify(content.analysis_result, null, 2) : content.analysis_result }}</pre>
+      </div>
+
+      <!-- Tab Content: Raw Data -->
+      <div v-if="activeTab === 'raw_data'" class="bg-slate-900 rounded-xl p-4 overflow-hidden">
+        <pre class="text-xs text-slate-200 font-mono whitespace-pre overflow-auto max-h-[70vh] custom-scrollbar">{{ typeof content.raw_data === 'object' ? JSON.stringify(content.raw_data, null, 2) : content.raw_data }}</pre>
       </div>
 
 

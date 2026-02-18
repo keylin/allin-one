@@ -690,7 +690,7 @@ onUnmounted(() => {
         :class="{ 'hidden md:block': showMobileDetail }"
         @scroll="handleLeftScroll"
       >
-        <div class="px-4 pt-3 pb-2 space-y-2.5 sticky top-0 bg-white z-10 border-b border-slate-100">
+        <div class="px-3 md:px-4 pt-3 pb-2 space-y-2.5 sticky top-0 bg-white z-10 border-b border-slate-100">
           <!-- 计数 + 排序 + 密度切换 -->
           <div class="flex items-center justify-between">
             <div class="flex items-center gap-2">
@@ -721,9 +721,9 @@ onUnmounted(() => {
               </button>
             </div>
             <div class="flex items-center gap-1.5">
-              <!-- 密度切换 -->
+              <!-- 密度切换（移动端隐藏） -->
               <button
-                class="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-all"
+                class="hidden md:inline-flex p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-all"
                 :title="densityMode === 'compact' ? '切换舒适模式' : '切换紧凑模式'"
                 @click="toggleDensity"
               >
@@ -734,9 +734,9 @@ onUnmounted(() => {
                   <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 5.25h16.5m-16.5 4.5h16.5m-16.5 4.5h16.5m-16.5 4.5h16.5" />
                 </svg>
               </button>
-              <!-- 快捷键帮助 -->
+              <!-- 快捷键帮助（移动端隐藏） -->
               <button
-                class="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-all"
+                class="hidden md:inline-flex p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-all"
                 title="快捷键 (?)"
                 @click="showShortcutHelp = !showShortcutHelp"
               >
@@ -755,9 +755,9 @@ onUnmounted(() => {
           </div>
 
           <!-- 搜索 + 筛选 -->
-          <div class="flex items-center gap-2">
+          <div class="flex items-center gap-2 flex-wrap">
             <!-- 搜索框 -->
-            <div class="relative flex-1 min-w-0">
+            <div class="relative flex-1 min-w-0 hidden md:block">
               <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
               </svg>
@@ -798,7 +798,7 @@ onUnmounted(() => {
               >
                 <div
                   v-if="showSourceDropdown"
-                  class="absolute right-0 top-full mt-1 w-56 bg-white rounded-xl shadow-lg border border-slate-200 py-1 z-30 max-h-64 overflow-y-auto"
+                  class="absolute left-0 md:right-0 md:left-auto top-full mt-1 w-56 bg-white rounded-xl shadow-lg border border-slate-200 py-1 z-30 max-h-64 overflow-y-auto"
                   @click.stop
                 >
                   <div v-if="filterSources.length" class="px-3 py-1.5 border-b border-slate-100">
@@ -822,18 +822,18 @@ onUnmounted(() => {
               </Transition>
             </div>
 
-            <!-- 日期范围 -->
+            <!-- 日期范围（移动端隐藏） -->
             <select
               v-model="dateRange"
-              class="bg-slate-50 text-xs text-slate-600 rounded-lg px-2.5 py-2 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all appearance-none cursor-pointer shrink-0"
+              class="hidden md:block bg-slate-50 text-xs text-slate-600 rounded-lg px-2.5 py-2 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all appearance-none cursor-pointer shrink-0"
             >
               <option v-for="dr in dateRangeOptions" :key="dr.value" :value="dr.value">{{ dr.label }}</option>
             </select>
 
-            <!-- 状态下拉 -->
+            <!-- 状态下拉（移动端隐藏） -->
             <select
               v-model="filterStatus"
-              class="bg-slate-50 text-xs text-slate-600 rounded-lg px-2.5 py-2 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all appearance-none cursor-pointer shrink-0"
+              class="hidden md:block bg-slate-50 text-xs text-slate-600 rounded-lg px-2.5 py-2 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all appearance-none cursor-pointer shrink-0"
             >
               <option v-for="st in statusOptions" :key="st.value" :value="st.value">{{ st.label }}</option>
             </select>
@@ -853,19 +853,6 @@ onUnmounted(() => {
               </svg>
             </button>
 
-            <!-- 收藏 toggle -->
-            <button
-              class="p-2 rounded-lg transition-all duration-200 border shrink-0"
-              :class="showFavoritesOnly
-                ? 'text-amber-500 bg-amber-50 border-amber-200'
-                : 'text-slate-400 hover:text-slate-600 bg-slate-50 border-slate-200 hover:border-slate-300'"
-              :title="showFavoritesOnly ? '显示全部' : '只看收藏'"
-              @click="toggleFavorites"
-            >
-              <svg class="w-4 h-4" :fill="showFavoritesOnly ? 'currentColor' : 'none'" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.563.563 0 00-.586 0L6.982 20.54a.562.562 0 01-.84-.61l1.285-5.386a.562.562 0 00-.182-.557l-4.204-3.602a.563.563 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z" />
-              </svg>
-            </button>
           </div>
 
           <!-- 活跃筛选 tags -->
@@ -913,13 +900,7 @@ onUnmounted(() => {
               #{{ filterTag }}
               <button @click="clearTag" class="ml-0.5 hover:text-violet-900 transition-colors">&times;</button>
             </span>
-            <span
-              v-if="showFavoritesOnly"
-              class="inline-flex items-center gap-1 px-2.5 py-1 bg-amber-100 text-amber-700 text-xs font-medium rounded-full shadow-sm border border-amber-200/50"
-            >
-              收藏
-              <button @click="clearFavorites" class="ml-0.5 hover:text-amber-900 transition-colors">&times;</button>
-            </span>
+
             <button
               @click="clearAllFilters"
               class="text-xs text-slate-400 hover:text-slate-600 transition-colors px-2 py-1"
@@ -972,7 +953,7 @@ onUnmounted(() => {
         </div>
 
         <!-- 卡片列表 -->
-        <div class="px-4" :class="densityMode === 'compact' ? 'py-1.5' : 'py-3'">
+        <div class="px-3 md:px-4" :class="densityMode === 'compact' ? 'py-1.5' : 'py-3'">
           <!-- Loading skeleton -->
           <div v-if="loading" class="space-y-3">
             <div v-for="i in 4" :key="i" class="animate-pulse bg-white rounded-xl border border-slate-200 p-4">
@@ -1177,7 +1158,7 @@ onUnmounted(() => {
           </div>
 
           <div v-else-if="detailContent" class="flex-1 min-h-0 flex flex-col">
-            <div class="flex-1 overflow-y-auto p-4 space-y-5">
+            <div class="flex-1 overflow-y-auto px-3 py-3 space-y-3">
               <DetailContent
                 ref="mobileDetailContentRef"
                 :item="detailContent"

@@ -374,35 +374,12 @@ onUnmounted(() => {
   <div class="flex flex-col h-full">
     <!-- Sticky header -->
     <div class="px-4 pt-3 pb-2 space-y-2.5 sticky top-0 bg-white z-10 border-b border-slate-100 shrink-0">
-      <!-- Batch actions bar -->
-      <div v-if="selectedIds.length > 0" class="flex items-center gap-2">
-        <span class="text-sm text-slate-500">已选 {{ selectedIds.length }}</span>
-        <button
-          class="px-3 py-1.5 text-sm font-medium text-white bg-amber-500 rounded-lg hover:bg-amber-600 transition-all"
-          @click="handleBatchUnfavorite"
-        >
-          取消收藏
-        </button>
-        <button
-          class="px-3 py-1.5 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-all"
-          @click="handleBatchRead"
-        >
-          标记已读
-        </button>
-        <button
-          class="px-3 py-1.5 text-sm font-medium text-slate-500 hover:text-slate-700 transition-colors"
-          @click="selectedIds = []"
-        >
-          取消
-        </button>
-      </div>
 
-      <!-- placeholder for batch bar toggle -->
-      <template v-else />
+
 
       <div class="flex flex-wrap items-center gap-3">
         <!-- 搜索 -->
-        <div class="relative flex-1 min-w-[200px] max-w-sm">
+        <div class="relative flex-1 min-w-[200px] max-w-sm hidden md:block">
           <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
           </svg>
@@ -497,14 +474,7 @@ onUnmounted(() => {
             <div
               v-for="item in items"
               :key="item.id"
-              class="group relative bg-white rounded-xl border overflow-hidden cursor-pointer transition-all duration-300"
-              :class="[
-                selectedId === item.id && modalVisible
-                  ? 'border-indigo-400 ring-2 ring-indigo-400/30 shadow-lg'
-                  : selectedIds.includes(item.id)
-                    ? 'border-indigo-400 ring-1 ring-indigo-400/20 bg-indigo-50/30'
-                    : 'border-slate-200/60 hover:border-slate-300 hover:shadow-lg hover:-translate-y-0.5'
-              ]"
+              class="group relative bg-white rounded-xl border overflow-hidden cursor-pointer transition-all duration-300 border-slate-200/60 hover:border-slate-300 hover:shadow-lg hover:-translate-y-0.5"
               @click="selectItem(item)"
             >
               <!-- ═══════════ 视频卡片 ═══════════ -->
@@ -556,19 +526,7 @@ onUnmounted(() => {
                     {{ getVideoInfo(item).platform }}
                   </span>
 
-                  <!-- 多选复选框 -->
-                  <label
-                    class="absolute top-2 left-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200"
-                    :class="{ '!opacity-100': selectedIds.includes(item.id) }"
-                    @click.stop
-                  >
-                    <input
-                      type="checkbox"
-                      class="h-4 w-4 text-indigo-600 border-white/80 rounded focus:ring-indigo-500 shadow-sm bg-white/90"
-                      :checked="selectedIds.includes(item.id)"
-                      @change="toggleSelect(item.id, $event)"
-                    />
-                  </label>
+
                 </div>
 
                 <!-- 视频信息 -->
@@ -631,19 +589,7 @@ onUnmounted(() => {
                         >
                           {{ statusLabels[item.status] || item.status }}
                         </span>
-                        <!-- 多选复选框 -->
-                        <label
-                          class="opacity-0 group-hover:opacity-100 transition-opacity duration-200"
-                          :class="{ '!opacity-100': selectedIds.includes(item.id) }"
-                          @click.stop
-                        >
-                          <input
-                            type="checkbox"
-                            class="h-3.5 w-3.5 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"
-                            :checked="selectedIds.includes(item.id)"
-                            @change="toggleSelect(item.id, $event)"
-                          />
-                        </label>
+
                       </div>
                     </div>
 

@@ -167,7 +167,7 @@ function onThumbError(e) {
       </div>
 
       <!-- 内容区域 -->
-      <div class="flex-1 min-w-0 py-3 px-4">
+      <div class="flex-1 min-w-0 py-3 px-3 md:px-4">
         <!-- 第一行：标题 + 收藏 -->
         <div class="flex items-start gap-2">
           <!-- 媒体类型小图标 + sentiment 色点 -->
