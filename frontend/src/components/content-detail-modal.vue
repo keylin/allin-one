@@ -61,6 +61,7 @@ watchEffect((onCleanup) => {
 // 监听 contentId 变化，加载数据
 watch(() => props.contentId, async (newId) => {
   if (newId && props.visible) {
+    contentViewMode.value = 'best'
     transitioning.value = true
     await loadContent()
     transitioning.value = false
@@ -190,6 +191,37 @@ const renderedRawContent = computed(() => {
 // raw_data 中是否有可渲染的原文（用于控制显示逻辑）
 const hasRawContent = computed(() => renderedRawContent.value.length > 0)
 
+const contentViewMode = ref('best') // 'best' | 'processed' | 'raw'
+
+// 当前展示的正文 HTML
+const displayedBodyHtml = computed(() => {
+  const mode = contentViewMode.value
+  if (mode === 'raw' && hasRawContent.value) return renderedRawContent.value
+  if (mode === 'processed' && content.value?.processed_content) return renderedContent.value
+  // 'best' 模式：优先 processed，否则 raw
+  if (content.value?.processed_content) return renderedContent.value
+  if (hasRawContent.value) return renderedRawContent.value
+  return ''
+})
+
+const hasBothVersions = computed(() => {
+  return !!content.value?.processed_content && hasRawContent.value
+})
+
+const currentViewLabel = computed(() => {
+  if (contentViewMode.value === 'raw') return '原文'
+  if (contentViewMode.value === 'processed') return '处理版'
+  return content.value?.processed_content ? '处理版' : '原文'
+})
+
+function toggleContentView() {
+  if (contentViewMode.value === 'raw' || (contentViewMode.value === 'best' && !content.value?.processed_content)) {
+    contentViewMode.value = 'processed'
+  } else {
+    contentViewMode.value = 'raw'
+  }
+}
+
 async function handleAnalyze() {
   if (!props.contentId || analyzing.value) return
   analyzing.value = true
@@ -278,7 +310,8 @@ const statusStyles = {
               <h2 class="text-xl font-bold text-slate-900 mb-2">{{ content?.title || '内容详情' }}</h2>
               <div class="flex items-center gap-3 text-sm text-slate-400">
                 <span v-if="content?.author">{{ content.author }}</span>
-                <span>{{ formatTime(content?.created_at) }}</span>
+                <span v-if="content?.published_at" title="发布时间">发布于 {{ formatTime(content.published_at) }}</span>
+                <span v-if="content?.created_at" title="采集时间" class="text-slate-400/80">采集于 {{ formatTime(content.created_at) }}</span>
                 <span
                   v-if="content?.status"
                   class="inline-flex px-2 py-0.5 text-xs font-medium rounded-md"
@@ -313,15 +346,7 @@ const statusStyles = {
             class="space-y-6 transition-opacity duration-150"
             :class="transitioning ? 'opacity-0' : 'opacity-100'"
           >
-            <!-- 原始链接 -->
-            <div v-if="content.url" class="text-sm">
-              <span class="font-medium text-slate-600">原始链接: </span>
-              <a :href="content.url" target="_blank" class="text-indigo-600 hover:underline">
-                {{ content.url }}
-              </a>
-            </div>
 
-            <!-- 视频播放器 -->
             <div v-if="content.media_items?.some(m => m.media_type === 'video')" class="bg-black rounded-xl overflow-hidden">
               <video
                 ref="videoRef"
@@ -352,58 +377,23 @@ const statusStyles = {
               <div class="prose prose-sm max-w-none markdown-content" v-html="renderedAnalysis"></div>
             </div>
 
-            <!-- 处理后的内容 -->
-            <div v-if="content.processed_content" class="bg-slate-50 rounded-xl p-6">
-              <h3 class="text-base font-semibold text-slate-900 mb-4">处理后的内容</h3>
-              <div class="prose prose-sm max-w-none markdown-content text-slate-700" v-html="renderedContent"></div>
+            <!-- 正文内容（智能选择最佳版本） -->
+            <div v-if="displayedBodyHtml" class="bg-slate-50 rounded-xl p-6 relative">
+              <div v-if="hasBothVersions" class="absolute top-4 right-4 z-10">
+                <button
+                  class="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg border border-slate-200 text-slate-500 hover:text-slate-700 hover:border-slate-300 bg-white transition-all shadow-sm"
+                  @click="toggleContentView"
+                >
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" />
+                  </svg>
+                  {{ currentViewLabel === '处理版' ? '查看原文' : '查看处理版' }}
+                </button>
+              </div>
+              <div class="prose prose-sm max-w-none markdown-content text-slate-700 mt-2" v-html="displayedBodyHtml"></div>
             </div>
 
-            <!-- 原文内容（从 raw_data 提取的 RSS HTML） -->
-            <component
-              :is="content.analysis_result || content.processed_content ? 'details' : 'div'"
-              v-if="hasRawContent"
-              class="group"
-              :open="!content.analysis_result && !content.processed_content ? true : undefined"
-            >
-              <summary
-                v-if="content.analysis_result || content.processed_content"
-                class="cursor-pointer text-sm font-medium text-slate-600 hover:text-slate-900 select-none flex items-center gap-1.5"
-              >
-                <svg class="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
-                </svg>
-                原文内容
-                <svg class="w-4 h-4 transition-transform group-open:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-                </svg>
-              </summary>
-              <div
-                :class="content.analysis_result || content.processed_content ? 'mt-4' : ''"
-                class="bg-white rounded-xl border border-slate-200 p-6"
-              >
-                <h3
-                  v-if="!content.analysis_result && !content.processed_content"
-                  class="text-base font-semibold text-slate-900 mb-4 flex items-center gap-2"
-                >
-                  <svg class="w-5 h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
-                  </svg>
-                  原文内容
-                </h3>
-                <div class="prose prose-sm max-w-none raw-content text-slate-700" v-html="renderedRawContent"></div>
-              </div>
-            </component>
 
-            <!-- 原始数据 (JSON) -->
-            <details v-if="content.raw_data" class="group">
-              <summary class="cursor-pointer text-sm font-medium text-slate-600 hover:text-slate-900 select-none">
-                查看原始数据
-                <svg class="w-4 h-4 inline-block ml-1 transition-transform group-open:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-                </svg>
-              </summary>
-              <pre class="mt-3 p-4 bg-slate-900 text-slate-100 rounded-lg text-xs overflow-x-auto">{{ JSON.stringify(JSON.parse(content.raw_data), null, 2) }}</pre>
-            </details>
           </div>
         </div>
 

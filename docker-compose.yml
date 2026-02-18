@@ -15,7 +15,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./scripts/init/init-databases.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -103,7 +103,7 @@ services:
     networks:
       - allin-network
     healthcheck:
-      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health')"]
+      test: [ "CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health')" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -116,7 +116,7 @@ services:
       dockerfile: Dockerfile
     container_name: allin-worker-pipeline
     restart: unless-stopped
-    command: ["python", "-m", "procrastinate", "--app=app.tasks.procrastinate_app.proc_app", "worker", "--concurrency=4", "--queues=pipeline"]
+    command: [ "python", "-m", "procrastinate", "--app=app.tasks.procrastinate_app.proc_app", "worker", "--concurrency=4", "--queues=pipeline" ]
     volumes:
       - ./data:/app/data
       - ./backend/.env:/app/.env:ro
@@ -143,7 +143,7 @@ services:
       dockerfile: Dockerfile
     container_name: allin-worker-scheduled
     restart: unless-stopped
-    command: ["python", "-m", "procrastinate", "--app=app.tasks.procrastinate_app.proc_app", "worker", "--concurrency=2", "--queues=scheduled"]
+    command: [ "python", "-m", "procrastinate", "--app=app.tasks.procrastinate_app.proc_app", "worker", "--concurrency=2", "--queues=scheduled" ]
     volumes:
       - ./data:/app/data
       - ./backend/.env:/app/.env:ro

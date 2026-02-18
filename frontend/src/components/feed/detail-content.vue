@@ -178,7 +178,7 @@ defineExpose({ resetViewMode })
   <!-- 标题 + 操作按钮 + 元信息 -->
   <div>
     <div class="flex items-start justify-between gap-3">
-      <h2 class="text-lg md:text-xl font-bold text-slate-900 mb-2 min-w-0">{{ item.title }}</h2>
+      <h2 class="text-lg md:text-xl font-bold text-slate-900 mb-2 min-w-0 truncate" :title="item.title">{{ item.title }}</h2>
       <div class="flex items-center gap-1 shrink-0">
         <a
           v-if="item.url"
@@ -229,7 +229,8 @@ defineExpose({ resetViewMode })
       </span>
       <span v-if="item.author" class="text-slate-400">{{ item.author }}</span>
       <span class="text-slate-300">&middot;</span>
-      <span>{{ formatTime(item.published_at || item.created_at) }}</span>
+      <span v-if="item.published_at" title="发布时间">发布于 {{ formatTime(item.published_at) }}</span>
+      <span v-if="item.created_at" title="采集时间" class="text-slate-400">采集于 {{ formatTime(item.created_at) }}</span>
       <span v-if="item.reading_time_min" class="inline-flex items-center gap-1 text-slate-400">
         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
           <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -298,17 +299,10 @@ defineExpose({ resetViewMode })
   </div>
 
   <!-- 正文内容（智能选择最佳版本） -->
-  <div v-if="displayedBodyHtml" class="bg-white rounded-xl p-5 md:p-8 shadow-sm border border-slate-100">
-    <div class="flex items-center justify-between mb-3 md:mb-4">
-      <h3 class="text-sm md:text-base font-semibold text-slate-900 flex items-center gap-2">
-        <svg class="w-4 md:w-5 h-4 md:h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
-        </svg>
-        正文内容
-      </h3>
+  <div v-if="displayedBodyHtml" class="bg-white rounded-xl p-5 md:p-8 shadow-sm border border-slate-100 relative">
+    <div v-if="hasBothVersions" class="absolute top-4 right-4 z-10">
       <button
-        v-if="hasBothVersions"
-        class="inline-flex items-center gap-1.5 px-2.5 md:px-3 py-1 text-xs font-medium rounded-lg border border-slate-200 text-slate-500 hover:text-slate-700 hover:border-slate-300 bg-white transition-all"
+        class="inline-flex items-center gap-1.5 px-2.5 md:px-3 py-1 text-xs font-medium rounded-lg border border-slate-200 text-slate-500 hover:text-slate-700 hover:border-slate-300 bg-white transition-all shadow-sm"
         @click="toggleContentView"
       >
         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
@@ -317,7 +311,7 @@ defineExpose({ resetViewMode })
         {{ currentViewLabel === '处理版' ? '查看原文' : '查看处理版' }}
       </button>
     </div>
-    <div class="prose prose-sm max-w-none markdown-content text-slate-700" v-html="displayedBodyHtml"></div>
+    <div class="prose prose-sm max-w-none markdown-content text-slate-700 mt-2" v-html="displayedBodyHtml"></div>
   </div>
 
   <!-- Slot for chat messages -->

@@ -1065,35 +1065,6 @@ onUnmounted(() => {
         <!-- 详情内容 -->
         <div v-else-if="detailContent" class="flex-1 min-w-0 flex flex-col">
           <div ref="rightPanelRef" class="flex-1 overflow-y-auto overflow-x-hidden p-6 space-y-6">
-            <!-- [5] 详情面板导航栏 -->
-            <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2">
-                <button
-                  class="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
-                  :disabled="selectedIndex <= 0"
-                  title="上一篇 (k/↑)"
-                  @click="navigateDetail(-1)"
-                >
-                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
-                  </svg>
-                </button>
-                <span class="text-xs text-slate-400 tabular-nums min-w-[3rem] text-center">
-                  {{ selectedIndex + 1 }} / {{ items.length }}
-                </span>
-                <button
-                  class="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
-                  :disabled="selectedIndex >= items.length - 1"
-                  title="下一篇 (j/↓)"
-                  @click="navigateDetail(1)"
-                >
-                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-
             <DetailContent
               ref="detailContentRef"
               :item="detailContent"

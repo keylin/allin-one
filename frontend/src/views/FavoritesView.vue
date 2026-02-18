@@ -5,8 +5,7 @@ import { listContent, toggleFavorite, batchMarkRead, incrementView } from '@/api
 import { listSources } from '@/api/sources'
 import { formatTimeShort } from '@/utils/time'
 import { useToast } from '@/composables/useToast'
-import ContentDetailPanel from '@/components/content-detail-panel.vue'
-import DetailDrawer from '@/components/detail-drawer.vue'
+import ContentDetailModal from '@/components/content-detail-modal.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -51,6 +50,7 @@ const sortOptions = [
   { value: 'updated_at:desc', label: '最近收藏' },
   { value: 'published_at:desc', label: '最新发布' },
   { value: 'collected_at:desc', label: '最新采集' },
+  { value: 'view_count:desc', label: '最多浏览' },
 ]
 
 const currentSort = computed({
@@ -65,9 +65,16 @@ const currentSort = computed({
 // --- 批量操作 ---
 const selectedIds = ref([])
 
-// --- 详情抽屉 ---
-const drawerVisible = ref(false)
+// --- 详情弹层 ---
+const modalVisible = ref(false)
 const selectedId = ref(null)
+
+const currentItemIndex = computed(() => {
+  if (!selectedId.value) return -1
+  return items.value.findIndex(i => i.id === selectedId.value)
+})
+const hasPrev = computed(() => currentItemIndex.value > 0)
+const hasNext = computed(() => currentItemIndex.value < items.value.length - 1)
 
 // --- 辅助计算 ---
 function hasVideo(item) {
@@ -278,40 +285,41 @@ async function handleBatchRead() {
   toast.success('已标记为已读')
 }
 
-// --- 详情抽屉 ---
+// --- 详情弹层 ---
 function selectItem(item) {
   selectedId.value = item.id
-  drawerVisible.value = true
+  modalVisible.value = true
   incrementView(item.id).catch(() => {})
 }
 
-function closeDrawer() {
-  drawerVisible.value = false
+function closeModal() {
+  modalVisible.value = false
+}
+
+function goToPrev() {
+  const idx = currentItemIndex.value
+  if (idx > 0) {
+    selectedId.value = items.value[idx - 1].id
+    incrementView(items.value[idx - 1].id).catch(() => {})
+  }
+}
+
+function goToNext() {
+  const idx = currentItemIndex.value
+  if (idx < items.value.length - 1) {
+    selectedId.value = items.value[idx + 1].id
+    incrementView(items.value[idx + 1].id).catch(() => {})
+    if (idx + 1 >= items.value.length - 3 && hasMore.value) loadMore()
+  }
 }
 
 // --- 键盘导航 ---
 function handleKeydown(e) {
   const tag = e.target.tagName
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
-  if (e.key === 'Escape' && drawerVisible.value) {
-    closeDrawer()
+  if (e.key === 'Escape' && modalVisible.value) {
+    closeModal()
     return
-  }
-  if (!drawerVisible.value) return
-  const idx = items.value.findIndex(i => i.id === selectedId.value)
-  if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
-    e.preventDefault()
-    if (idx < items.value.length - 1) {
-      selectedId.value = items.value[idx + 1].id
-      incrementView(items.value[idx + 1].id).catch(() => {})
-      if (idx + 1 >= items.value.length - 3 && hasMore.value) loadMore()
-    }
-  } else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
-    e.preventDefault()
-    if (idx > 0) {
-      selectedId.value = items.value[idx - 1].id
-      incrementView(items.value[idx - 1].id).catch(() => {})
-    }
   }
 }
 
@@ -389,12 +397,8 @@ onUnmounted(() => {
         </button>
       </div>
 
-      <!-- Count + Filter bar -->
-      <template v-else>
-        <div class="flex items-center justify-between">
-          <p class="text-xs text-slate-400">{{ totalCount }} 条收藏</p>
-        </div>
-      </template>
+      <!-- placeholder for batch bar toggle -->
+      <template v-else />
 
       <div class="flex flex-wrap items-center gap-3">
         <!-- 搜索 -->
@@ -443,7 +447,7 @@ onUnmounted(() => {
           <option v-for="opt in dateRangeOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
         </select>
 
-        <!-- 排序 pills -->
+        <!-- 排序 pills + 总数 -->
         <div class="flex items-center gap-1 ml-auto">
           <button
             v-for="opt in sortOptions"
@@ -456,6 +460,7 @@ onUnmounted(() => {
           >
             {{ opt.label }}
           </button>
+          <span class="text-xs text-slate-400 ml-2 whitespace-nowrap">{{ totalCount }} 条收藏</span>
         </div>
       </div>
     </div>
@@ -494,7 +499,7 @@ onUnmounted(() => {
               :key="item.id"
               class="group relative bg-white rounded-xl border overflow-hidden cursor-pointer transition-all duration-300"
               :class="[
-                selectedId === item.id && drawerVisible
+                selectedId === item.id && modalVisible
                   ? 'border-indigo-400 ring-2 ring-indigo-400/30 shadow-lg'
                   : selectedIds.includes(item.id)
                     ? 'border-indigo-400 ring-1 ring-indigo-400/20 bg-indigo-50/30'
@@ -541,16 +546,7 @@ onUnmounted(() => {
                     {{ formatDuration(getVideoInfo(item).duration) }}
                   </span>
 
-                  <!-- 收藏按钮 -->
-                  <button
-                    class="absolute bottom-1.5 left-1.5 w-7 h-7 flex items-center justify-center rounded-full text-amber-400 bg-black/40 hover:bg-amber-500 hover:text-white transition-all duration-200 backdrop-blur-sm"
-                    title="取消收藏"
-                    @click.stop="handleFavorite(item.id)"
-                  >
-                    <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
-                      <path d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
-                    </svg>
-                  </button>
+
 
                   <!-- 平台标签 -->
                   <span
@@ -587,13 +583,23 @@ onUnmounted(() => {
                       <span v-if="item.published_at">{{ formatTime(item.published_at) }}</span>
                       <span v-else-if="item.collected_at" class="text-slate-300">{{ formatTime(item.collected_at) }}</span>
                     </div>
-                    <span
-                      v-if="item.status && item.status !== 'pending'"
-                      class="inline-flex px-1.5 py-0.5 text-[10px] font-medium rounded shrink-0"
-                      :class="statusStyles[item.status] || 'bg-slate-100 text-slate-600'"
-                    >
-                      {{ statusLabels[item.status] || item.status }}
-                    </span>
+                    <div class="flex items-center gap-2 shrink-0">
+                      <span v-if="item.view_count" class="inline-flex items-center gap-0.5">
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" /><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                        {{ item.view_count }}
+                      </span>
+                      <span v-if="item.favorited_at" class="inline-flex items-center gap-0.5">
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" /></svg>
+                        {{ formatTime(item.favorited_at) }}
+                      </span>
+                      <span
+                        v-if="item.status && item.status !== 'pending'"
+                        class="inline-flex px-1.5 py-0.5 text-[10px] font-medium rounded"
+                        :class="statusStyles[item.status] || 'bg-slate-100 text-slate-600'"
+                      >
+                        {{ statusLabels[item.status] || item.status }}
+                      </span>
+                    </div>
                   </div>
                 </div>
               </template>
@@ -654,19 +660,17 @@ onUnmounted(() => {
                     <!-- 底部元信息 -->
                     <div class="flex items-center justify-between pt-2 border-t border-slate-100">
                       <div class="flex items-center gap-2 text-[10px] text-slate-400">
-                        <span v-if="item.published_at">{{ formatTime(item.published_at) }}</span>
-                        <span v-else-if="item.collected_at">{{ formatTime(item.collected_at) }}</span>
-                        <span v-if="item.view_count" class="text-slate-300">{{ item.view_count }}次浏览</span>
+                        <span v-if="item.published_at">发布 {{ formatTime(item.published_at) }}</span>
+                        <span v-if="item.view_count" class="inline-flex items-center gap-0.5">
+                          <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" /><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                          {{ item.view_count }}
+                        </span>
+                        <span v-if="item.favorited_at" class="inline-flex items-center gap-0.5">
+                          <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" /></svg>
+                          收藏 {{ formatTime(item.favorited_at) }}
+                        </span>
                       </div>
-                      <button
-                        class="w-5 h-5 flex items-center justify-center text-amber-400 hover:text-amber-500 transition-colors shrink-0"
-                        title="取消收藏"
-                        @click.stop="handleFavorite(item.id)"
-                      >
-                        <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
-                          <path d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
-                        </svg>
-                      </button>
+
                     </div>
                   </div>
                 </div>
@@ -696,13 +700,18 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- Detail Drawer -->
-    <DetailDrawer :visible="drawerVisible" @close="closeDrawer">
-      <ContentDetailPanel
-        v-if="selectedId"
-        :content-id="selectedId"
-        @favorite="handleFavorite"
-      />
-    </DetailDrawer>
+    <!-- Detail Modal -->
+    <ContentDetailModal
+      :visible="modalVisible"
+      :content-id="String(selectedId || '')"
+      :has-prev="hasPrev"
+      :has-next="hasNext"
+      :current-index="currentItemIndex"
+      :total-count="items.length"
+      @close="closeModal"
+      @prev="goToPrev"
+      @next="goToNext"
+      @favorite="handleFavorite"
+    />
   </div>
 </template>

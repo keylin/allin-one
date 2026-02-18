@@ -213,7 +213,8 @@ defineExpose({ content })
         <div class="flex items-center gap-3 text-sm text-slate-400 flex-wrap">
           <span class="font-medium text-slate-500">{{ content.source_name || '未知来源' }}</span>
           <span v-if="content.author">{{ content.author }}</span>
-          <span>{{ formatTime(content.published_at || content.created_at) }}</span>
+          <span v-if="content.published_at" title="发布时间">发布于 {{ formatTime(content.published_at) }}</span>
+          <span v-if="content.created_at" title="采集时间" class="text-slate-400/80">采集于 {{ formatTime(content.created_at) }}</span>
           <span
             v-if="content.status && content.status !== 'ready'"
             class="inline-flex px-2 py-0.5 text-xs font-medium rounded-md"
@@ -222,11 +223,7 @@ defineExpose({ content })
             {{ statusLabels[content.status] || content.status }}
           </span>
         </div>
-        <div v-if="content.url" class="mt-2 text-sm">
-          <a :href="content.url" target="_blank" class="text-indigo-600 hover:underline break-all">
-            {{ content.url }}
-          </a>
-        </div>
+
       </div>
 
       <!-- Video player -->
@@ -261,17 +258,10 @@ defineExpose({ content })
       </div>
 
       <!-- 正文内容（智能选择最佳版本） -->
-      <div v-if="displayedBodyHtml" class="bg-slate-50 rounded-xl p-6">
-        <div class="flex items-center justify-between mb-4">
-          <h3 class="text-base font-semibold text-slate-900 flex items-center gap-2">
-            <svg class="w-5 h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
-            </svg>
-            正文内容
-          </h3>
+      <div v-if="displayedBodyHtml" class="bg-slate-50 rounded-xl p-6 relative">
+        <div v-if="hasBothVersions" class="absolute top-4 right-4 z-10">
           <button
-            v-if="hasBothVersions"
-            class="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg border border-slate-200 text-slate-500 hover:text-slate-700 hover:border-slate-300 bg-white transition-all"
+            class="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-lg border border-slate-200 text-slate-500 hover:text-slate-700 hover:border-slate-300 bg-white transition-all shadow-sm"
             @click="toggleContentView"
           >
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
@@ -280,19 +270,10 @@ defineExpose({ content })
             {{ currentViewLabel === '处理版' ? '查看原文' : '查看处理版' }}
           </button>
         </div>
-        <div class="prose prose-sm max-w-none markdown-content text-slate-700" v-html="displayedBodyHtml"></div>
+        <div class="prose prose-sm max-w-none markdown-content text-slate-700 mt-2" v-html="displayedBodyHtml"></div>
       </div>
 
-      <!-- Raw JSON -->
-      <details v-if="content.raw_data" class="group">
-        <summary class="cursor-pointer text-sm font-medium text-slate-600 hover:text-slate-900 select-none">
-          查看原始数据
-          <svg class="w-4 h-4 inline-block ml-1 transition-transform group-open:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-          </svg>
-        </summary>
-        <pre class="mt-3 p-4 bg-slate-900 text-slate-100 rounded-lg text-xs overflow-x-auto">{{ JSON.stringify(typeof content.raw_data === 'string' ? JSON.parse(content.raw_data) : content.raw_data, null, 2) }}</pre>
-      </details>
+
     </div>
 
     <!-- Bottom action bar -->
