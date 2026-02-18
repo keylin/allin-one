@@ -653,10 +653,14 @@ function stopStatsPolling() {
   }
 }
 
+// 侧滑关闭时跳过 Vue Transition leave 动画（防止「动画两次」）
+const swipeDismissing = ref(false)
+
 // 初始化手势
 useSwipe(mobileDetailRef, {
   threshold: 80,
   onSwipeRight: () => {
+    swipeDismissing.value = true
     closeMobileDetail()
   }
 })
@@ -1158,9 +1162,10 @@ onUnmounted(() => {
         enter-active-class="transition-transform duration-200 ease-out"
         enter-from-class="translate-x-full"
         enter-to-class="translate-x-0"
-        leave-active-class="transition-transform duration-150 ease-in"
-        leave-from-class="translate-x-0"
-        leave-to-class="translate-x-full"
+        :leave-active-class="swipeDismissing ? '' : 'transition-transform duration-150 ease-in'"
+        :leave-from-class="swipeDismissing ? '' : 'translate-x-0'"
+        :leave-to-class="swipeDismissing ? '' : 'translate-x-full'"
+        @after-leave="swipeDismissing = false"
       >
         <div
           v-if="showMobileDetail && selectedId"

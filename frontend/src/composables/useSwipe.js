@@ -1,17 +1,16 @@
-import { ref, watch, onUnmounted } from 'vue'
+import { watch, onUnmounted } from 'vue'
 
 /**
  * 触摸手势处理 composable
- * 用于检测滑动手势（左/右/上/下）
+ * 滑动过程中直接操作 DOM transform（绕过 Vue 响应式），确保 60fps
  *
  * @param {Ref} targetRef - 目标元素的 ref
- * @param {Object} options - 配置选项
+ * @param {Object} options
  * @param {number} options.threshold - 触发手势的最小滑动距离（px），默认 80
- * @param {Function} options.onSwipeLeft - 左滑回调
- * @param {Function} options.onSwipeRight - 右滑回调
- * @param {Function} options.onSwipeUp - 上滑回调
- * @param {Function} options.onSwipeDown - 下滑回调
- * @returns {Object} { isSwiping, swipeOffset }
+ * @param {Function} options.onSwipeLeft
+ * @param {Function} options.onSwipeRight
+ * @param {Function} options.onSwipeUp
+ * @param {Function} options.onSwipeDown
  */
 export function useSwipe(targetRef, options = {}) {
   const {
@@ -22,66 +21,127 @@ export function useSwipe(targetRef, options = {}) {
     onSwipeDown
   } = options
 
-  const touchStartX = ref(0)
-  const touchStartY = ref(0)
-  const touchEndX = ref(0)
-  const touchEndY = ref(0)
-  const isSwiping = ref(false)
-  const swipeOffset = ref(0)
+  // 全部用普通变量，touchmove 不触发 Vue 响应式
+  let startX = 0
+  let startY = 0
+  let endX = 0
+  let endY = 0
+  let swiping = false
+  let directionLocked = false // 方向已锁定
+  let isHorizontal = false    // 锁定为水平方向
 
   const handleTouchStart = (e) => {
-    touchStartX.value = e.touches[0].clientX
-    touchStartY.value = e.touches[0].clientY
-    isSwiping.value = true
+    const x = e.touches[0].clientX
+    // 排除屏幕左右边缘 30px——让给浏览器原生前进/后退手势
+    if (x < 30 || x > window.innerWidth - 30) return
+
+    startX = x
+    startY = e.touches[0].clientY
+    endX = x
+    endY = startY
+    swiping = true
+    directionLocked = false
+    isHorizontal = false
+
+    const el = currentEl
+    if (el) {
+      el.style.willChange = 'transform'
+      // 清除可能残留的 transition，让拖拽即时响应
+      el.style.transition = 'none'
+    }
   }
 
   const handleTouchMove = (e) => {
-    if (!isSwiping.value) return
+    if (!swiping) return
 
-    touchEndX.value = e.touches[0].clientX
-    touchEndY.value = e.touches[0].clientY
+    endX = e.touches[0].clientX
+    endY = e.touches[0].clientY
 
-    const deltaX = touchEndX.value - touchStartX.value
-    const deltaY = touchEndY.value - touchStartY.value
+    const deltaX = endX - startX
+    const deltaY = endY - startY
 
-    // 水平滑动时更新偏移（只允许右滑，负值置为0）
-    if (Math.abs(deltaX) > Math.abs(deltaY)) {
-      swipeOffset.value = Math.max(0, deltaX)
+    // 首次超过 10px 时锁定方向
+    if (!directionLocked && (Math.abs(deltaX) > 10 || Math.abs(deltaY) > 10)) {
+      directionLocked = true
+      isHorizontal = Math.abs(deltaX) > Math.abs(deltaY)
+    }
+
+    // 水平滑动时直接操作 DOM（只允许右滑）
+    if (directionLocked && isHorizontal && currentEl) {
+      const offset = Math.max(0, deltaX)
+      currentEl.style.transform = `translateX(${offset}px)`
     }
   }
 
   const handleTouchEnd = () => {
-    if (!isSwiping.value) return
+    if (!swiping) return
+    swiping = false
 
-    const deltaX = touchEndX.value - touchStartX.value
-    const deltaY = touchEndY.value - touchStartY.value
+    const deltaX = endX - startX
+    const deltaY = endY - startY
+    const el = currentEl
 
-    // 水平优先判断
-    if (Math.abs(deltaX) > Math.abs(deltaY)) {
+    const absDx = Math.abs(deltaX)
+    const absDy = Math.abs(deltaY)
+
+    let triggered = false
+
+    if (absDx > absDy) {
+      // 水平手势
       if (deltaX > threshold && onSwipeRight) {
-        onSwipeRight()
+        triggered = true
+        // 滑出动画：继续向右滑出屏幕
+        if (el) {
+          let fired = false
+          const fire = () => {
+            if (fired) return
+            fired = true
+            // 不 cleanupEl — 元素保持屏幕外，由 Vue 卸载
+            onSwipeRight()
+          }
+          el.style.transition = 'transform 0.15s ease-in'
+          el.style.transform = `translateX(${window.innerWidth}px)`
+          el.addEventListener('transitionend', fire, { once: true })
+          // 兜底：180ms 后强制触发，防止 transitionend 不触发
+          setTimeout(fire, 180)
+        } else {
+          onSwipeRight()
+        }
       } else if (deltaX < -threshold && onSwipeLeft) {
+        triggered = true
         onSwipeLeft()
       }
     } else {
-      // 垂直滑动
       if (deltaY > threshold && onSwipeDown) {
+        triggered = true
         onSwipeDown()
       } else if (deltaY < -threshold && onSwipeUp) {
+        triggered = true
         onSwipeUp()
       }
     }
 
-    // 重置状态
-    isSwiping.value = false
-    swipeOffset.value = 0
-    touchStartX.value = 0
-    touchStartY.value = 0
-    touchEndX.value = 0
-    touchEndY.value = 0
+    // 未触发手势 → 回弹动画
+    if (!triggered && el) {
+      el.style.transition = 'transform 0.2s ease-out'
+      el.style.transform = ''
+      const onEnd = () => {
+        el.removeEventListener('transitionend', onEnd)
+        cleanupEl(el)
+      }
+      el.addEventListener('transitionend', onEnd, { once: true })
+      setTimeout(() => cleanupEl(el), 220)
+    }
   }
 
-  // 动态绑定/解绑：targetRef 可能由 v-if 延迟渲染，用 watch 替代 onMounted
+  function cleanupEl(el) {
+    if (!el) return
+    el.style.willChange = ''
+    el.style.transition = ''
+    el.style.transform = ''
+  }
+
+  // 动态绑定/解绑：targetRef 可能由 v-if 延迟渲染
   let currentEl = null
 
   function attachListeners(el) {
@@ -94,10 +154,12 @@ export function useSwipe(targetRef, options = {}) {
   }
 
   function detachListeners() {
-    if (!currentEl) return
-    currentEl.removeEventListener('touchstart', handleTouchStart)
-    currentEl.removeEventListener('touchmove', handleTouchMove)
-    currentEl.removeEventListener('touchend', handleTouchEnd)
+    if (currentEl) {
+      cleanupEl(currentEl)
+      currentEl.removeEventListener('touchstart', handleTouchStart)
+      currentEl.removeEventListener('touchmove', handleTouchMove)
+      currentEl.removeEventListener('touchend', handleTouchEnd)
+    }
     currentEl = null
   }
 
@@ -112,6 +174,4 @@ export function useSwipe(targetRef, options = {}) {
   onUnmounted(() => {
     detachListeners()
   })
-
-  return { isSwiping, swipeOffset }
 }
