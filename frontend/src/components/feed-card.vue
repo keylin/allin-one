@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from 'vue'
 import { formatTimeShort } from '@/utils/time'
+import ContentMetaRow from '@/components/common/content-meta-row.vue'
 
 const props = defineProps({
   item: { type: Object, required: true },
@@ -10,13 +11,6 @@ const props = defineProps({
 
 const emit = defineEmits(['click', 'favorite', 'tag-click'])
 
-const statusConfig = {
-  pending: { label: '待处理', class: 'bg-slate-100 text-slate-600 ring-1 ring-slate-200' },
-  processing: { label: '处理中', class: 'bg-indigo-100 text-indigo-700 ring-1 ring-indigo-200 animate-pulse' },
-  ready: { label: '已就绪', class: 'bg-sky-100 text-sky-700 ring-1 ring-sky-200' },
-  analyzed: { label: '已分析', class: 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200' },
-  failed: { label: '失败', class: 'bg-rose-100 text-rose-700 ring-1 ring-rose-200' },
-}
 
 const mediaIcons = {
   text: 'M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z',
@@ -41,8 +35,6 @@ const relTime = computed(() => {
 
 const summaryText = computed(() => props.item.summary_text || '')
 const tags = computed(() => props.item.tags?.slice(0, 3) || [])
-const currentStatus = computed(() => statusConfig[props.item.status] || statusConfig.pending)
-
 // 从 media_items 派生媒体类型
 const derivedMediaType = computed(() => {
   const items = props.item.media_items || []
@@ -107,15 +99,6 @@ function onThumbError(e) {
       <!-- 元信息 -->
       <span class="text-xs text-slate-400 shrink-0 truncate max-w-[80px]">{{ item.source_name || '' }}</span>
       <span v-if="relTime" class="text-xs text-slate-400 shrink-0 whitespace-nowrap">{{ relTime }}</span>
-
-      <!-- 状态 badge -->
-      <span
-        v-if="item.status !== 'ready' && item.status !== 'analyzed'"
-        :class="currentStatus.class"
-        class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium leading-none shrink-0"
-      >
-        {{ currentStatus.label }}
-      </span>
 
       <!-- 收藏 -->
       <button
@@ -217,34 +200,19 @@ function onThumbError(e) {
           </p>
         </div>
 
-        <!-- 第三行：元信息（左右分组） -->
-        <div class="mt-1.5 flex items-center justify-between text-xs">
-          <!-- 左：来源 + 时间 -->
-          <div class="flex items-center gap-1.5 min-w-0 text-slate-400">
-            <span class="truncate max-w-[120px]" :class="isRead ? 'text-slate-300' : 'text-slate-500 font-medium'">
-              {{ item.source_name || '未知来源' }}
-            </span>
-            <span v-if="relTime" class="text-slate-300">&middot;</span>
-            <span v-if="relTime" class="shrink-0 whitespace-nowrap">{{ relTime }}</span>
-          </div>
-          <!-- 右：状态 + 标签 -->
-          <div class="flex items-center gap-1.5 shrink-0">
-            <span
-              v-if="item.status !== 'ready'"
-              :class="currentStatus.class"
-              class="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium leading-none"
-            >
-              {{ currentStatus.label }}
-            </span>
-            <span
-              v-for="tag in tags"
-              :key="tag"
-              class="inline-flex items-center px-1.5 py-0.5 rounded-md text-[11px] font-medium bg-violet-50 text-violet-600 hover:bg-violet-100 hover:text-violet-700 cursor-pointer transition-colors duration-150"
-              @click.stop="emit('tag-click', tag)"
-            >
-              #{{ tag }}
-            </span>
-          </div>
+        <!-- 第三行：元信息 -->
+        <div class="mt-1.5">
+          <ContentMetaRow
+            :source-name="item.source_name || '未知来源'"
+            :published-at="item.published_at"
+            :collected-at="item.collected_at"
+            :view-count="item.view_count || 0"
+            :favorited-at="item.favorited_at"
+            :tags="tags"
+            :show-tags="true"
+            :max-tags="3"
+            @tag-click="emit('tag-click', $event)"
+          />
         </div>
       </div>
     </div>

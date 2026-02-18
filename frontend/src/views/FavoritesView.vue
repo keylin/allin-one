@@ -3,9 +3,9 @@ import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { listContent, toggleFavorite, batchMarkRead, incrementView } from '@/api/content'
 import { listSources } from '@/api/sources'
-import { formatTimeShort } from '@/utils/time'
 import { useToast } from '@/composables/useToast'
 import ContentDetailModal from '@/components/content-detail-modal.vue'
+import ContentMetaRow from '@/components/common/content-meta-row.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -139,38 +139,6 @@ function formatDuration(seconds) {
   return `${m}:${String(s).padStart(2, '0')}`
 }
 
-const statusLabels = {
-  pending: '待处理',
-  processing: '处理中',
-  ready: '已就绪',
-  analyzed: '已分析',
-  failed: '失败',
-}
-const statusStyles = {
-  pending: 'bg-slate-100 text-slate-600',
-  processing: 'bg-indigo-50 text-indigo-700',
-  ready: 'bg-sky-50 text-sky-700',
-  analyzed: 'bg-emerald-50 text-emerald-700',
-  failed: 'bg-rose-50 text-rose-700',
-}
-
-// 文章卡片主题色 — 根据来源名散列
-const accentColors = [
-  { bg: 'bg-indigo-500', light: 'bg-indigo-50', text: 'text-indigo-600' },
-  { bg: 'bg-violet-500', light: 'bg-violet-50', text: 'text-violet-600' },
-  { bg: 'bg-sky-500', light: 'bg-sky-50', text: 'text-sky-600' },
-  { bg: 'bg-emerald-500', light: 'bg-emerald-50', text: 'text-emerald-600' },
-  { bg: 'bg-amber-500', light: 'bg-amber-50', text: 'text-amber-600' },
-  { bg: 'bg-rose-500', light: 'bg-rose-50', text: 'text-rose-600' },
-  { bg: 'bg-teal-500', light: 'bg-teal-50', text: 'text-teal-600' },
-  { bg: 'bg-fuchsia-500', light: 'bg-fuchsia-50', text: 'text-fuchsia-600' },
-]
-function getAccentColor(item) {
-  const name = item.source_name || item.title || ''
-  let hash = 0
-  for (let i = 0; i < name.length; i++) hash = ((hash << 5) - hash) + name.charCodeAt(i)
-  return accentColors[Math.abs(hash) % accentColors.length]
-}
 
 // --- URL 同步 ---
 function syncQueryParams() {
@@ -381,10 +349,6 @@ function onThumbnailLoad(event, itemId) {
   if (img.naturalHeight > img.naturalWidth) {
     detectedOrientations.value[itemId] = 'portrait'
   }
-}
-
-function formatTime(t) {
-  return formatTimeShort(t)
 }
 
 // --- IntersectionObserver 无限滚动 ---
@@ -711,90 +675,40 @@ onUnmounted(() => {
                   <h4 class="text-sm font-medium text-slate-800 line-clamp-2 leading-snug min-h-[2.5rem]">
                     {{ item.title || '未知标题' }}
                   </h4>
-                  <div class="mt-2 flex items-center justify-between text-[11px] text-slate-400">
-                    <div class="flex items-center gap-1.5 min-w-0">
-                      <span v-if="item.source_name" class="truncate max-w-[90px]">{{ item.source_name }}</span>
-                      <span v-if="item.source_name && (item.published_at || item.collected_at)" class="text-slate-200">·</span>
-                      <span v-if="item.published_at">{{ formatTime(item.published_at) }}</span>
-                      <span v-else-if="item.collected_at" class="text-slate-300">{{ formatTime(item.collected_at) }}</span>
-                    </div>
-                    <div class="flex items-center gap-2 shrink-0">
-                      <span v-if="item.view_count" class="inline-flex items-center gap-0.5">
-                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" /><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-                        {{ item.view_count }}
-                      </span>
-                      <span v-if="item.favorited_at" class="inline-flex items-center gap-0.5">
-                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" /></svg>
-                        {{ formatTime(item.favorited_at) }}
-                      </span>
-                      <span
-                        v-if="item.status && item.status !== 'pending'"
-                        class="inline-flex px-1.5 py-0.5 text-[10px] font-medium rounded"
-                        :class="statusStyles[item.status] || 'bg-slate-100 text-slate-600'"
-                      >
-                        {{ statusLabels[item.status] || item.status }}
-                      </span>
-                    </div>
+                  <div class="mt-2">
+                    <ContentMetaRow
+                      :source-name="item.source_name"
+                      :published-at="item.published_at"
+                      :collected-at="item.collected_at"
+                      :view-count="item.view_count || 0"
+                      :favorited-at="item.favorited_at"
+                    />
                   </div>
                 </div>
               </template>
 
               <!-- ═══════════ 文章（信息）卡片 ═══════════ -->
               <template v-else>
-                <div class="flex flex-col h-full">
-                  <!-- 顶部色带 -->
-                  <div class="h-1 w-full" :class="getAccentColor(item).bg" />
+                <div class="flex flex-col h-full p-3.5">
+                  <!-- 标题 -->
+                  <h4 class="text-[13px] font-semibold text-slate-800 line-clamp-2 leading-snug mb-1.5">
+                    {{ item.title || '未知标题' }}
+                  </h4>
 
-                  <div class="p-3.5 flex flex-col flex-1">
-                    <!-- 来源标签 -->
-                    <div class="flex items-center justify-between gap-2 mb-2">
-                      <span
-                        v-if="item.source_name"
-                        class="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium rounded-full"
-                        :class="[getAccentColor(item).light, getAccentColor(item).text]"
-                      >
-                        <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                          <path stroke-linecap="round" stroke-linejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                        </svg>
-                        {{ item.source_name }}
-                      </span>
-                      <div class="flex items-center gap-1">
-                        <span
-                          v-if="item.status && item.status !== 'pending'"
-                          class="inline-flex px-1.5 py-0.5 text-[10px] font-medium rounded"
-                          :class="statusStyles[item.status] || 'bg-slate-100 text-slate-600'"
-                        >
-                          {{ statusLabels[item.status] || item.status }}
-                        </span>
+                  <!-- 摘要 -->
+                  <p class="text-xs text-slate-400 line-clamp-3 leading-relaxed flex-1 mb-2">
+                    {{ item.summary_text || item.processed_content?.substring(0, 150) || '暂无摘要' }}
+                  </p>
 
-                      </div>
-                    </div>
-
-                    <!-- 标题 -->
-                    <h4 class="text-[13px] font-semibold text-slate-800 line-clamp-2 leading-snug mb-1.5">
-                      {{ item.title || '未知标题' }}
-                    </h4>
-
-                    <!-- 摘要 -->
-                    <p class="text-xs text-slate-400 line-clamp-3 leading-relaxed flex-1 mb-2">
-                      {{ item.summary_text || item.processed_content?.substring(0, 150) || '暂无摘要' }}
-                    </p>
-
-                    <!-- 底部元信息 -->
-                    <div class="flex items-center justify-between pt-2 border-t border-slate-100">
-                      <div class="flex items-center gap-2 text-[10px] text-slate-400">
-                        <span v-if="item.published_at">发布 {{ formatTime(item.published_at) }}</span>
-                        <span v-if="item.view_count" class="inline-flex items-center gap-0.5">
-                          <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" /><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-                          {{ item.view_count }}
-                        </span>
-                        <span v-if="item.favorited_at" class="inline-flex items-center gap-0.5">
-                          <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" /></svg>
-                          收藏 {{ formatTime(item.favorited_at) }}
-                        </span>
-                      </div>
-
-                    </div>
+                  <!-- 底部元信息 -->
+                  <div class="pt-2 border-t border-slate-100">
+                    <ContentMetaRow
+                      :source-name="item.source_name"
+                      :published-at="item.published_at"
+                      :collected-at="item.collected_at"
+                      :view-count="item.view_count || 0"
+                      :favorited-at="item.favorited_at"
+                    />
                   </div>
                 </div>
               </template>

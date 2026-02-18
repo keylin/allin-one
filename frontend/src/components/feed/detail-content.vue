@@ -28,20 +28,6 @@ const md = new MarkdownIt({ html: true, linkify: true, typographer: true })
 
 const contentViewMode = ref('best') // 'best' | 'processed' | 'raw'
 
-const statusLabels = {
-  pending: '待处理',
-  processing: '处理中',
-  ready: '已就绪',
-  analyzed: '已分析',
-  failed: '失败',
-}
-const statusStyles = {
-  pending: 'bg-slate-100 text-slate-600',
-  processing: 'bg-indigo-50 text-indigo-700',
-  ready: 'bg-sky-50 text-sky-700',
-  analyzed: 'bg-emerald-50 text-emerald-700',
-  failed: 'bg-rose-50 text-rose-700',
-}
 
 // --- Computed ---
 const renderedAnalysis = computed(() => {
@@ -231,13 +217,6 @@ defineExpose({ resetViewMode })
           <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
         </svg>
         约 {{ item.reading_time_min }} 分钟
-      </span>
-      <span
-        v-if="item.status && item.status !== 'ready'"
-        class="inline-flex px-2 py-0.5 text-xs font-medium rounded-md"
-        :class="statusStyles[item.status] || 'bg-slate-100 text-slate-600'"
-      >
-        {{ statusLabels[item.status] || item.status }}
       </span>
     </div>
     <!-- 操作按钮组（富化对比 + 收藏） -->

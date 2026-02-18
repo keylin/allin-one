@@ -147,20 +147,6 @@ const renderedRawContent = computed(() => {
 
 const hasRawContent = computed(() => renderedRawContent.value.length > 0)
 
-const statusLabels = {
-  pending: '待处理',
-  ready: '已就绪',
-  processing: '处理中',
-  analyzed: '已分析',
-  failed: '失败',
-}
-const statusStyles = {
-  pending: 'bg-slate-100 text-slate-600',
-  ready: 'bg-sky-50 text-sky-700',
-  processing: 'bg-indigo-50 text-indigo-700',
-  analyzed: 'bg-emerald-50 text-emerald-700',
-  failed: 'bg-rose-50 text-rose-700',
-}
 
 async function handleAnalyze() {
   if (!props.contentId || analyzing.value) return
@@ -208,13 +194,6 @@ defineExpose({ content })
           <span v-if="content.author">{{ content.author }}</span>
           <span v-if="content.published_at" title="发布时间">发布于 {{ formatTime(content.published_at) }}</span>
           <span v-if="content.created_at" title="采集时间" class="text-slate-400/80">采集于 {{ formatTime(content.created_at) }}</span>
-          <span
-            v-if="content.status && content.status !== 'ready'"
-            class="inline-flex px-2 py-0.5 text-xs font-medium rounded-md"
-            :class="statusStyles[content.status] || 'bg-slate-100 text-slate-600'"
-          >
-            {{ statusLabels[content.status] || content.status }}
-          </span>
         </div>
 
       </div>

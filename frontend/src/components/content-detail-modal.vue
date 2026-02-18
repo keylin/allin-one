@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, watch, watchEffect, toRef, onBeforeUnmount } from 'vue'
-import { getContent, analyzeContent, toggleFavorite } from '@/api/content'
+import { getContent, analyzeContent } from '@/api/content'
 import { useScrollLock } from '@/composables/useScrollLock'
 import MarkdownIt from 'markdown-it'
 import DOMPurify from 'dompurify'
@@ -234,10 +234,8 @@ async function handleAnalyze() {
   }
 }
 
-async function handleFavorite() {
+function handleFavorite() {
   if (!props.contentId) return
-  await toggleFavorite(props.contentId)
-  if (content.value) content.value.is_favorited = !content.value.is_favorited
   emit('favorite', props.contentId)
 }
 
@@ -245,21 +243,6 @@ function formatTime(t) {
   return formatTimeFull(t)
 }
 
-const statusLabels = {
-  pending: '待处理',
-  ready: '已就绪',
-  processing: '处理中',
-  analyzed: '已分析',
-  failed: '失败',
-}
-
-const statusStyles = {
-  pending: 'bg-slate-100 text-slate-600',
-  ready: 'bg-sky-50 text-sky-700',
-  processing: 'bg-indigo-50 text-indigo-700',
-  analyzed: 'bg-emerald-50 text-emerald-700',
-  failed: 'bg-rose-50 text-rose-700',
-}
 </script>
 
 <template>
@@ -286,13 +269,6 @@ const statusStyles = {
               <span v-if="content?.published_at" title="发布时间">发布于 {{ formatTime(content.published_at) }}</span>
               <span v-if="content?.author" class="hidden md:inline">{{ content.author }}</span>
               <span v-if="content?.created_at" title="采集时间" class="text-slate-400/80 hidden md:inline">采集于 {{ formatTime(content.created_at) }}</span>
-              <span
-                v-if="content?.status"
-                class="inline-flex px-1.5 md:px-2 py-0.5 text-[10px] md:text-xs font-medium rounded-md"
-                :class="statusStyles[content.status] || 'bg-slate-100 text-slate-600'"
-              >
-                {{ statusLabels[content.status] || content.status }}
-              </span>
             </div>
           </div>
           <button
