@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue'
+import { ref, computed } from 'vue'
 import { formatTimeShort } from '@/utils/time'
 import ContentMetaRow from '@/components/common/content-meta-row.vue'
 
@@ -10,6 +10,32 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['click', 'favorite', 'tag-click'])
+
+// --- 双击收藏（仅移动端 < 768px） ---
+let lastTapTime = 0
+const showHeartAnimation = ref(false)
+let heartTimer = null
+
+function handleCardClick() {
+  const now = Date.now()
+  const delta = now - lastTapTime
+  lastTapTime = now
+
+  if (delta < 300 && delta > 0 && window.innerWidth < 768) {
+    // 双击 → 切换收藏 + 动画
+    emit('favorite', props.item.id)
+    triggerHeartAnimation()
+    return // 第一次点击已打开详情，不再重复
+  }
+  emit('click', props.item)
+}
+
+function triggerHeartAnimation() {
+  showHeartAnimation.value = true
+  if (navigator.vibrate) navigator.vibrate(50)
+  clearTimeout(heartTimer)
+  heartTimer = setTimeout(() => { showHeartAnimation.value = false }, 800)
+}
 
 
 const mediaIcons = {
@@ -34,7 +60,7 @@ const relTime = computed(() => {
 })
 
 const summaryText = computed(() => props.item.summary_text || '')
-const tags = computed(() => props.item.tags?.slice(0, 3) || [])
+const tags = computed(() => props.item.tags?.slice(0, 2) || [])
 // 从 media_items 派生媒体类型
 const derivedMediaType = computed(() => {
   const items = props.item.media_items || []
@@ -76,7 +102,7 @@ function onThumbError(e) {
         ? 'bg-indigo-50/60 border-indigo-200 ring-1 ring-indigo-200/50 shadow-sm'
         : 'border-slate-200/80 hover:bg-slate-50 hover:border-slate-300',
     ]"
-    @click="emit('click', item)"
+    @click="handleCardClick"
   >
     <div class="flex items-center gap-2 py-1.5 px-3">
       <!-- 媒体类型图标 -->
@@ -124,13 +150,32 @@ function onThumbError(e) {
         ? 'bg-indigo-50/60 border-indigo-200 ring-1 ring-indigo-200/50 shadow-sm'
         : 'border-slate-200/80 hover:shadow-md hover:border-slate-300 hover:-translate-y-0.5',
     ]"
-    @click="emit('click', item)"
+    @click="handleCardClick"
   >
+    <!-- 双击爱心动画 -->
+    <Transition
+      enter-active-class="transition-all duration-300 ease-out"
+      enter-from-class="scale-0 opacity-100"
+      enter-to-class="scale-100 opacity-100"
+      leave-active-class="transition-all duration-500 ease-in"
+      leave-from-class="scale-100 opacity-100"
+      leave-to-class="scale-150 opacity-0"
+    >
+      <div
+        v-if="showHeartAnimation"
+        class="absolute inset-0 flex items-center justify-center z-20 pointer-events-none"
+      >
+        <svg class="w-12 h-12 text-rose-500 drop-shadow-lg" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M11.645 20.91l-.007-.003-.022-.012a15.247 15.247 0 01-.383-.218 25.18 25.18 0 01-4.244-3.17C4.688 15.36 2.25 12.174 2.25 8.25 2.25 5.322 4.714 3 7.688 3A5.5 5.5 0 0112 5.052 5.5 5.5 0 0116.313 3c2.973 0 5.437 2.322 5.437 5.25 0 3.925-2.438 7.111-4.739 9.256a25.175 25.175 0 01-4.244 3.17 15.247 15.247 0 01-.383.219l-.022.012-.007.004-.003.001a.752.752 0 01-.704 0l-.003-.001z" />
+        </svg>
+      </div>
+    </Transition>
+
     <div class="flex">
       <!-- 视频封面（左侧） -->
       <div
         v-if="showThumbnail"
-        class="relative shrink-0 w-28 md:w-36 bg-slate-100 overflow-hidden"
+        class="relative shrink-0 w-24 md:w-36 bg-slate-100 overflow-hidden"
       >
         <img
           :src="thumbnailUrl"
@@ -153,8 +198,8 @@ function onThumbError(e) {
       <div class="flex-1 min-w-0 py-3 px-3 md:px-4">
         <!-- 第一行：标题 + 收藏 -->
         <div class="flex items-start gap-2">
-          <!-- 媒体类型小图标 + sentiment 色点 -->
-          <div class="flex items-center gap-1.5 shrink-0 mt-0.5">
+          <!-- 媒体类型小图标 + sentiment 色点（移动端隐藏） -->
+          <div class="hidden md:flex items-center gap-1.5 shrink-0 mt-0.5">
             <svg :class="mediaColor" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
               <path stroke-linecap="round" stroke-linejoin="round" :d="mediaIcon" />
             </svg>
@@ -170,18 +215,18 @@ function onThumbError(e) {
               isRead
                 ? 'text-slate-400 font-normal group-hover:text-slate-600'
                 : 'text-slate-800 font-semibold group-hover:text-indigo-700',
-              'flex-1 min-w-0 text-sm leading-snug transition-colors duration-200 line-clamp-1'
+              'flex-1 min-w-0 text-sm leading-snug transition-colors duration-200 line-clamp-2 md:line-clamp-1'
             ]"
           >
             {{ item.title }}
           </h3>
 
           <button
-            class="shrink-0 p-1 rounded-lg transition-all duration-200"
+            class="shrink-0 p-2 md:p-1 rounded-lg transition-all duration-200"
             :class="item.is_favorited ? 'text-amber-400 hover:text-amber-500 hover:bg-amber-50' : 'text-slate-200 hover:text-amber-400 hover:bg-slate-50'"
             @click.stop="emit('favorite', item.id)"
           >
-            <svg class="w-4 h-4" :fill="item.is_favorited ? 'currentColor' : 'none'" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+            <svg class="w-5 h-5 md:w-4 md:h-4" :fill="item.is_favorited ? 'currentColor' : 'none'" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
               <path stroke-linecap="round" stroke-linejoin="round" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
             </svg>
           </button>
@@ -210,7 +255,7 @@ function onThumbError(e) {
             :favorited-at="item.favorited_at"
             :tags="tags"
             :show-tags="true"
-            :max-tags="3"
+            :max-tags="2"
             @tag-click="emit('tag-click', $event)"
           />
         </div>

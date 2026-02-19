@@ -50,6 +50,16 @@ useScrollLock(playerVisible)
 const showDeleteDialog = ref(false)
 const deletingVideo = ref(null)
 
+// Mobile filter collapse
+const showMobileFilters = ref(false)
+const activeFilterCount = computed(() => {
+  let count = 0
+  if (filterStatus.value && filterStatus.value !== 'completed') count++
+  if (filterPlatform.value) count++
+  if (filterSourceId.value) count++
+  return count
+})
+
 // --- 横竖屏检测 ---
 const detectedOrientations = ref({})
 
@@ -324,7 +334,7 @@ onBeforeUnmount(() => {
       <!-- 筛选栏 -->
       <div class="flex flex-wrap items-center gap-3">
         <!-- 搜索 -->
-        <div class="relative flex-1 min-w-[200px] max-w-sm">
+        <div class="relative flex-1 min-w-[160px] max-w-sm">
           <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
           </svg>
@@ -332,16 +342,33 @@ onBeforeUnmount(() => {
             v-model="searchQuery"
             type="text"
             placeholder="搜索视频标题..."
-            class="w-full bg-white rounded-lg pl-9 pr-3 py-2 text-sm text-slate-700 placeholder-slate-400 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all"
+            class="w-full bg-white rounded-lg pl-9 pr-3 py-2 text-base sm:text-sm text-slate-700 placeholder-slate-400 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all"
           />
         </div>
+        <!-- Mobile filter toggle -->
+        <button
+          class="md:hidden p-2.5 sm:p-2 rounded-lg border transition-all duration-200 relative"
+          :class="showMobileFilters || activeFilterCount > 0 ? 'bg-indigo-50 border-indigo-300 text-indigo-600' : 'bg-white border-slate-200 text-slate-400 hover:text-slate-600 hover:border-slate-300'"
+          @click="showMobileFilters = !showMobileFilters"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 6h9.75M10.5 6a1.5 1.5 0 11-3 0m3 0a1.5 1.5 0 10-3 0M3.75 6H7.5m3 12h9.75m-9.75 0a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m-3.75 0H7.5m9-6h3.75m-3.75 0a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m-9.75 0h9.75" />
+          </svg>
+          <span
+            v-if="activeFilterCount > 0"
+            class="absolute -top-1.5 -right-1.5 w-4.5 h-4.5 bg-indigo-600 text-white text-[10px] font-bold rounded-full flex items-center justify-center leading-none"
+          >{{ activeFilterCount }}</span>
+        </button>
 
         <!-- 状态 pills -->
-        <div class="flex items-center gap-1">
+        <div
+          class="flex items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          :class="showMobileFilters ? '' : 'hidden md:flex'"
+        >
           <button
             v-for="opt in statusOptions"
             :key="opt.value"
-            class="px-2.5 py-1.5 text-xs font-medium rounded-lg border transition-all duration-200"
+            class="px-2.5 py-1.5 text-xs font-medium rounded-lg border transition-all duration-200 shrink-0 whitespace-nowrap"
             :class="filterStatus === opt.value
               ? 'bg-indigo-50 border-indigo-300 text-indigo-700'
               : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300'"
@@ -355,7 +382,8 @@ onBeforeUnmount(() => {
         <select
           v-if="platforms.length > 0"
           v-model="filterPlatform"
-          class="px-3 py-1.5 text-xs font-medium bg-white border border-slate-200 rounded-lg text-slate-600 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 outline-none transition-all"
+          class="px-3 py-1.5 text-base sm:text-xs font-medium bg-white border border-slate-200 rounded-lg text-slate-600 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 outline-none transition-all"
+          :class="showMobileFilters ? '' : 'hidden md:block'"
         >
           <option value="">全部平台</option>
           <option v-for="p in platforms" :key="p" :value="p" class="capitalize">{{ p }}</option>
@@ -365,18 +393,22 @@ onBeforeUnmount(() => {
         <select
           v-if="sources.length > 0"
           v-model="filterSourceId"
-          class="px-3 py-1.5 text-xs font-medium bg-white border border-slate-200 rounded-lg text-slate-600 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 outline-none transition-all"
+          class="px-3 py-1.5 text-base sm:text-xs font-medium bg-white border border-slate-200 rounded-lg text-slate-600 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 outline-none transition-all"
+          :class="showMobileFilters ? '' : 'hidden md:block'"
         >
           <option value="">全部来源</option>
           <option v-for="s in sources" :key="s.id" :value="s.id">{{ s.name }}</option>
         </select>
 
         <!-- 排序 -->
-        <div class="flex items-center gap-1 ml-auto">
+        <div
+          class="flex items-center gap-1 ml-auto overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          :class="showMobileFilters ? '' : 'hidden md:flex'"
+        >
           <button
             v-for="opt in sortOptions"
             :key="opt.value"
-            class="px-2.5 py-1.5 text-xs font-medium rounded-lg border transition-all duration-200"
+            class="px-2.5 py-1.5 text-xs font-medium rounded-lg border transition-all duration-200 shrink-0 whitespace-nowrap"
             :class="currentSort === opt.value
               ? 'bg-indigo-50 border-indigo-300 text-indigo-700'
               : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300'"
@@ -402,12 +434,12 @@ onBeforeUnmount(() => {
       leave-to-class="opacity-0 -translate-y-2"
     >
       <div v-if="showDownloadForm" class="mb-5 bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
-        <form class="flex items-center gap-3" @submit.prevent="handleSubmit">
+        <form class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3" @submit.prevent="handleSubmit">
           <input
             v-model="videoUrl"
             type="text"
             placeholder="输入视频 URL（B站 / YouTube / 其他平台）"
-            class="flex-1 px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-700 placeholder-slate-400 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 focus:bg-white outline-none transition-all duration-200"
+            class="flex-1 px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-lg text-base sm:text-sm text-slate-700 placeholder-slate-400 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 focus:bg-white outline-none transition-all duration-200"
           />
           <button
             type="submit"

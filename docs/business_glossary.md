@@ -36,17 +36,32 @@
 只描述「信息从哪来」，不涉及处理逻辑。采用两段式命名 `{Category}.{Specific}`。
 定义在 `app/models/content.py`。
 
-| 枚举值 | 描述 | 备注 |
-| :--- | :--- | :--- |
-| `rss.hub` | RSSHub 生成的订阅源 | B站/YouTube/微博等都通过这个 |
-| `rss.standard` | 标准 RSS/Atom 订阅源 | 博客、新闻站点 |
-| `api.akshare` | AkShare 金融数据 | 宏观经济指标 |
-| `web.scraper` | 网页抓取 | 内部分 L1/L2/L3 级别 |
-| `file.upload` | 用户上传文件 | 文本/图片/文档 |
-| `account.bilibili` | B站账号 | 需要 Cookie/登录态 |
-| `account.generic` | 其他平台账号 | 需要认证的平台 |
-| `user.note` | 日常笔记 | 用户手动输入 |
-| `system.notification` | 系统消息 | 系统通知 |
+数据源分为两大类（`SourceCategory`）：
+- **network（网络数据）**: 有 Collector，定时自动采集，需要 URL/配置
+- **user（用户数据）**: 无 Collector（或目录扫描），用户/系统主动提交，无调度
+
+分类由 `get_source_category(source_type)` 函数根据前缀自动推导，无需 DB 列。
+
+| 枚举值 | 分类 | 描述 | 备注 |
+| :--- | :--- | :--- | :--- |
+| `rss.hub` | network | RSSHub 生成的订阅源 | B站/YouTube/微博等都通过这个 |
+| `rss.standard` | network | 标准 RSS/Atom 订阅源 | 博客、新闻站点 |
+| `api.akshare` | network | AkShare 金融数据 | 宏观经济指标 |
+| `web.scraper` | network | 网页抓取 | 内部分 L1/L2/L3 级别 |
+| `account.bilibili` | network | B站账号 | 需要 Cookie/登录态 |
+| `account.generic` | network | 其他平台账号 | 需要认证的平台 |
+| `user.note` | user | 日常笔记 | 用户手动输入，通过 `/api/content/submit` 提交 |
+| `file.upload` | user | 用户上传文件 | 文本/图片/文档，通过 `/api/content/upload` 上传 |
+| `system.notification` | user | 系统消息 | 系统通知 |
+
+### 3.10 SourceCategory (数据源大类)
+
+定义在 `app/models/content.py`。派生属性，由 source_type 前缀决定，无 DB 列。
+
+| 枚举值 | 描述 | 前缀 | 特征 |
+| :--- | :--- | :--- | :--- |
+| `network` | 网络数据 | rss, api, web, account | 有 Collector，定时采集，需要 URL/配置 |
+| `user` | 用户数据 | user, file, system | 无 Collector，用户/系统主动提交，无调度 |
 
 ### 3.2 StepType (原子操作类型)
 

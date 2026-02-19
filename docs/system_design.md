@@ -111,6 +111,12 @@ finance_data_points (金融数据)
 
 只描述「从哪获取信息」，source_type 不含视频平台等混合类型。
 
+数据源分为两大类（派生属性，非 DB 列）：
+- **网络数据 (network)**: rss.hub, rss.standard, api.akshare, web.scraper, account.bilibili, account.generic — 有 Collector，定时自动采集
+- **用户数据 (user)**: user.note, file.upload, system.notification — 用户/系统主动提交，schedule_enabled 自动置 false
+
+通用内容提交 API：`POST /api/content/submit`（文本）、`POST /api/content/upload`（文件），校验目标源必须为 user 分类。
+
 ```sql
 CREATE TABLE source_configs (
     id              TEXT PRIMARY KEY,           -- UUID

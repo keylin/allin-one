@@ -41,12 +41,12 @@ const getTypeConfig = (type) => typeConfig[type] || typeConfig.info
 
 <template>
   <!-- Toast Container (右上角固定) -->
-  <div class="fixed top-4 right-4 z-50 flex flex-col gap-3 pointer-events-none">
+  <div class="fixed top-4 left-4 right-4 sm:left-auto z-50 flex flex-col gap-3 pointer-events-none">
     <TransitionGroup name="toast">
       <div
         v-for="toast in toasts"
         :key="toast.id"
-        class="pointer-events-auto min-w-[320px] max-w-md rounded-xl border shadow-lg transition-all duration-200"
+        class="pointer-events-auto sm:min-w-[320px] max-w-md rounded-xl border shadow-lg transition-all duration-200"
         :class="getTypeConfig(toast.type).bg"
       >
         <div class="flex items-start gap-3 p-4">

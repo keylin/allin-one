@@ -8,7 +8,7 @@ from sqlalchemy import func
 
 from app.core.database import get_db
 from app.core.time import utcnow
-from app.models.content import SourceConfig, ContentItem, CollectionRecord, SourceType
+from app.models.content import SourceConfig, ContentItem, CollectionRecord, SourceType, SourceCategory, get_source_category
 from app.models.pipeline import PipelineTemplate
 from app.schemas import (
     SourceCreate, SourceUpdate, SourceResponse, CollectionRecordResponse, ContentBatchDelete, error_response,
@@ -21,6 +21,7 @@ router = APIRouter()
 def _source_to_response(source: SourceConfig, db: Session) -> dict:
     """将 ORM 对象转为响应 dict，解析 pipeline_template_name 和 content_count"""
     data = SourceResponse.model_validate(source).model_dump()
+    data["category"] = get_source_category(source.source_type).value
     if source.pipeline_template_id:
         tpl = db.get(PipelineTemplate, source.pipeline_template_id)
         data["pipeline_template_name"] = tpl.name if tpl else None
@@ -48,6 +49,7 @@ async def list_sources(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     source_type: str | None = Query(None),
+    category: str | None = Query(None, description="分类筛选: network/user"),
     is_active: bool | None = Query(None),
     q: str | None = Query(None, description="搜索名称或描述"),
     sort_by: str = Query("created_at", description="排序字段"),
@@ -59,6 +61,14 @@ async def list_sources(
 
     if source_type is not None:
         query = query.filter(SourceConfig.source_type == source_type)
+    if category is not None:
+        # 根据分类推导出该分类下的所有 source_type 前缀
+        category_types = [
+            st.value for st in SourceType
+            if get_source_category(st.value).value == category
+        ]
+        if category_types:
+            query = query.filter(SourceConfig.source_type.in_(category_types))
     if is_active is not None:
         query = query.filter(SourceConfig.is_active == is_active)
     if q:
@@ -121,6 +131,10 @@ async def create_source(body: SourceCreate, db: Session = Depends(get_db)):
             return error_response(400, f"Pipeline template '{body.pipeline_template_id}' not found")
 
     data = body.model_dump()
+
+    # 用户类型源自动禁用调度
+    if get_source_category(body.source_type) == SourceCategory.USER:
+        data["schedule_enabled"] = False
 
     source = SourceConfig(**data)
     db.add(source)
@@ -205,63 +219,43 @@ async def update_source(source_id: str, body: SourceUpdate, db: Session = Depend
 
 @router.post("/batch-collect")
 async def batch_collect_all(db: Session = Depends(get_db)):
-    """一键采集所有启用的数据源"""
-    from app.services.collectors import collect_source
-    from app.services.pipeline.orchestrator import PipelineOrchestrator
-    from app.services.scheduling_service import SchedulingService
-    from app.models.pipeline import TriggerSource
+    """一键采集所有启用的数据源 — 异步入队"""
+    from app.tasks.collection_tasks import collect_single_source
+    from app.tasks.procrastinate_app import async_defer
 
     active_sources = db.query(SourceConfig).filter(SourceConfig.is_active == True).all()
     if not active_sources:
         return {
             "code": 0,
-            "data": {"sources_collected": 0, "total_items_new": 0, "pipelines_started": 0, "errors": []},
+            "data": {"sources_queued": 0, "sources_skipped": 0},
             "message": "没有启用的数据源",
         }
 
-    orchestrator = PipelineOrchestrator(db)
-    sources_collected = 0
-    total_items_new = 0
-    pipelines_started = 0
-    errors = []
+    sources_queued = 0
+    sources_skipped = 0
 
     for source in active_sources:
         try:
-            new_items = await collect_source(source, db)
-            sources_collected += 1
-            total_items_new += len(new_items)
-
-            source.last_collected_at = utcnow()
-            source.consecutive_failures = 0
-
-            # ✨ 更新智能调度时间
-            SchedulingService.update_next_collection_time(source, db)
-
-            db.flush()
-
-            for item in new_items:
-                execution = orchestrator.trigger_for_content(
-                    content=item,
-                    trigger=TriggerSource.MANUAL,
-                )
-                if execution:
-                    await orchestrator.async_start_execution(execution.id)
-                    pipelines_started += 1
+            await async_defer(
+                collect_single_source,
+                queueing_lock=f"collect_{source.id}",
+                source_id=source.id,
+                trigger="manual",
+                use_retry=False,
+            )
+            sources_queued += 1
         except Exception as e:
-            logger.warning(f"Batch collect failed for source {source.id} ({source.name}): {e}")
-            errors.append(f"{source.name}: {str(e)}")
-
-    db.commit()
+            # queueing_lock 冲突时 Procrastinate 会抛 UniqueViolation
+            logger.debug(f"Batch collect: source {source.name} already queued or defer failed: {e}")
+            sources_skipped += 1
 
     return {
         "code": 0,
         "data": {
-            "sources_collected": sources_collected,
-            "total_items_new": total_items_new,
-            "pipelines_started": pipelines_started,
-            "errors": errors,
+            "sources_queued": sources_queued,
+            "sources_skipped": sources_skipped,
         },
-        "message": f"采集完成: {sources_collected} 个源，{total_items_new} 条新内容",
+        "message": f"{sources_queued} 个采集任务已提交",
     }
 
 
@@ -317,61 +311,34 @@ async def delete_source(
 
 @router.post("/{source_id}/collect")
 async def trigger_collect(source_id: str, db: Session = Depends(get_db)):
-    """手动触发采集"""
+    """手动触发采集 — 异步入队"""
     source = db.get(SourceConfig, source_id)
     if not source:
         return error_response(404, "Source not found")
 
-    from app.services.collectors import collect_source
-    from app.services.pipeline.orchestrator import PipelineOrchestrator
-    from app.services.scheduling_service import SchedulingService
-    from app.models.pipeline import TriggerSource
+    from app.tasks.collection_tasks import collect_single_source
+    from app.tasks.procrastinate_app import async_defer
 
     try:
-        new_items = await collect_source(source, db)
-
-        # 更新采集时间 (与 scheduled_tasks 保持一致)
-        source.last_collected_at = utcnow()
-        source.consecutive_failures = 0
-
-        # ✨ 更新智能调度时间
-        SchedulingService.update_next_collection_time(source, db)
-
-        db.flush()
-
-        # 对新内容触发关联流水线
-        orchestrator = PipelineOrchestrator(db)
-        pipelines_started = 0
-        for item in new_items:
-            execution = orchestrator.trigger_for_content(
-                content=item,
-                trigger=TriggerSource.MANUAL,
-            )
-            if execution:
-                await orchestrator.async_start_execution(execution.id)
-                pipelines_started += 1
-
-        # 获取最近一条 CollectionRecord 用于响应
-        record = (
-            db.query(CollectionRecord)
-            .filter(CollectionRecord.source_id == source_id)
-            .order_by(CollectionRecord.started_at.desc())
-            .first()
+        await async_defer(
+            collect_single_source,
+            queueing_lock=f"collect_{source.id}",
+            source_id=source.id,
+            trigger="manual",
+            use_retry=False,
         )
-
         return {
             "code": 0,
-            "data": {
-                "record": CollectionRecordResponse.model_validate(record).model_dump() if record else None,
-                "items_found": len(new_items),
-                "items_new": len(new_items),
-                "pipelines_started": pipelines_started,
-            },
-            "message": f"采集完成: 发现 {len(new_items)} 条新内容",
+            "data": {"status": "queued"},
+            "message": "采集任务已提交",
         }
     except Exception as e:
-        logger.exception(f"Manual collect failed for source {source_id}")
-        return error_response(500, f"采集失败: {str(e)}")
+        logger.debug(f"Manual collect: source {source.name} already queued: {e}")
+        return {
+            "code": 0,
+            "data": {"status": "already_queued"},
+            "message": "采集任务已在队列中",
+        }
 
 
 # ---- 采集历史 ----

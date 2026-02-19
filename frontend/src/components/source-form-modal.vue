@@ -14,17 +14,33 @@ const props = defineProps({
 const emit = defineEmits(['submit', 'cancel'])
 useScrollLock(toRef(props, 'visible'))
 
-const sourceTypes = [
-  { value: 'rss.hub', label: 'RSSHub' },
-  { value: 'rss.standard', label: 'RSS/Atom' },
-  { value: 'api.akshare', label: 'AkShare' },
-  { value: 'web.scraper', label: '网页抓取' },
-  { value: 'file.upload', label: '文件上传' },
-  { value: 'account.bilibili', label: 'B站账号' },
-  { value: 'account.generic', label: '其他账号' },
-  { value: 'user.note', label: '用户笔记' },
-  { value: 'system.notification', label: '系统通知' },
+const sourceTypeGroups = [
+  {
+    label: '网络数据',
+    category: 'network',
+    types: [
+      { value: 'rss.hub', label: 'RSSHub' },
+      { value: 'rss.standard', label: 'RSS/Atom' },
+      { value: 'api.akshare', label: 'AkShare' },
+      { value: 'web.scraper', label: '网页抓取' },
+      { value: 'account.bilibili', label: 'B站账号' },
+      { value: 'account.generic', label: '其他账号' },
+    ]
+  },
+  {
+    label: '用户数据',
+    category: 'user',
+    types: [
+      { value: 'user.note', label: '用户笔记' },
+      { value: 'file.upload', label: '文件上传' },
+      { value: 'system.notification', label: '系统通知' },
+    ]
+  }
 ]
+
+const isUserCategory = computed(() => {
+  return ['user.note', 'file.upload', 'system.notification'].includes(form.value.source_type)
+})
 
 const templates = ref([])
 const form = ref(getDefaultForm())
@@ -195,6 +211,10 @@ watch(() => form.value.source_type, (newType) => {
   aksharePresetSelected.value = false
   akshareUserParams.value = []
   akshareAlerts.value = []
+  // 用户类型源自动禁用调度
+  if (['user.note', 'file.upload', 'system.notification'].includes(newType)) {
+    form.value.schedule_enabled = false
+  }
 })
 
 onMounted(async () => {
@@ -275,8 +295,8 @@ function formatInterval(seconds) {
   return `${Math.round(seconds / 3600)}小时`
 }
 
-const inputClass = 'w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-sm text-slate-700 placeholder-slate-300 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 outline-none transition-all duration-200'
-const selectClass = 'w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-sm text-slate-700 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 outline-none transition-all duration-200 appearance-none cursor-pointer'
+const inputClass = 'w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-base sm:text-sm text-slate-700 placeholder-slate-300 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 outline-none transition-all duration-200'
+const selectClass = 'w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-base sm:text-sm text-slate-700 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 outline-none transition-all duration-200 appearance-none cursor-pointer'
 const labelClass = 'block text-sm font-medium text-slate-700 mb-1.5'
 const sectionClass = 'space-y-4 p-4 bg-slate-50/50 rounded-xl border border-slate-100'
 </script>
@@ -303,7 +323,9 @@ const sectionClass = 'space-y-4 p-4 bg-slate-50/50 rounded-xl border border-slat
         <div>
           <label :class="labelClass">数据源类型 *</label>
           <select v-model="form.source_type" :class="selectClass">
-            <option v-for="t in sourceTypes" :key="t.value" :value="t.value">{{ t.label }}</option>
+            <optgroup v-for="group in sourceTypeGroups" :key="group.category" :label="group.label">
+              <option v-for="t in group.types" :key="t.value" :value="t.value">{{ t.label }}</option>
+            </optgroup>
           </select>
         </div>
 
@@ -592,8 +614,8 @@ const sectionClass = 'space-y-4 p-4 bg-slate-50/50 rounded-xl border border-slat
             </svg>
           </summary>
           <div class="mt-4 space-y-5 pl-1">
-            <!-- 定时采集 -->
-            <div>
+            <!-- 定时采集 (用户类型源隐藏) -->
+            <div v-if="!isUserCategory">
               <h4 class="text-sm font-medium text-slate-700 mb-2">定时调度</h4>
               <div class="flex items-center gap-3">
                 <input

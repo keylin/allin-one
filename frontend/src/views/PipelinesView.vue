@@ -23,9 +23,9 @@ function switchTab(tab) {
   <div class="flex flex-col h-full">
     <!-- Tab 栏 -->
     <div class="border-b border-slate-100 bg-white px-4 pt-3 pb-0 shrink-0">
-      <div class="flex items-center gap-1">
+      <div class="flex items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <button
-          class="px-4 py-2.5 text-sm font-medium border-b-2 transition-all duration-200"
+          class="px-4 py-2.5 text-sm font-medium border-b-2 transition-all duration-200 whitespace-nowrap shrink-0"
           :class="activeTab === 'executions'
             ? 'border-indigo-600 text-indigo-600'
             : 'border-transparent text-slate-500 hover:text-slate-700'"
@@ -34,7 +34,7 @@ function switchTab(tab) {
           执行记录
         </button>
         <button
-          class="px-4 py-2.5 text-sm font-medium border-b-2 transition-all duration-200"
+          class="px-4 py-2.5 text-sm font-medium border-b-2 transition-all duration-200 whitespace-nowrap shrink-0"
           :class="activeTab === 'templates'
             ? 'border-indigo-600 text-indigo-600'
             : 'border-transparent text-slate-500 hover:text-slate-700'"
@@ -43,7 +43,7 @@ function switchTab(tab) {
           流水线模板
         </button>
         <button
-          class="px-4 py-2.5 text-sm font-medium border-b-2 transition-all duration-200"
+          class="px-4 py-2.5 text-sm font-medium border-b-2 transition-all duration-200 whitespace-nowrap shrink-0"
           :class="activeTab === 'prompts'
             ? 'border-indigo-600 text-indigo-600'
             : 'border-transparent text-slate-500 hover:text-slate-700'"
@@ -52,7 +52,7 @@ function switchTab(tab) {
           提示词模板
         </button>
         <button
-          class="px-4 py-2.5 text-sm font-medium border-b-2 transition-all duration-200"
+          class="px-4 py-2.5 text-sm font-medium border-b-2 transition-all duration-200 whitespace-nowrap shrink-0"
           :class="activeTab === 'debug'
             ? 'border-indigo-600 text-indigo-600'
             : 'border-transparent text-slate-500 hover:text-slate-700'"

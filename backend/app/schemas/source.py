@@ -42,6 +42,7 @@ class SourceResponse(BaseModel):
     id: str
     name: str
     source_type: str
+    category: Optional[str] = None
     url: Optional[str] = None
     description: Optional[str] = None
     schedule_enabled: bool = True

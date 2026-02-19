@@ -155,7 +155,11 @@ watch(() => route.path, () => {
 
       <!-- Main Content -->
       <main class="main-content">
-        <RouterView />
+        <RouterView v-slot="{ Component }">
+          <Transition name="page" mode="out-in">
+            <component :is="Component" :key="$route.path" />
+          </Transition>
+        </RouterView>
       </main>
     </div>
     </template>
@@ -168,6 +172,7 @@ watch(() => route.path, () => {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh;
   background: rgb(248 250 252 / 0.5);
 }
 
@@ -178,7 +183,8 @@ watch(() => route.path, () => {
   left: 0;
   right: 0;
   z-index: 30;
-  height: 48px;
+  height: calc(48px + env(safe-area-inset-top, 0px));
+  padding-top: env(safe-area-inset-top, 0px);
   background: rgba(255, 255, 255, 0.85);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
@@ -272,7 +278,7 @@ watch(() => route.path, () => {
 .below-topbar {
   display: flex;
   flex: 1;
-  margin-top: 48px;
+  margin-top: calc(48px + env(safe-area-inset-top, 0px));
   overflow: hidden;
 }
 
@@ -422,7 +428,7 @@ watch(() => route.path, () => {
 
   .sidebar {
     position: fixed;
-    top: 48px;
+    top: calc(48px + env(safe-area-inset-top, 0px));
     left: 0;
     bottom: 0;
     z-index: 50;
@@ -435,7 +441,7 @@ watch(() => route.path, () => {
   .sidebar-overlay {
     display: block;
     position: fixed;
-    inset: 48px 0 0 0;
+    inset: calc(48px + env(safe-area-inset-top, 0px)) 0 0 0;
     z-index: 49;
     background: rgb(15 23 42 / 0.4);
     backdrop-filter: blur(4px);
@@ -447,5 +453,22 @@ watch(() => route.path, () => {
   .sidebar-header {
     display: none;
   }
+}
+
+/* ===== Page Transition ===== */
+.page-enter-active {
+  transition: opacity 0.15s ease;
+}
+
+.page-leave-active {
+  transition: opacity 0.1s ease;
+}
+
+.page-enter-from {
+  opacity: 0;
+}
+
+.page-leave-to {
+  opacity: 0;
 }
 </style>

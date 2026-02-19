@@ -191,6 +191,11 @@ async function fetchItems(reset = false) {
     if (activeMediaType.value === 'article') params.has_video = false
     if (filterSourceId.value) params.source_id = filterSourceId.value
 
+    // 游标分页: 非 reset 且有已加载项时，用最后一条的 id 作为游标
+    if (!reset && items.value.length > 0) {
+      params.cursor_id = items.value[items.value.length - 1].id
+    }
+
     const res = await listContent(params)
     if (res.code === 0) {
       if (reset) {
@@ -199,7 +204,7 @@ async function fetchItems(reset = false) {
       } else {
         items.value = [...items.value, ...res.data]
       }
-      hasMore.value = items.value.length < res.total
+      hasMore.value = res.data.length >= pageSize
     }
   } finally {
     loading.value = false
@@ -210,7 +215,6 @@ async function fetchItems(reset = false) {
 
 function loadMore() {
   if (!hasMore.value || loadingMore.value) return
-  page.value++
   fetchItems()
 }
 

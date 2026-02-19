@@ -56,3 +56,17 @@ class ContentNoteUpdate(BaseModel):
 
 class ContentBatchDelete(BaseModel):
     ids: list[str]
+
+
+class ContentSubmit(BaseModel):
+    """用户主动提交内容"""
+    source_id: str
+    title: str
+    content: Optional[str] = None
+    url: Optional[str] = None
+    pipeline_template_id: Optional[str] = None
+
+
+class ContentSubmitResponse(BaseModel):
+    content_id: str
+    pipeline_execution_id: Optional[str] = None

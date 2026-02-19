@@ -6,6 +6,7 @@ import { useSourcesStore } from '@/stores/sources'
 import { useToast } from '@/composables/useToast'
 import { useScrollLock } from '@/composables/useScrollLock'
 import SourceFormModal from '@/components/source-form-modal.vue'
+import ContentSubmitModal from '@/components/content-submit-modal.vue'
 import SourceDetailPanel from '@/components/source-detail-panel.vue'
 import DetailDrawer from '@/components/detail-drawer.vue'
 import { importOPML, exportOPML } from '@/api/sources'
@@ -19,6 +20,7 @@ const fileInputRef = ref(null)
 
 const searchQuery = ref(route.query.q || '')
 const filterType = ref(route.query.type || '')
+const filterCategory = ref(route.query.category || '')
 const sortBy = ref(route.query.sort_by || 'created_at')
 const sortOrder = ref(route.query.sort_order || 'desc')
 
@@ -30,6 +32,8 @@ const showDeleteDialog = ref(false)
 const deleteContentChecked = ref(false)
 const collectingId = ref(null)
 const collectingAll = ref(false)
+const showSubmitModal = ref(false)
+const submitTargetSource = ref(null)
 
 // Batch ops
 const selectedIds = ref([])
@@ -68,9 +72,16 @@ const typeStyles = {
   'system.notification': 'bg-sky-50 text-sky-700',
 }
 
+const USER_SOURCE_TYPES = new Set(['user.note', 'file.upload', 'system.notification'])
+
+function isUserSource(source) {
+  return USER_SOURCE_TYPES.has(source.source_type)
+}
+
 const totalPages = computed(() => Math.max(1, Math.ceil(store.total / store.pageSize)))
 
 function getDisplayUrl(source) {
+  if (USER_SOURCE_TYPES.has(source.source_type)) return '-'
   if (source.source_type === 'rss.hub' && source.config_json) {
     try {
       const config = JSON.parse(source.config_json)
@@ -86,6 +97,7 @@ function syncQueryParams() {
   const query = {}
   if (searchQuery.value) query.q = searchQuery.value
   if (filterType.value) query.type = filterType.value
+  if (filterCategory.value) query.category = filterCategory.value
   if (sortBy.value !== 'created_at') query.sort_by = sortBy.value
   if (sortOrder.value !== 'desc') query.sort_order = sortOrder.value
   if (store.currentPage > 1) query.page = String(store.currentPage)
@@ -96,6 +108,7 @@ function fetchWithFilters() {
   const params = {}
   if (searchQuery.value) params.q = searchQuery.value
   if (filterType.value) params.source_type = filterType.value
+  if (filterCategory.value) params.category = filterCategory.value
   if (sortBy.value) params.sort_by = sortBy.value
   if (sortOrder.value) params.sort_order = sortOrder.value
   store.fetchSources(params)
@@ -106,6 +119,7 @@ onMounted(() => {
   if (route.query.page) store.currentPage = parseInt(route.query.page) || 1
   if (route.query.sort_by) sortBy.value = route.query.sort_by
   if (route.query.sort_order) sortOrder.value = route.query.sort_order
+  if (route.query.category) filterCategory.value = route.query.category
   fetchWithFilters()
 })
 
@@ -214,16 +228,26 @@ async function handleToggleActive(source) {
   }
 }
 
+function openSubmitContent(source) {
+  submitTargetSource.value = source
+  showSubmitModal.value = true
+}
+
+function handleSubmitSuccess() {
+  showSubmitModal.value = false
+  toast.success('内容提交成功', { title: submitTargetSource.value?.name })
+}
+
 async function handleCollect(source) {
   collectingId.value = source.id
   try {
     const res = await store.collectSource(source.id)
     if (res.code === 0) {
-      toast.success(`发现 ${res.data.items_new} 条新内容`, { title: source.name })
+      toast.success('采集任务已提交', { title: source.name })
+      setTimeout(() => fetchWithFilters(), 2000)
     } else {
       toast.error(res.message || '采集失败', { title: source.name })
     }
-    fetchWithFilters()
   } catch {
     toast.error('采集请求失败', { title: source.name })
   } finally {
@@ -237,10 +261,9 @@ async function handleCollectAll() {
     const res = await store.collectAll()
     if (res.code === 0) {
       const d = res.data
-      let msg = `${d.sources_collected} 个源，${d.total_items_new} 条新内容`
-      if (d.pipelines_started > 0) msg += `，${d.pipelines_started} 条流水线已启动`
-      if (d.errors.length > 0) msg += `，${d.errors.length} 个失败`
-      toast.success(msg, { title: '一键采集完成' })
+      let msg = `${d.sources_queued} 个采集任务已提交`
+      if (d.sources_skipped > 0) msg += `，${d.sources_skipped} 个已在队列中`
+      toast.success(msg, { title: '一键采集' })
     } else {
       toast.error(res.message || '采集失败')
     }
@@ -407,6 +430,16 @@ function handleExport() {
 
       <!-- Filter bar -->
       <div v-else class="flex flex-wrap items-center gap-3">
+      <!-- Category tabs -->
+      <div class="flex items-center gap-1 bg-slate-100/60 rounded-lg p-0.5">
+        <button
+          v-for="cat in [{value: '', label: '全部'}, {value: 'network', label: '网络'}, {value: 'user', label: '用户'}]"
+          :key="cat.value"
+          class="px-3 py-1.5 text-xs font-medium rounded-md transition-all duration-200"
+          :class="filterCategory === cat.value ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+          @click="filterCategory = cat.value; handleFilterChange()"
+        >{{ cat.label }}</button>
+      </div>
       <div class="relative flex-1 min-w-[200px] max-w-sm">
         <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
@@ -425,7 +458,19 @@ function handleExport() {
         class="bg-white text-sm text-slate-600 rounded-lg px-3 py-2 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all appearance-none cursor-pointer"
       >
         <option value="">全部类型</option>
-        <option v-for="(label, value) in typeLabels" :key="value" :value="value">{{ label }}</option>
+        <optgroup label="网络数据">
+          <option value="rss.hub">RSSHub</option>
+          <option value="rss.standard">RSS/Atom</option>
+          <option value="api.akshare">AkShare</option>
+          <option value="web.scraper">网页抓取</option>
+          <option value="account.bilibili">B站账号</option>
+          <option value="account.generic">其他账号</option>
+        </optgroup>
+        <optgroup label="用户数据">
+          <option value="user.note">用户笔记</option>
+          <option value="file.upload">文件上传</option>
+          <option value="system.notification">系统通知</option>
+        </optgroup>
       </select>
       </div>
     </div>
@@ -580,6 +625,14 @@ function handleExport() {
               <td class="px-4 py-3 text-right" @click.stop>
                 <div class="flex items-center justify-end gap-1">
                   <button
+                    v-if="isUserSource(source)"
+                    class="px-2 py-1 text-xs font-medium text-emerald-600 hover:bg-emerald-50 rounded-lg transition-all duration-200"
+                    @click="openSubmitContent(source)"
+                  >
+                    添加内容
+                  </button>
+                  <button
+                    v-else
                     class="px-2 py-1 text-xs font-medium text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all duration-200 disabled:opacity-50"
                     :disabled="collectingId === source.id"
                     @click="handleCollect(source)"
@@ -688,6 +741,13 @@ function handleExport() {
       :source="editingSource"
       @submit="handleFormSubmit"
       @cancel="showFormModal = false"
+    />
+
+    <ContentSubmitModal
+      :visible="showSubmitModal"
+      :source="submitTargetSource"
+      @success="handleSubmitSuccess"
+      @cancel="showSubmitModal = false"
     />
 
     <!-- 单个删除确认 -->

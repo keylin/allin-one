@@ -76,8 +76,8 @@ COLLECTOR_MAP = {
     "account.generic": _generic_account_collector,
 }
 
-_UNIMPLEMENTED_TYPES = {
-    "user.note", "system.notification",
+_USER_SUBMISSION_TYPES = {
+    "user.note", "file.upload", "system.notification",
 }
 
 
@@ -182,8 +182,8 @@ async def collect_source_with_retry(source: SourceConfig, db: Session) -> list[C
         collector = COLLECTOR_MAP.get(source.source_type)
 
         if not collector:
-            if source.source_type in _UNIMPLEMENTED_TYPES:
-                logger.warning(f"[collect] Collector not implemented for {source.source_type}, skipping")
+            if source.source_type in _USER_SUBMISSION_TYPES:
+                logger.debug(f"[collect] User-submission type {source.source_type}, skipping collection")
             else:
                 logger.error(f"[collect] Unknown source_type: {source.source_type}")
             record.status = "completed"
@@ -234,8 +234,8 @@ async def collect_source(source: SourceConfig, db: Session) -> list[ContentItem]
         collector = COLLECTOR_MAP.get(source.source_type)
 
         if not collector:
-            if source.source_type in _UNIMPLEMENTED_TYPES:
-                logger.warning(f"[collect] Collector not implemented for {source.source_type}, skipping")
+            if source.source_type in _USER_SUBMISSION_TYPES:
+                logger.debug(f"[collect] User-submission type {source.source_type}, skipping collection")
             else:
                 logger.error(f"[collect] Unknown source_type: {source.source_type}")
             record.status = "completed"

@@ -59,6 +59,19 @@ const sortOrder = ref(route.query.sort_order || 'desc')
 const selectedId = ref(null)
 const drawerVisible = ref(false)
 
+// Mobile filter collapse
+const showMobileFilters = ref(false)
+const activeFilterCount = computed(() => {
+  let count = 0
+  if (filterStatus.value) count++
+  if (filterHasVideo.value) count++
+  if (filterSourceId.value) count++
+  if (dateRange.value) count++
+  if (readStatusFilter.value) count++
+  if (showFavoritesOnly.value) count++
+  return count
+})
+
 // Batch ops
 const selectedIds = ref([])
 const showBatchDeleteDialog = ref(false)
@@ -349,35 +362,35 @@ onUnmounted(() => {
     <!-- Sticky header -->
     <div class="px-4 pt-3 pb-2 space-y-2.5 sticky top-0 bg-white z-10 border-b border-slate-100 shrink-0">
       <!-- Batch actions -->
-      <div v-if="selectedIds.length > 0" class="flex items-center gap-2">
-        <span class="text-sm text-slate-500">已选 {{ selectedIds.length }}</span>
+      <div v-if="selectedIds.length > 0" class="flex items-center gap-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <span class="text-sm text-slate-500 shrink-0 whitespace-nowrap">已选 {{ selectedIds.length }}</span>
         <button
-          class="px-3 py-1.5 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-all disabled:opacity-50"
+          class="px-3 py-1.5 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-all disabled:opacity-50 shrink-0 whitespace-nowrap"
           :disabled="batchAnalyzing"
           @click="handleBatchAnalyze"
         >
           {{ batchAnalyzing ? `${batchProgress}/${batchTotal}` : '批量分析' }}
         </button>
         <button
-          class="px-3 py-1.5 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-all"
+          class="px-3 py-1.5 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-all shrink-0 whitespace-nowrap"
           @click="handleBatchRead"
         >
           标记已读
         </button>
         <button
-          class="px-3 py-1.5 text-sm font-medium text-white bg-amber-500 rounded-lg hover:bg-amber-600 transition-all"
+          class="px-3 py-1.5 text-sm font-medium text-white bg-amber-500 rounded-lg hover:bg-amber-600 transition-all shrink-0 whitespace-nowrap"
           @click="handleBatchFavorite"
         >
           批量收藏
         </button>
         <button
-          class="px-3 py-1.5 text-sm font-medium text-white bg-rose-600 rounded-lg hover:bg-rose-700 transition-all"
+          class="px-3 py-1.5 text-sm font-medium text-white bg-rose-600 rounded-lg hover:bg-rose-700 transition-all shrink-0 whitespace-nowrap"
           @click="showBatchDeleteDialog = true"
         >
           批量删除
         </button>
         <button
-          class="px-3 py-1.5 text-sm font-medium text-slate-500 hover:text-slate-700 transition-colors"
+          class="px-3 py-1.5 text-sm font-medium text-slate-500 hover:text-slate-700 transition-colors shrink-0 whitespace-nowrap"
           @click="selectedIds = []"
         >
           取消
@@ -385,6 +398,8 @@ onUnmounted(() => {
       </div>
 
       <!-- Stats cards -->
+      <div class="relative">
+      <div class="absolute top-0 right-0 bottom-0 w-8 bg-gradient-to-l from-white pointer-events-none md:hidden z-[1]"></div>
       <div class="flex gap-2 overflow-x-auto p-0.5 scrollbar-hide items-center">
         <button
           v-for="card in [
@@ -433,10 +448,12 @@ onUnmounted(() => {
           {{ deletingAll ? '清空中...' : '清空全部' }}
         </button>
       </div>
+      </div>
 
       <!-- Filter bar -->
       <div class="flex flex-wrap items-center gap-3">
-      <div class="relative flex-1 min-w-[200px] max-w-sm">
+      <!-- Search (always visible) -->
+      <div class="relative flex-1 min-w-[160px] max-w-sm">
         <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
         </svg>
@@ -444,14 +461,31 @@ onUnmounted(() => {
           v-model="searchQuery"
           type="text"
           placeholder="搜索标题..."
-          class="w-full bg-white rounded-lg pl-9 pr-3 py-2 text-sm text-slate-700 placeholder-slate-400 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all"
+          class="w-full bg-white rounded-lg pl-9 pr-3 py-2 text-base sm:text-sm text-slate-700 placeholder-slate-400 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all"
           @input="onSearchInput"
         />
       </div>
+      <!-- Mobile filter toggle -->
+      <button
+        class="md:hidden p-2.5 sm:p-2 rounded-lg border transition-all duration-200 relative"
+        :class="showMobileFilters || activeFilterCount > 0 ? 'bg-indigo-50 border-indigo-300 text-indigo-600' : 'bg-white border-slate-200 text-slate-400 hover:text-slate-600 hover:border-slate-300'"
+        @click="showMobileFilters = !showMobileFilters"
+      >
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 6h9.75M10.5 6a1.5 1.5 0 11-3 0m3 0a1.5 1.5 0 10-3 0M3.75 6H7.5m3 12h9.75m-9.75 0a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m-3.75 0H7.5m9-6h3.75m-3.75 0a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m-9.75 0h9.75" />
+        </svg>
+        <span
+          v-if="activeFilterCount > 0"
+          class="absolute -top-1.5 -right-1.5 w-4.5 h-4.5 bg-indigo-600 text-white text-[10px] font-bold rounded-full flex items-center justify-center leading-none"
+        >{{ activeFilterCount }}</span>
+      </button>
+      <!-- Filters (collapsible on mobile) -->
+      <template v-for="n in 1" :key="n">
       <select
         v-model="filterSourceId"
         @change="handleFilterChange"
-        class="bg-white text-sm text-slate-600 rounded-lg px-3 py-2 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all appearance-none cursor-pointer max-w-[140px]"
+        class="bg-white text-base sm:text-sm text-slate-600 rounded-lg px-3 py-2.5 sm:py-2 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all appearance-none cursor-pointer max-w-[140px]"
+        :class="showMobileFilters ? '' : 'hidden md:block'"
       >
         <option value="">全部来源</option>
         <option v-for="s in sources" :key="s.id" :value="String(s.id)">{{ s.name }}</option>
@@ -459,14 +493,18 @@ onUnmounted(() => {
       <select
         v-model="filterStatus"
         @change="handleFilterChange"
-        class="bg-white text-sm text-slate-600 rounded-lg px-3 py-2 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all appearance-none cursor-pointer"
+        class="bg-white text-base sm:text-sm text-slate-600 rounded-lg px-3 py-2.5 sm:py-2 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all appearance-none cursor-pointer"
+        :class="showMobileFilters ? '' : 'hidden md:block'"
       >
         <option value="">全部状态</option>
         <option v-for="(label, value) in statusLabels" :key="value" :value="value">{{ label }}</option>
       </select>
       <button
-        class="p-2 rounded-lg border transition-all duration-200"
-        :class="filterHasVideo ? 'bg-violet-50 border-violet-300 text-violet-600' : 'bg-white border-slate-200 text-slate-400 hover:text-slate-600 hover:border-slate-300'"
+        class="p-2.5 sm:p-2 rounded-lg border transition-all duration-200"
+        :class="[
+          filterHasVideo ? 'bg-violet-50 border-violet-300 text-violet-600' : 'bg-white border-slate-200 text-slate-400 hover:text-slate-600 hover:border-slate-300',
+          showMobileFilters ? '' : 'hidden md:block'
+        ]"
         :title="filterHasVideo ? '显示全部' : '仅看视频'"
         @click="filterHasVideo = !filterHasVideo; handleFilterChange()"
       >
@@ -477,13 +515,17 @@ onUnmounted(() => {
       <select
         v-model="dateRange"
         @change="handleFilterChange"
-        class="bg-white text-sm text-slate-600 rounded-lg px-3 py-2 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all appearance-none cursor-pointer"
+        class="bg-white text-base sm:text-sm text-slate-600 rounded-lg px-3 py-2.5 sm:py-2 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all appearance-none cursor-pointer"
+        :class="showMobileFilters ? '' : 'hidden md:block'"
       >
         <option v-for="opt in dateRangeOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
       </select>
       <button
-        class="p-2 rounded-lg border transition-all duration-200"
-        :class="readStatusFilter === 'unread' ? 'bg-blue-50 border-blue-300 text-blue-600' : 'bg-white border-slate-200 text-slate-400 hover:text-slate-600 hover:border-slate-300'"
+        class="p-2.5 sm:p-2 rounded-lg border transition-all duration-200"
+        :class="[
+          readStatusFilter === 'unread' ? 'bg-blue-50 border-blue-300 text-blue-600' : 'bg-white border-slate-200 text-slate-400 hover:text-slate-600 hover:border-slate-300',
+          showMobileFilters ? '' : 'hidden md:block'
+        ]"
         :title="readStatusFilter === 'unread' ? '显示全部' : '仅看未读'"
         @click="readStatusFilter = readStatusFilter === 'unread' ? null : 'unread'; handleFilterChange()"
       >
@@ -494,8 +536,11 @@ onUnmounted(() => {
         </svg>
       </button>
       <button
-        class="p-2 rounded-lg border transition-all duration-200"
-        :class="showFavoritesOnly ? 'bg-amber-50 border-amber-300 text-amber-500' : 'bg-white border-slate-200 text-slate-400 hover:text-slate-600 hover:border-slate-300'"
+        class="p-2.5 sm:p-2 rounded-lg border transition-all duration-200"
+        :class="[
+          showFavoritesOnly ? 'bg-amber-50 border-amber-300 text-amber-500' : 'bg-white border-slate-200 text-slate-400 hover:text-slate-600 hover:border-slate-300',
+          showMobileFilters ? '' : 'hidden md:block'
+        ]"
         :title="showFavoritesOnly ? '显示全部' : '仅看收藏'"
         @click="showFavoritesOnly = !showFavoritesOnly; handleFilterChange()"
       >
@@ -506,7 +551,8 @@ onUnmounted(() => {
       <select
         :value="`${sortBy}:${sortOrder}`"
         @change="e => { const [f, o] = e.target.value.split(':'); sortBy = f; sortOrder = o; store.currentPage = 1; fetchWithFilters() }"
-        class="bg-white text-sm text-slate-600 rounded-lg px-3 py-2 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all appearance-none cursor-pointer ml-auto"
+        class="bg-white text-base sm:text-sm text-slate-600 rounded-lg px-3 py-2.5 sm:py-2 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all appearance-none cursor-pointer ml-auto"
+        :class="showMobileFilters ? '' : 'hidden md:block'"
       >
         <option value="collected_at:desc">采集时间 ↓</option>
         <option value="collected_at:asc">采集时间 ↑</option>
@@ -516,6 +562,7 @@ onUnmounted(() => {
         <option value="view_count:desc">浏览最多</option>
         <option value="title:asc">标题 A-Z</option>
       </select>
+      </template>
       </div>
     </div>
 

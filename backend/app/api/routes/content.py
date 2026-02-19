@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, Query, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, noload
-from sqlalchemy import func
+from sqlalchemy import func, or_, and_
 
 from app.core.config import settings
 from app.core.database import get_db
@@ -146,6 +146,7 @@ async def list_content(
     tag: str | None = Query(None, description="按标签筛选"),
     sort_by: str | None = Query(None, description="排序字段: collected_at / published_at / updated_at / title"),
     sort_order: str | None = Query(None, description="排序方向: desc / asc"),
+    cursor_id: str | None = Query(None, description="游标: 上一页最后一条的 ID，用于游标分页"),
     db: Session = Depends(get_db),
 ):
     """分页查询内容列表"""
@@ -209,13 +210,39 @@ async def list_content(
         order_expr = col.desc().nulls_last()
 
     total = query.count()
-    items = (
-        query.options(noload(ContentItem.media_items))
-        .order_by(order_expr)
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-        .all()
-    )
+
+    # 游标分页 vs OFFSET 分页
+    if cursor_id:
+        cursor_item = db.query(col, ContentItem.id).filter(ContentItem.id == cursor_id).first()
+        if cursor_item:
+            cursor_val, cid = cursor_item
+            if cursor_val is not None:
+                # 二级排序始终 id DESC，所以同值时取 id < cid
+                if sort_order == 'asc':
+                    query = query.filter(
+                        or_(col > cursor_val, and_(col == cursor_val, ContentItem.id < cid))
+                    )
+                else:
+                    query = query.filter(
+                        or_(col < cursor_val, and_(col == cursor_val, ContentItem.id < cid))
+                    )
+            else:
+                # 排序字段为 NULL 的记录放在最后（nulls_last），按 id DESC 继续
+                query = query.filter(col.is_(None), ContentItem.id < cid)
+        items = (
+            query.options(noload(ContentItem.media_items))
+            .order_by(order_expr, ContentItem.id.desc())
+            .limit(page_size)
+            .all()
+        )
+    else:
+        items = (
+            query.options(noload(ContentItem.media_items))
+            .order_by(order_expr)
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+            .all()
+        )
 
     # 批量查询 source_name，消除 N+1
     source_ids = list({item.source_id for item in items if item.source_id})

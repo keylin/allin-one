@@ -1,12 +1,17 @@
 """Allin-One: 个人信息聚合与智能分析平台"""
 
 import logging
+import mimetypes
 import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+
+# 注册 PWA 相关 MIME 类型（Python mimetypes 默认不识别）
+mimetypes.add_type("application/manifest+json", ".webmanifest")
+mimetypes.add_type("application/javascript", ".js", strict=True)
 
 from app.core.config import settings
 from app.core.logging_config import setup_logging

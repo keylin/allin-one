@@ -55,9 +55,7 @@ export const useSourcesStore = defineStore('sources', () => {
   }
 
   async function collectAll() {
-    const res = await apiCollectAll()
-    if (res.code === 0) await fetchSources()
-    return res
+    return await apiCollectAll()
   }
 
   return { sources, total, loading, currentPage, pageSize, fetchSources, createSource, updateSource, deleteSource, batchDelete, collectSource, collectAll }

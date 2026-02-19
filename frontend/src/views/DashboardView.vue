@@ -12,7 +12,7 @@ import {
   getStorageStats,
 } from '@/api/dashboard'
 import { getFinanceSummary } from '@/api/finance'
-import { collectSource } from '@/api/sources'
+import { collectSource, collectAllSources } from '@/api/sources'
 import { useToast } from '@/composables/useToast'
 
 const router = useRouter()
@@ -31,6 +31,7 @@ const contentStatus = ref({ pending: 0, processing: 0, ready: 0, analyzed: 0, fa
 const storageStats = ref({ media: {}, database_bytes: 0, total_bytes: 0 })
 const loading = ref(true)
 const collectingId = ref(null)
+const collectingAll = ref(false)
 let timer = null
 
 // 日详情相关
@@ -44,8 +45,10 @@ async function handleCollectAll() {
   try {
     const res = await collectAllSources()
     if (res.code === 0) {
-      toast.success(`已触发 ${res.data.sources_collected} 个数据源采集`)
-      fetchData()
+      const d = res.data
+      let msg = `${d.sources_queued} 个采集任务已提交`
+      if (d.sources_skipped > 0) msg += `，${d.sources_skipped} 个已在队列中`
+      toast.success(msg)
     } else {
       toast.error(res.message || '采集失败')
     }
@@ -57,8 +60,10 @@ async function handleCollectAll() {
 async function handleCollectSource(source) {
   collectingId.value = source.id
   try {
-    await collectSource(source.id)
-    fetchData()
+    const res = await collectSource(source.id)
+    if (res.code === 0) {
+      toast.success('采集任务已提交', { title: source.name })
+    }
   } finally {
     collectingId.value = null
   }

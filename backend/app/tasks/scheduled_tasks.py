@@ -54,84 +54,36 @@ async def check_and_collect_sources(timestamp):
             f"(query took {query_elapsed*1000:.1f}ms)"
         )
 
+        # ---- defer 采集任务到 worker 并发执行 ----
+        from app.tasks.collection_tasks import collect_single_source
+        from app.tasks.procrastinate_app import async_defer
+
+        sources_deferred = 0
+        sources_skipped = 0
+
         for source in sources:
             # 二次确认（防止并发或时间偏移）
             if not SchedulingService.should_collect_now(source, now):
+                sources_skipped += 1
                 continue
 
             try:
-                # ---- 第一阶段: Collector 抓取（带重试）, 产出 ContentItem ----
-                from app.services.collectors import collect_source_with_retry
-                new_items = await collect_source_with_retry(source, db)
-
-                source.last_collected_at = now
-                source.consecutive_failures = 0
-
-                # ✨ 智能调度：更新下次采集时间
-                SchedulingService.update_next_collection_time(source, db)
-
-                # ---- 第二阶段: 对每条新内容触发流水线 ----
-                orchestrator = PipelineOrchestrator(db)
-                for item in new_items:
-                    try:
-                        execution = orchestrator.trigger_for_content(
-                            content=item,
-                            trigger=TriggerSource.SCHEDULED,
-                        )
-                        if execution:
-                            await orchestrator.async_start_execution(execution.id)
-                            logger.info(
-                                f"Pipeline triggered: {item.title} → {execution.template_name}"
-                            )
-                    except Exception as pe:
-                        db.rollback()
-                        logger.error(f"Pipeline trigger failed for {item.title[:50]}: {pe}")
-
-                db.commit()
-                logger.info(f"Collected {source.name}: {len(new_items)} new items")
-
+                await async_defer(
+                    collect_single_source,
+                    queueing_lock=f"collect_{source.id}",
+                    source_id=source.id,
+                    trigger="scheduled",
+                    use_retry=True,
+                )
+                sources_deferred += 1
             except Exception as e:
-                db.rollback()
+                logger.debug(f"Collection defer skipped for {source.name} (already queued): {e}")
+                sources_skipped += 1
 
-                # 分类错误类型
-                from app.services.collectors import classify_error
-                error_type = classify_error(e)
-
-                # 生成带错误类型前缀的错误信息
-                error_msg = f"[{error_type.upper()}] {str(e)[:480]}"
-
-                # 查询最近的失败记录并更新 error_message
-                from app.models.content import CollectionRecord
-                latest_record = db.query(CollectionRecord).filter(
-                    CollectionRecord.source_id == source.id,
-                    CollectionRecord.status == "failed"
-                ).order_by(CollectionRecord.started_at.desc()).first()
-
-                if latest_record:
-                    latest_record.error_message = error_msg
-
-                source.consecutive_failures += 1
-
-                # ✨ 失败也更新调度时间（应用退避策略）
-                try:
-                    SchedulingService.update_next_collection_time(source, db)
-                    db.commit()
-                except Exception as update_err:
-                    db.rollback()
-                    logger.error(f"Failed to update schedule for {source.name}: {update_err}")
-
-                # 根据错误类型记录日志
-                import httpx
-                from sqlalchemy.exc import OperationalError
-                if isinstance(e, OperationalError):
-                    logger.warning(f"Database contention for {source.name}: {e}")
-                elif isinstance(e, (httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException)):
-                    logger.warning(
-                        f"Collection {error_type} error for {source.name}: "
-                        f"{type(e).__name__}: {str(e) or repr(e)}"
-                    )
-                else:
-                    logger.error(f"Collection {error_type} error for {source.name}: {e}")
+        logger.info(
+            f"Collection scheduler: {sources_deferred} deferred, "
+            f"{sources_skipped} skipped"
+        )
 
         # ---- 补偿: 对 pending 且无 pipeline 的内容补触发 ----
         from app.models.pipeline import PipelineExecution
