@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.core.time import utcnow
 from app.models.content import SourceConfig, ContentItem, CollectionRecord
 from app.services.collectors.rss import RSSCollector
+from app.services.collectors.podcast import PodcastCollector
 from app.services.collectors.web_scraper import ScraperCollector
 from app.services.collectors.akshare import AkShareCollector
 from app.services.collectors.file_upload import FileUploadCollector
@@ -60,6 +61,7 @@ def classify_error(exception: Exception) -> str:
 
 
 _rss_collector = RSSCollector()
+_podcast_collector = PodcastCollector()
 _scraper_collector = ScraperCollector()
 _akshare_collector = AkShareCollector()
 _file_upload_collector = FileUploadCollector()
@@ -69,6 +71,7 @@ _generic_account_collector = GenericAccountCollector()
 COLLECTOR_MAP = {
     "rss.hub": _rss_collector,
     "rss.standard": _rss_collector,
+    "podcast.apple": _podcast_collector,
     "web.scraper": _scraper_collector,
     "api.akshare": _akshare_collector,
     "file.upload": _file_upload_collector,

@@ -51,6 +51,7 @@ const drawerVisible = ref(false)
 const typeLabels = {
   'rss.hub': 'RSSHub',
   'rss.standard': 'RSS/Atom',
+  'podcast.apple': 'Apple Podcasts',
   'api.akshare': 'AkShare',
   'web.scraper': '网页抓取',
   'file.upload': '文件上传',
@@ -63,6 +64,7 @@ const typeLabels = {
 const typeStyles = {
   'rss.hub': 'bg-orange-50 text-orange-700',
   'rss.standard': 'bg-amber-50 text-amber-700',
+  'podcast.apple': 'bg-purple-50 text-purple-700',
   'api.akshare': 'bg-violet-50 text-violet-700',
   'web.scraper': 'bg-cyan-50 text-cyan-700',
   'file.upload': 'bg-slate-100 text-slate-600',
@@ -86,6 +88,14 @@ function getDisplayUrl(source) {
     try {
       const config = JSON.parse(source.config_json)
       return config.rsshub_route || '-'
+    } catch {
+      return '-'
+    }
+  }
+  if (source.source_type === 'podcast.apple' && source.config_json) {
+    try {
+      const config = JSON.parse(source.config_json)
+      return config.podcast_name || config.apple_podcast_url || '-'
     } catch {
       return '-'
     }
@@ -461,6 +471,7 @@ function handleExport() {
         <optgroup label="网络数据">
           <option value="rss.hub">RSSHub</option>
           <option value="rss.standard">RSS/Atom</option>
+          <option value="podcast.apple">Apple Podcasts</option>
           <option value="api.akshare">AkShare</option>
           <option value="web.scraper">网页抓取</option>
           <option value="account.bilibili">B站账号</option>

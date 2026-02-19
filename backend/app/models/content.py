@@ -44,6 +44,8 @@ class SourceType(str, Enum):
     # 账号授权
     ACCOUNT_BILIBILI = "account.bilibili"  # B站账号
     ACCOUNT_GENERIC = "account.generic"    # 其他平台账号
+    # 播客
+    PODCAST_APPLE = "podcast.apple"  # Apple Podcasts
     # 用户记录
     USER_NOTE = "user.note"          # 日常笔记
     SYSTEM_NOTIFICATION = "system.notification"  # 系统消息
@@ -57,6 +59,7 @@ class SourceCategory(str, Enum):
 
 _SOURCE_CATEGORY_MAP = {
     "rss": SourceCategory.NETWORK,
+    "podcast": SourceCategory.NETWORK,
     "api": SourceCategory.NETWORK,
     "web": SourceCategory.NETWORK,
     "account": SourceCategory.NETWORK,

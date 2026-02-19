@@ -23,7 +23,7 @@ const loadingMore = ref(false)
 const page = ref(1)
 const pageSize = 20
 const hasMore = ref(true)
-const activeMediaType = ref(route.query.has_video === '1' ? 'video' : '')
+const activeMediaType = ref(route.query.has_video === '1' ? 'video' : route.query.has_audio === '1' ? 'audio' : '')
 const sortBy = ref(route.query.sort_by || 'published_at')
 
 // 搜索 & 筛选
@@ -105,6 +105,7 @@ const rightPanelRef = ref(null)
 const mediaTypes = [
   { value: '', label: '全部' },
   { value: 'video', label: '有视频' },
+  { value: 'audio', label: '有音频' },
 ]
 
 const sortOptions = [
@@ -220,6 +221,7 @@ function syncQueryParams() {
   if (filterSources.value.length) query.source_id = filterSources.value.join(',')
   if (filterStatus.value) query.status = filterStatus.value
   if (activeMediaType.value === 'video') query.has_video = '1'
+  if (activeMediaType.value === 'audio') query.has_audio = '1'
   if (sortBy.value !== 'published_at') query.sort_by = sortBy.value
   if (showFavoritesOnly.value) query.favorites = '1'
   if (!showUnreadOnly.value) query.unread = '0'
@@ -245,6 +247,7 @@ async function fetchItems(reset = false) {
       sort_order: 'desc',
     }
     if (activeMediaType.value === 'video') params.has_video = true
+    if (activeMediaType.value === 'audio') params.has_audio = true
     if (searchQuery.value.trim()) params.q = searchQuery.value.trim()
     if (filterSources.value.length) params.source_id = filterSources.value.join(',')
     if (filterStatus.value) params.status = filterStatus.value
@@ -502,6 +505,7 @@ async function handleMarkAllRead() {
     if (filterSources.value.length) params.source_id = filterSources.value.join(',')
     if (filterStatus.value) params.status = filterStatus.value
     if (activeMediaType.value === 'video') params.has_video = true
+    if (activeMediaType.value === 'audio') params.has_audio = true
     if (searchQuery.value.trim()) params.q = searchQuery.value.trim()
     const dp = getDateParams()
     if (dp.date_from) params.date_from = dp.date_from
@@ -784,7 +788,7 @@ onUnmounted(() => {
             transition: (isPulling ? 'none' : 'transform 0.3s ease-out')
           }"
         >
-        <div class="px-3 md:px-4 pt-2 md:pt-3 pb-1.5 md:pb-2 space-y-1.5 md:space-y-2.5 sticky top-0 bg-white z-10 border-b border-slate-100">
+        <div class="relative px-3 md:px-4 pt-2 md:pt-3 pb-1.5 md:pb-2 space-y-1.5 md:space-y-2.5 sticky top-0 bg-white z-10 border-b border-slate-100">
           <!-- 计数 + 排序 + 密度切换 -->
           <div class="flex items-center justify-between">
             <div class="flex items-center gap-2">
@@ -1016,17 +1020,17 @@ onUnmounted(() => {
               {{ mt.label }}
             </button>
           </div>
-        </div>
 
-        <!-- 阅读进度条 -->
-        <div
-          v-if="sessionInitialUnread > 0 && readingProgress > 0"
-          class="sticky top-0 z-20 h-0.5 bg-slate-100"
-        >
+          <!-- 阅读进度条（内嵌在 sticky header 底部） -->
           <div
-            class="h-full bg-indigo-400 transition-[width] duration-150 ease-out"
-            :style="{ width: readingProgress + '%' }"
-          ></div>
+            v-if="sessionInitialUnread > 0 && readingProgress > 0"
+            class="absolute bottom-0 left-0 right-0 h-0.5 bg-slate-100"
+          >
+            <div
+              class="h-full bg-indigo-400 transition-[width] duration-150 ease-out"
+              :style="{ width: readingProgress + '%' }"
+            ></div>
+          </div>
         </div>
 
         <!-- 新内容横幅 -->

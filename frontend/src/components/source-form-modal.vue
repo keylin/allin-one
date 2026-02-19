@@ -23,6 +23,7 @@ const sourceTypeGroups = [
       { value: 'rss.standard', label: 'RSS/Atom' },
       { value: 'api.akshare', label: 'AkShare' },
       { value: 'web.scraper', label: '网页抓取' },
+      { value: 'podcast.apple', label: 'Apple Podcasts' },
       { value: 'account.bilibili', label: 'B站账号' },
       { value: 'account.generic', label: '其他账号' },
     ]
@@ -87,6 +88,8 @@ function getDefaultConfig(sourceType) {
       return { cookie: '', type: 'dynamic', media_id: '', max_items: 20 }
     case 'account.generic':
       return { api_url: '', method: 'GET', headers: '', items_path: '', title_field: 'title', url_field: 'url', id_field: 'id' }
+    case 'podcast.apple':
+      return { apple_podcast_url: '', max_episodes: 50 }
     case 'rss.standard':
       return {}
     default:
@@ -152,6 +155,7 @@ function serializeConfig() {
   // 数值转换
   if (cfg.max_items !== undefined) cfg.max_items = Number(cfg.max_items) || 20
   if (cfg.max_history !== undefined) cfg.max_history = Number(cfg.max_history) || 120
+  if (cfg.max_episodes !== undefined) cfg.max_episodes = Number(cfg.max_episodes) || 50
   // AkShare alerts
   if (form.value.source_type === 'api.akshare' && akshareAlerts.value.length) {
     cfg.alerts = akshareAlerts.value.filter(a => a.threshold !== '' && a.threshold !== null).map(a => ({
@@ -163,7 +167,7 @@ function serializeConfig() {
 }
 
 // 有结构化配置的类型
-const hasStructuredConfig = computed(() => ['rss.hub', 'rss.standard', 'web.scraper', 'api.akshare', 'account.bilibili', 'account.generic'].includes(form.value.source_type))
+const hasStructuredConfig = computed(() => ['rss.hub', 'rss.standard', 'podcast.apple', 'web.scraper', 'api.akshare', 'account.bilibili', 'account.generic'].includes(form.value.source_type))
 
 // 无额外配置的类型
 const noConfigTypes = ['file.upload', 'user.note', 'system.notification']
@@ -362,6 +366,29 @@ const sectionClass = 'space-y-4 p-4 bg-slate-50/50 rounded-xl border border-slat
               placeholder="https://example.com/feed.xml"
               required
             />
+          </div>
+        </div>
+
+        <!-- Apple Podcasts -->
+        <div v-else-if="form.source_type === 'podcast.apple'" :class="sectionClass">
+          <h4 class="text-sm font-semibold text-slate-800">Apple Podcasts 配置</h4>
+          <div>
+            <label :class="labelClass">Apple Podcasts URL *</label>
+            <input
+              v-model="configForm.apple_podcast_url"
+              type="text"
+              :class="inputClass"
+              placeholder="https://podcasts.apple.com/cn/podcast/硬地骇客/id1678465783"
+              required
+            />
+            <p class="mt-1 text-xs text-slate-400">
+              粘贴 Apple Podcasts 链接，系统会自动解析播客 RSS 订阅源
+            </p>
+          </div>
+          <div>
+            <label :class="labelClass">最大采集条目数</label>
+            <input v-model.number="configForm.max_episodes" type="number" min="1" max="500" :class="inputClass" />
+            <p class="mt-1 text-xs text-slate-400">每次采集最多获取的剧集数量，默认 50</p>
           </div>
         </div>
 

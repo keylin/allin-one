@@ -17,7 +17,7 @@ from app.core.config import settings
 from app.core.logging_config import setup_logging
 from app.core.auth import APIKeyMiddleware
 from app.core.database import init_db
-from app.api.routes import dashboard, sources, content, pipelines, templates, video, system_settings, prompt_templates, finance, credentials, opml, bilibili_auth
+from app.api.routes import dashboard, sources, content, pipelines, templates, video, audio, system_settings, prompt_templates, finance, credentials, opml, bilibili_auth
 
 setup_logging("backend")
 
@@ -104,6 +104,7 @@ app.include_router(content.router, prefix="/api/content", tags=["content"])
 app.include_router(pipelines.router, prefix="/api/pipelines", tags=["pipelines"])
 app.include_router(templates.router, prefix="/api/pipeline-templates", tags=["pipeline-templates"])
 app.include_router(video.router, prefix="/api/video", tags=["video"])
+app.include_router(audio.router, prefix="/api/audio", tags=["audio"])
 app.include_router(system_settings.router, prefix="/api/settings", tags=["settings"])
 app.include_router(prompt_templates.router, prefix="/api/prompt-templates", tags=["prompt-templates"])
 app.include_router(finance.router, prefix="/api/finance", tags=["finance"])

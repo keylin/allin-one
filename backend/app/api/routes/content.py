@@ -139,6 +139,7 @@ async def list_content(
     source_id: str | None = Query(None),
     status: str | None = Query(None),
     has_video: bool | None = Query(None, description="筛选包含视频的内容"),
+    has_audio: bool | None = Query(None, description="筛选包含音频的内容"),
     q: str | None = Query(None, description="搜索标题"),
     is_favorited: bool | None = Query(None),
     is_unread: bool | None = Query(None, description="未读过滤: true=未读, false=已读"),
@@ -169,6 +170,15 @@ async def list_content(
         else:
             query = query.filter(
                 ~ContentItem.media_items.any(MediaItem.media_type == "video")
+            )
+    if has_audio is not None:
+        if has_audio:
+            query = query.filter(
+                ContentItem.media_items.any(MediaItem.media_type == "audio")
+            )
+        else:
+            query = query.filter(
+                ~ContentItem.media_items.any(MediaItem.media_type == "audio")
             )
     if q:
         pattern = f"%{q}%"
@@ -407,6 +417,7 @@ class MarkAllReadRequest(BaseModel):
     source_id: str | None = None
     status: str | None = None
     has_video: bool | None = None
+    has_audio: bool | None = None
     q: str | None = None
     date_from: str | None = None
     date_to: str | None = None
@@ -435,6 +446,15 @@ async def mark_all_read(body: MarkAllReadRequest, db: Session = Depends(get_db))
         else:
             query = query.filter(
                 ~ContentItem.media_items.any(MediaItem.media_type == "video")
+            )
+    if body.has_audio is not None:
+        if body.has_audio:
+            query = query.filter(
+                ContentItem.media_items.any(MediaItem.media_type == "audio")
+            )
+        else:
+            query = query.filter(
+                ~ContentItem.media_items.any(MediaItem.media_type == "audio")
             )
     if body.q:
         query = query.filter(ContentItem.title.ilike(f"%{body.q}%"))

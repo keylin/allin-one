@@ -80,6 +80,12 @@ const sentimentColor = computed(() => {
   return 'bg-slate-300'
 })
 
+// 音频时长（从后端 audio_duration 字段获取）
+const audioDuration = computed(() => {
+  if (derivedMediaType.value !== 'audio') return ''
+  return props.item.audio_duration || ''
+})
+
 const showThumbnail = computed(() => !props.compact && (props.item.has_thumbnail || (derivedMediaType.value === 'video' && props.item.has_thumbnail)))
 const thumbnailUrl = computed(() => showThumbnail.value ? `/api/video/${props.item.id}/thumbnail` : null)
 
@@ -109,6 +115,7 @@ function onThumbError(e) {
       <svg :class="mediaColor" class="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
         <path stroke-linecap="round" stroke-linejoin="round" :d="mediaIcon" />
       </svg>
+      <span v-if="audioDuration" class="text-[10px] font-medium text-rose-400 tabular-nums shrink-0">{{ audioDuration }}</span>
 
       <!-- 标题 -->
       <h3
@@ -198,11 +205,12 @@ function onThumbError(e) {
       <div class="flex-1 min-w-0 py-3 px-3 md:px-4">
         <!-- 第一行：标题 + 收藏 -->
         <div class="flex items-start gap-2">
-          <!-- 媒体类型小图标 + sentiment 色点（移动端隐藏） -->
+          <!-- 媒体类型小图标 + 音频时长 + sentiment 色点（移动端隐藏） -->
           <div class="hidden md:flex items-center gap-1.5 shrink-0 mt-0.5">
             <svg :class="mediaColor" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
               <path stroke-linecap="round" stroke-linejoin="round" :d="mediaIcon" />
             </svg>
+            <span v-if="audioDuration" class="text-[10px] font-medium text-rose-400 tabular-nums">{{ audioDuration }}</span>
             <span
               v-if="sentimentColor"
               :class="sentimentColor"

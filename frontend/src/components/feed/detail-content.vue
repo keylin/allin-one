@@ -1,12 +1,14 @@
 <script setup>
 import { ref, computed } from 'vue'
 import IframeVideoPlayer from '@/components/iframe-video-player.vue'
+import PodcastPlayer from '@/components/podcast-player.vue'
 import MarkdownIt from 'markdown-it'
 import DOMPurify from 'dompurify'
-import { formatTimeFull } from '@/utils/time'
+import { formatTimeFull, formatTimeShort } from '@/utils/time'
 
 const props = defineProps({
   item: { type: Object, required: true },
+  isMobileOverlay: { type: Boolean, default: false },
   analyzing: { type: Boolean, default: false },
   enriching: { type: Boolean, default: false },
   enrichResults: { type: Array, default: null },
@@ -14,7 +16,7 @@ const props = defineProps({
   applyingEnrich: { default: null },
 })
 
-const emit = defineEmits(['analyze', 'favorite', 'enrich', 'apply-enrich', 'close-enrich'])
+const emit = defineEmits(['analyze', 'favorite', 'enrich', 'apply-enrich', 'close-enrich', 'back'])
 
 // Markdown & DOMPurify setup
 DOMPurify.addHook('afterSanitizeAttributes', (node) => {
@@ -108,6 +110,34 @@ const renderedRawContent = computed(() => {
 
 const hasRawContent = computed(() => renderedRawContent.value.length > 0)
 
+// 音频媒体项
+const audioMedia = computed(() => {
+  return props.item?.media_items?.find(m => m.media_type === 'audio' && m.original_url)
+})
+
+// 音频播放地址：已下载用本地 stream API，否则用远程 URL
+const audioPlayUrl = computed(() => {
+  if (!audioMedia.value) return ''
+  if (audioMedia.value.status === 'downloaded') {
+    return `/api/audio/${props.item.id}/stream`
+  }
+  return audioMedia.value.original_url
+})
+
+// 解析 raw_data
+const parsedRawData = computed(() => {
+  if (!props.item?.raw_data) return null
+  try {
+    const raw = typeof props.item.raw_data === 'string'
+      ? JSON.parse(props.item.raw_data)
+      : props.item.raw_data
+    return raw && typeof raw === 'object' ? raw : null
+  } catch { return null }
+})
+
+const podcastMeta = computed(() => parsedRawData.value?.podcast_meta || null)
+const itunesMeta = computed(() => parsedRawData.value?.itunes || null)
+
 // 是否两个版本都有内容，支持切换
 const hasBothVersions = computed(() => {
   return !!props.item?.processed_content && hasRawContent.value
@@ -161,8 +191,40 @@ defineExpose({ resetViewMode })
 </script>
 
 <template>
-  <!-- 标题 + 操作按钮 + 元信息 -->
-  <div>
+  <!-- 移动端 sticky header -->
+  <div v-if="isMobileOverlay" class="sticky top-0 z-10 bg-white/95 backdrop-blur-sm border-b border-slate-100 px-3 py-2">
+    <!-- Row 1: 返回 + 来源 · 时间 + 内容切换 chip -->
+    <div class="flex items-center gap-1.5">
+      <button class="shrink-0 p-2 -ml-2 rounded-lg text-slate-500 active:bg-slate-100 transition-colors" @click="emit('back')">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+        </svg>
+      </button>
+      <div class="flex-1 min-w-0 flex items-center gap-1.5 text-xs text-slate-400">
+        <span class="inline-flex items-center gap-1 font-medium text-slate-500 truncate">
+          <span class="w-1.5 h-1.5 rounded-full bg-indigo-400 shrink-0"></span>
+          {{ item.source_name || '未知来源' }}
+        </span>
+        <span class="text-slate-300 shrink-0">&middot;</span>
+        <span v-if="item.published_at" class="shrink-0">{{ formatTimeShort(item.published_at) }}</span>
+      </div>
+      <button
+        v-if="hasBothVersions"
+        class="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full border border-slate-200 text-slate-500 active:bg-slate-100 transition-all"
+        @click="toggleContentView"
+      >
+        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" />
+        </svg>
+        {{ currentViewLabel }}
+      </button>
+    </div>
+    <!-- Row 2: 标题（最多2行） -->
+    <h2 class="mt-1 text-base font-bold text-slate-900 line-clamp-2 pl-1" :title="item.title">{{ item.title }}</h2>
+  </div>
+
+  <!-- 桌面端标题 + 操作按钮 + 元信息 -->
+  <div v-else>
     <div class="flex items-start justify-between gap-3">
       <h2 class="text-base md:text-xl font-bold text-slate-900 mb-1 md:mb-2 min-w-0 line-clamp-2" :title="item.title">{{ item.title }}</h2>
       <div class="hidden md:flex items-center gap-1 shrink-0">
@@ -301,43 +363,94 @@ defineExpose({ resetViewMode })
     </div>
   </div>
 
-  <!-- 视频播放器 -->
-  <IframeVideoPlayer
-    v-if="item.media_items?.some(m => m.media_type === 'video')"
-    :key="'vp-' + item.id"
-    :video-url="item.url"
-    :title="item.title || '视频播放'"
-  />
+  <!-- 内容 + 操作按钮容器（移动端 flex-col min-h 确保按钮在下半屏） -->
+  <div :class="isMobileOverlay ? 'flex flex-col min-h-[50vh]' : ''">
+    <!-- 视频播放器 -->
+    <div :class="isMobileOverlay ? 'px-4 py-2' : ''">
+      <IframeVideoPlayer
+        v-if="item.media_items?.some(m => m.media_type === 'video')"
+        :key="'vp-' + item.id"
+        :video-url="item.url"
+        :title="item.title || '视频播放'"
+      />
+    </div>
 
-  <!-- AI 分析结果 -->
-  <div v-if="item.analysis_result" class="bg-slate-50 rounded-xl p-4 md:p-6 border-l-4 border-l-indigo-400">
-    <h3 class="text-sm md:text-base font-semibold text-slate-900 mb-3 md:mb-4 flex items-center gap-2">
-      <svg class="w-4 md:w-5 h-4 md:h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-      </svg>
-      AI 分析
-    </h3>
-    <div class="prose prose-sm max-w-none markdown-content" v-html="renderedAnalysis"></div>
-  </div>
+    <!-- 播客音频播放器 -->
+    <div :class="isMobileOverlay ? 'px-4 py-2' : ''">
+      <PodcastPlayer
+        v-if="audioMedia"
+        :key="'ap-' + item.id"
+        :audio-url="audioPlayUrl"
+        :title="item.title"
+        :artwork-url="podcastMeta?.artwork_url || itunesMeta?.image || ''"
+        :duration="itunesMeta?.duration || ''"
+        :episode="itunesMeta?.episode || ''"
+        :content-id="item.id"
+        :playback-position="item.playback_position || 0"
+      />
+    </div>
 
-  <!-- 正文内容（智能选择最佳版本） -->
-  <div v-if="displayedBodyHtml" class="bg-white rounded-xl p-4 md:p-6 shadow-sm border border-slate-100 relative">
-    <div v-if="hasBothVersions" class="absolute top-4 right-4 z-10">
+    <!-- AI 分析结果 -->
+    <div v-if="item.analysis_result" class="border-l-4 border-l-indigo-400" :class="isMobileOverlay ? 'mx-4 my-2 bg-slate-50 rounded-lg p-3' : 'bg-slate-50 rounded-xl p-6'">
+      <h3 class="text-sm md:text-base font-semibold text-slate-900 mb-3 md:mb-4 flex items-center gap-2">
+        <svg class="w-4 md:w-5 h-4 md:h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+        </svg>
+        AI 分析
+      </h3>
+      <div class="prose prose-sm max-w-none markdown-content" v-html="renderedAnalysis"></div>
+    </div>
+
+    <!-- 正文内容（智能选择最佳版本） -->
+    <div v-if="displayedBodyHtml" class="relative" :class="isMobileOverlay ? 'px-4 py-2' : 'bg-white rounded-xl p-6 shadow-sm border border-slate-100'">
+      <div v-if="hasBothVersions && !isMobileOverlay" class="absolute top-4 right-4 z-10">
+        <button
+          class="inline-flex items-center gap-1.5 px-2.5 md:px-3 py-1 text-xs font-medium rounded-lg border border-slate-200 text-slate-500 hover:text-slate-700 hover:border-slate-300 bg-white transition-all shadow-sm"
+          @click="toggleContentView"
+        >
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" />
+          </svg>
+          {{ currentViewLabel === '处理版' ? '查看原文' : '查看处理版' }}
+        </button>
+      </div>
+      <div class="prose prose-sm max-w-none markdown-content text-slate-700 mt-2" v-html="displayedBodyHtml"></div>
+    </div>
+
+    <!-- 弹性间距：内容短时将按钮推到下半屏 -->
+    <div v-if="isMobileOverlay" class="flex-1"></div>
+
+    <!-- 移动端操作按钮栏（收藏 + 原文） -->
+    <div v-if="isMobileOverlay" class="px-4 py-3 flex items-center justify-center gap-3">
       <button
-        class="inline-flex items-center gap-1.5 px-2.5 md:px-3 py-1 text-xs font-medium rounded-lg border border-slate-200 text-slate-500 hover:text-slate-700 hover:border-slate-300 bg-white transition-all shadow-sm"
-        @click="toggleContentView"
+        class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-all"
+        :class="item.is_favorited
+          ? 'bg-amber-50 text-amber-600 border-amber-200 active:bg-amber-100'
+          : 'bg-white text-slate-600 border-slate-200 active:bg-slate-50'"
+        @click="emit('favorite')"
+      >
+        <svg class="w-3.5 h-3.5" :fill="item.is_favorited ? 'currentColor' : 'none'" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.563.563 0 00-.586 0L6.982 20.54a.562.562 0 01-.84-.61l1.285-5.386a.562.562 0 00-.182-.557l-4.204-3.602a.563.563 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z" />
+        </svg>
+        {{ item.is_favorited ? '已收藏' : '收藏' }}
+      </button>
+      <a
+        v-if="item.url"
+        :href="item.url"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 bg-white text-slate-600 active:bg-slate-50 transition-all"
       >
         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" />
+          <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
         </svg>
-        {{ currentViewLabel === '处理版' ? '查看原文' : '查看处理版' }}
-      </button>
+        原文
+      </a>
     </div>
-    <div class="prose prose-sm max-w-none markdown-content text-slate-700 mt-2" v-html="displayedBodyHtml"></div>
   </div>
 
   <!-- Slot for chat messages -->
-  <div class="!mt-3"><slot></slot></div>
+  <div :class="isMobileOverlay ? 'px-4 !mt-2' : '!mt-3'"><slot></slot></div>
 
   <!-- 富化对比弹窗 -->
   <Teleport to="body">

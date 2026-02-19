@@ -9,6 +9,7 @@ class MediaItemSummary(BaseModel):
     """媒体项轻量摘要 — 用于列表展示"""
     id: str
     media_type: str          # image / video / audio
+    original_url: Optional[str] = None
     local_path: Optional[str] = None
     thumbnail_path: Optional[str] = None  # 从 metadata_json 提取
     status: str = "pending"
@@ -33,6 +34,8 @@ class ContentResponse(BaseModel):
     user_note: Optional[str] = None
     view_count: int = 0
     last_viewed_at: Optional[datetime] = None
+    playback_position: int = 0
+    last_played_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     # 列表摘要字段（API 层计算，非 ORM 字段）

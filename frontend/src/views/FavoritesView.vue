@@ -36,6 +36,7 @@ let searchTimer = null
 const mediaTypes = [
   { value: '', label: '全部' },
   { value: 'video', label: '视频' },
+  { value: 'audio', label: '播客' },
   { value: 'article', label: '文章' },
 ]
 
@@ -188,7 +189,8 @@ async function fetchItems(reset = false) {
     }
     if (searchQuery.value.trim()) params.q = searchQuery.value.trim()
     if (activeMediaType.value === 'video') params.has_video = true
-    if (activeMediaType.value === 'article') params.has_video = false
+    if (activeMediaType.value === 'audio') params.has_audio = true
+    if (activeMediaType.value === 'article') { params.has_video = false; params.has_audio = false }
     if (filterSourceId.value) params.source_id = filterSourceId.value
 
     // 游标分页: 非 reset 且有已加载项时，用最后一条的 id 作为游标

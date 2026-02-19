@@ -20,6 +20,7 @@ const historyTotal = ref(0)
 const typeLabels = {
   'rss.hub': 'RSSHub',
   'rss.standard': 'RSS/Atom',
+  'podcast.apple': 'Apple Podcasts',
   'api.akshare': 'AkShare',
   'web.scraper': '网页抓取',
   'file.upload': '文件上传',
@@ -32,6 +33,7 @@ const typeLabels = {
 const typeStyles = {
   'rss.hub': 'bg-orange-50 text-orange-700',
   'rss.standard': 'bg-amber-50 text-amber-700',
+  'podcast.apple': 'bg-purple-50 text-purple-700',
   'api.akshare': 'bg-violet-50 text-violet-700',
   'web.scraper': 'bg-cyan-50 text-cyan-700',
   'file.upload': 'bg-slate-100 text-slate-600',
@@ -91,6 +93,14 @@ const displayUrl = computed(() => {
     try {
       const config = JSON.parse(props.source.config_json)
       return config.rsshub_route ? `RSSHub: ${config.rsshub_route}` : '-'
+    } catch {
+      return '-'
+    }
+  }
+  if (props.source?.source_type === 'podcast.apple' && props.source?.config_json) {
+    try {
+      const config = JSON.parse(props.source.config_json)
+      return config.podcast_name || config.apple_podcast_url || '-'
     } catch {
       return '-'
     }

@@ -124,6 +124,12 @@ async def create_source(body: SourceCreate, db: Session = Depends(get_db)):
         if not body.url:
             return error_response(400, "RSS/Atom 数据源必须提供 url 字段")
 
+    # 验证 Apple Podcasts 源必须有 apple_podcast_url 或 podcast_id
+    elif body.source_type == "podcast.apple":
+        config = json.loads(body.config_json) if body.config_json else {}
+        if not config.get("apple_podcast_url") and not config.get("podcast_id"):
+            return error_response(400, "Apple Podcasts 数据源必须提供 apple_podcast_url 或 podcast_id")
+
     # 校验 pipeline_template_id
     if body.pipeline_template_id:
         tpl = db.get(PipelineTemplate, body.pipeline_template_id)
