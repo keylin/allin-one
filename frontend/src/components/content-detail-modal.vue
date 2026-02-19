@@ -8,6 +8,7 @@ import MarkdownIt from 'markdown-it'
 import DOMPurify from 'dompurify'
 import dayjs from 'dayjs'
 import { formatTimeFull } from '@/utils/time'
+import PodcastPlayer from '@/components/podcast-player.vue'
 
 const props = defineProps({
   visible: Boolean,
@@ -215,6 +216,34 @@ const renderedRawContent = computed(() => {
 // raw_data 中是否有可渲染的原文（用于控制显示逻辑）
 const hasRawContent = computed(() => renderedRawContent.value.length > 0)
 
+// 音频媒体项
+const audioMedia = computed(() => {
+  return content.value?.media_items?.find(m => m.media_type === 'audio' && m.original_url)
+})
+
+// 音频播放地址：已下载用本地 stream API，否则用远程 URL
+const audioPlayUrl = computed(() => {
+  if (!audioMedia.value) return ''
+  if (audioMedia.value.status === 'downloaded') {
+    return `/api/audio/${content.value.id}/stream`
+  }
+  return audioMedia.value.original_url
+})
+
+// 解析 raw_data 中的播客元数据
+const parsedRawData = computed(() => {
+  if (!content.value?.raw_data) return null
+  try {
+    const raw = typeof content.value.raw_data === 'string'
+      ? JSON.parse(content.value.raw_data)
+      : content.value.raw_data
+    return raw && typeof raw === 'object' ? raw : null
+  } catch { return null }
+})
+
+const podcastMeta = computed(() => parsedRawData.value?.podcast_meta || null)
+const itunesMeta = computed(() => parsedRawData.value?.itunes || null)
+
 const contentViewMode = ref('best') // 'best' | 'processed' | 'raw'
 
 // 当前展示的正文 HTML
@@ -338,6 +367,19 @@ function formatTime(t) {
                 视频文件未找到
               </div>
             </div>
+
+            <!-- 播客音频播放器 -->
+            <PodcastPlayer
+              v-if="audioMedia"
+              :key="'ap-' + content.id"
+              :audio-url="audioPlayUrl"
+              :title="content.title"
+              :artwork-url="podcastMeta?.artwork_url || itunesMeta?.image || ''"
+              :duration="itunesMeta?.duration || ''"
+              :episode="itunesMeta?.episode || ''"
+              :content-id="content.id"
+              :playback-position="content.playback_position || 0"
+            />
 
             <!-- AI 分析结果 -->
             <div v-if="content.analysis_result" class="bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl p-4 md:p-6 border border-indigo-100">
