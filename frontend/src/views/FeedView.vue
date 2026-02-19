@@ -225,7 +225,6 @@ async function fetchItems(reset = false) {
 
   try {
     const params = {
-      page: page.value,
       page_size: pageSize,
       sort_by: sortBy.value,
       sort_order: 'desc',
@@ -243,6 +242,13 @@ async function fetchItems(reset = false) {
     // 标签筛选
     if (filterTag.value) params.tag = filterTag.value
 
+    // 游标分页: 非 reset 且有已加载项时，用最后一条的 id 作为游标
+    if (!reset && items.value.length > 0) {
+      params.cursor_id = items.value[items.value.length - 1].id
+    } else {
+      params.page = page.value
+    }
+
     const res = await listContent(params)
     if (res.code === 0) {
       if (reset) {
@@ -251,7 +257,8 @@ async function fetchItems(reset = false) {
       } else {
         items.value = [...items.value, ...res.data]
       }
-      hasMore.value = items.value.length < res.total
+      // 用返回数量判断是否还有更多（解决自动已读导致 total 变化的偏移漂移问题）
+      hasMore.value = res.data.length >= pageSize
     }
   } finally {
     loading.value = false
@@ -262,7 +269,6 @@ async function fetchItems(reset = false) {
 
 function loadMore() {
   if (!hasMore.value || loadingMore.value) return
-  page.value++
   fetchItems()
 }
 
@@ -1055,7 +1061,7 @@ onUnmounted(() => {
             </div>
 
             <!-- 虚拟底部空白区（让最后几条卡片可以向上移出视野） -->
-            <div v-else-if="!hasMore && items.length > 0" class="flex flex-col items-center justify-center text-center min-h-[80vh] pt-12">
+            <div v-else-if="!hasMore && items.length > 0" class="flex flex-col items-center justify-center text-center min-h-[100dvh] pt-12">
               <p class="text-sm text-slate-400 font-medium antialiased">已浏览完所有内容</p>
               <p class="mt-1 text-xs text-slate-300 antialiased">
                 {{ contentStats.read }}/{{ contentStats.total }} 已读
