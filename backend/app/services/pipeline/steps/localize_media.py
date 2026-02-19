@@ -70,6 +70,7 @@ def _handle_localize_media(context: dict) -> dict:
     result = {
         "status": "done",
         "media_items_created": 0,
+        "media_items": [],
         "has_video": False,
         "file_path": "",
         "subtitle_path": "",
@@ -192,6 +193,12 @@ def _handle_localize_media(context: dict) -> dict:
             result["width"] = info.get("width")
             result["height"] = info.get("height")
             result["media_items_created"] += 1
+            result["media_items"].append({
+                "type": "video",
+                "status": "downloaded",
+                "path": video_path or "",
+                "platform": platform,
+            })
 
         except Exception as e:
             logger.error(f"[localize_media] Video download failed: {e}")
@@ -215,8 +222,84 @@ def _handle_localize_media(context: dict) -> dict:
                     ))
                 db.commit()
             result["media_items_created"] += 1
+            result["media_items"].append({
+                "type": "video",
+                "status": "failed",
+                "error": str(e)[:100],
+            })
 
+        # 视频路径提前返回，也需要汇总
+        type_counts = {}
+        for mi in result["media_items"]:
+            t = mi["type"]
+            type_counts[t] = type_counts.get(t, 0) + 1
+        result["summary"] = type_counts
         return result
+
+    # ---- 1.5 Audio download ----
+    # Download pending audio MediaItems (e.g. podcast episodes)
+    with SessionLocal() as db:
+        audio_items = db.query(MediaItem).filter(
+            MediaItem.content_id == content_id,
+            MediaItem.media_type == MediaType.AUDIO.value,
+            MediaItem.status == "pending",
+        ).all()
+
+    for audio_mi in audio_items:
+        audio_url = audio_mi.original_url
+        if not audio_url:
+            continue
+        try:
+            audio_dir = os.path.join(media_dir, "audio")
+            os.makedirs(audio_dir, exist_ok=True)
+
+            parsed = urlparse(audio_url)
+            ext = os.path.splitext(parsed.path)[1] or ".mp3"
+            if ext not in (".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".flac"):
+                ext = ".mp3"
+            url_hash = hashlib.md5(audio_url.encode()).hexdigest()[:12]
+            filename = f"{url_hash}{ext}"
+            local_path = os.path.join(audio_dir, filename)
+
+            # Stream download (audio files can be tens of MB)
+            with httpx.Client(timeout=120, follow_redirects=True) as client:
+                with client.stream("GET", audio_url) as resp:
+                    resp.raise_for_status()
+                    with open(local_path, "wb") as f:
+                        for chunk in resp.iter_bytes(8192):
+                            f.write(chunk)
+
+            with SessionLocal() as db:
+                mi = db.get(MediaItem, audio_mi.id)
+                mi.local_path = local_path
+                mi.filename = filename
+                mi.status = "downloaded"
+                mi.metadata_json = json.dumps({
+                    "file_size": os.path.getsize(local_path),
+                })
+                db.commit()
+            result["media_items_created"] += 1
+            result["media_items"].append({
+                "type": "audio",
+                "status": "downloaded",
+                "path": local_path,
+                "file_size": os.path.getsize(local_path),
+            })
+            logger.info(f"[localize_media] Audio downloaded: {audio_url[:80]} -> {local_path}")
+
+        except Exception as e:
+            logger.warning(f"[localize_media] Audio download failed {audio_url[:80]}: {e}")
+            with SessionLocal() as db:
+                mi = db.get(MediaItem, audio_mi.id)
+                mi.status = "failed"
+                mi.metadata_json = json.dumps({"error": str(e)[:200]})
+                db.commit()
+            result["media_items"].append({
+                "type": "audio",
+                "status": "failed",
+                "url": audio_url[:80],
+                "error": str(e)[:100],
+            })
 
     # ---- 2. Non-video: scan HTML for images ----
     # Get HTML content to scan
@@ -293,6 +376,11 @@ def _handle_localize_media(context: dict) -> dict:
             img["src"] = f"/api/media/{content_id}/images/{filename}"
             images_downloaded += 1
             result["media_items_created"] += 1
+            result["media_items"].append({
+                "type": "image",
+                "status": "downloaded",
+                "path": local_path,
+            })
 
         except Exception as e:
             logger.warning(f"[localize_media] Failed to download image {src[:80]}: {e}")
@@ -305,6 +393,13 @@ def _handle_localize_media(context: dict) -> dict:
             if content:
                 content.processed_content = str(soup)
                 db.commit()
+
+    # 按类型汇总
+    type_counts = {}
+    for mi in result["media_items"]:
+        t = mi["type"]
+        type_counts[t] = type_counts.get(t, 0) + 1
+    result["summary"] = type_counts
 
     logger.info(f"[localize_media] content={content_id}: {images_downloaded} images downloaded")
     return result
