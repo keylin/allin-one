@@ -90,8 +90,13 @@ const showShortcutHelp = ref(false)
 const newContentCount = ref(0)
 let lastKnownTotal = null
 
-// 阅读进度
-const scrollProgress = ref(0)
+// 阅读进度：基于未读消化比例
+const sessionInitialUnread = ref(0)
+const readingProgress = computed(() => {
+  if (sessionInitialUnread.value <= 0) return 0
+  const consumed = sessionInitialUnread.value - contentStats.value.unread
+  return Math.min(100, Math.max(0, (consumed / sessionInitialUnread.value) * 100))
+})
 
 // 滚动容器 ref
 const leftPanelRef = ref(null)
@@ -138,6 +143,16 @@ const mobileDetailContentRef = ref(null)
 // --- Mobile detail overlay ---
 const showMobileDetail = ref(false)
 const mobileDetailRef = ref(null)
+const mobileDetailHeight = ref(null) // null = use CSS 100dvh
+const mobileDetailTop = ref(0)
+
+function onVisualViewportChange() {
+  const vv = window.visualViewport
+  if (!vv) return
+  mobileDetailHeight.value = vv.height
+  mobileDetailTop.value = vv.offsetTop
+}
+
 
 // --- Chat composable ---
 const {
@@ -354,6 +369,26 @@ function closeMobileDetail() {
   showMobileDetail.value = false
 }
 
+// 键盘弹起时动态调整移动端详情面板位置和高度，防止 sticky header 被顶出屏幕
+// iOS Safari 键盘弹起不改变 layout viewport，而是推移 visual viewport：
+//   - resize: vv.height 缩小（键盘占位）
+//   - scroll: vv.offsetTop 增大（视口下移）
+// 需同时监听两个事件，将 fixed 容器对齐到 visual viewport
+watch(showMobileDetail, (visible) => {
+  const vv = window.visualViewport
+  if (visible && vv) {
+    mobileDetailHeight.value = vv.height
+    mobileDetailTop.value = vv.offsetTop
+    vv.addEventListener('resize', onVisualViewportChange)
+    vv.addEventListener('scroll', onVisualViewportChange)
+  } else {
+    mobileDetailHeight.value = null
+    mobileDetailTop.value = 0
+    vv?.removeEventListener('resize', onVisualViewportChange)
+    vv?.removeEventListener('scroll', onVisualViewportChange)
+  }
+})
+
 // [6] 收藏乐观更新
 async function handleFavorite(id) {
   const item = items.value.find(i => i.id === id)
@@ -490,14 +525,10 @@ async function handleMarkAllRead() {
   }
 }
 
-// --- Left panel scroll → infinite load + progress ---
+// --- Left panel scroll → infinite load + auto-read ---
 function handleLeftScroll(e) {
   const el = e.target
   const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-
-  // 进度条
-  const maxScroll = el.scrollHeight - el.clientHeight
-  scrollProgress.value = maxScroll > 0 ? Math.min(100, (el.scrollTop / maxScroll) * 100) : 0
 
   if (distanceToBottom < 200) {
     loadMore()
@@ -632,6 +663,11 @@ async function loadStats() {
         unread: res.data.unread || 0,
         total: newTotal,
       }
+
+      // 首次（或重置后）捕获初始未读数作为阅读进度基准
+      if (sessionInitialUnread.value === 0 && contentStats.value.unread > 0) {
+        sessionInitialUnread.value = contentStats.value.unread
+      }
     }
   } catch (_) { /* ignore */ }
   finally { statsLoading = false }
@@ -673,7 +709,11 @@ useSwipe(mobileDetailRef, {
 
 // 下拉刷新
 const { isPulling, pullDistance, isRefreshing } = usePullToRefresh(leftPanelRef, {
-  onRefresh: async () => { await fetchItems(true); await loadStats() }
+  onRefresh: async () => {
+    sessionInitialUnread.value = 0
+    await fetchItems(true)
+    await loadStats()
+  }
 })
 
 const pullOffset = computed(() => {
@@ -699,6 +739,8 @@ onUnmounted(() => {
   cancelChat()
   document.removeEventListener('keydown', handleKeydown)
   document.removeEventListener('click', handleClickOutside)
+  window.visualViewport?.removeEventListener('resize', onVisualViewportChange)
+  window.visualViewport?.removeEventListener('scroll', onVisualViewportChange)
 })
 </script>
 
@@ -978,12 +1020,12 @@ onUnmounted(() => {
 
         <!-- 阅读进度条 -->
         <div
-          v-if="items.length > 0 && scrollProgress > 0"
+          v-if="sessionInitialUnread > 0 && readingProgress > 0"
           class="sticky top-0 z-20 h-0.5 bg-slate-100"
         >
           <div
             class="h-full bg-indigo-400 transition-[width] duration-150 ease-out"
-            :style="{ width: scrollProgress + '%' }"
+            :style="{ width: readingProgress + '%' }"
           ></div>
         </div>
 
@@ -1176,18 +1218,9 @@ onUnmounted(() => {
         <div
           v-if="showMobileDetail && selectedId"
           ref="mobileDetailRef"
-          class="fixed inset-x-0 top-0 h-[100dvh] z-40 bg-white flex flex-col md:hidden"
+          class="fixed inset-x-0 z-40 bg-white flex flex-col md:hidden"
+          :style="{ top: mobileDetailTop + 'px', height: mobileDetailHeight != null ? mobileDetailHeight + 'px' : '100dvh' }"
         >
-          <!-- 移动端返回 -->
-          <button
-            class="shrink-0 self-start p-2 m-2 rounded-lg text-slate-400 active:bg-slate-100 transition-colors"
-            @click="closeMobileDetail"
-          >
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
-            </svg>
-          </button>
-
           <!-- 移动端详情内容 -->
           <div v-if="detailLoading && !detailContent" class="flex-1 flex items-center justify-center">
             <svg class="w-8 h-8 animate-spin text-slate-200" fill="none" viewBox="0 0 24 24">
@@ -1197,15 +1230,17 @@ onUnmounted(() => {
           </div>
 
           <div v-else-if="detailContent" class="flex-1 min-h-0 flex flex-col">
-            <div class="flex-1 overflow-y-auto px-3 py-3 space-y-3">
+            <div class="flex-1 overflow-y-auto">
               <DetailContent
                 ref="mobileDetailContentRef"
                 :item="detailContent"
+                :is-mobile-overlay="true"
                 :analyzing="analyzing"
                 :enriching="enriching"
                 :enrich-results="enrichResults"
                 :show-enrich-modal="showEnrichModal"
                 :applying-enrich="applyingEnrich"
+                @back="closeMobileDetail"
                 @analyze="handleAnalyze"
                 @favorite="handleDetailFavorite"
                 @enrich="handleEnrich"

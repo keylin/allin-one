@@ -101,6 +101,7 @@ def _build_media_summaries(media_items) -> list[dict]:
         summaries.append(MediaItemSummary(
             id=mi.id,
             media_type=mi.media_type,
+            original_url=mi.original_url,
             local_path=mi.local_path,
             thumbnail_path=thumbnail,
             status=mi.status,
@@ -238,7 +239,7 @@ async def list_content(
     else:
         items = (
             query.options(noload(ContentItem.media_items))
-            .order_by(order_expr)
+            .order_by(order_expr, ContentItem.id.desc())
             .offset((page - 1) * page_size)
             .limit(page_size)
             .all()
@@ -275,6 +276,13 @@ async def list_content(
             for mi in mi_list
         )
         data["reading_time_min"] = _estimate_reading_time(item)
+        # audio_duration: 从 raw_data.itunes.duration 提取（播客卡片显示）
+        if any(mi.media_type == "audio" for mi in mi_list) and item.raw_data:
+            try:
+                raw = json.loads(item.raw_data)
+                data["audio_duration"] = raw.get("itunes", {}).get("duration")
+            except (json.JSONDecodeError, TypeError):
+                pass
         result_list.append(data)
 
     return {
