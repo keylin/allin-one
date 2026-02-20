@@ -34,6 +34,8 @@ export function useAutoRead({ items, leftPanelRef, loadStats, contentStats }) {
   // --- IntersectionObserver 回调 ---
   function handleCardVisible(entry) {
     if (!hasScrolled.value) return
+    // 根容器不可见时跳过（移动端详情覆盖时 display:none 使 rootBounds 为 null）
+    if (!entry.rootBounds || entry.rootBounds.height === 0) return
 
     const itemId = entry.target.dataset.itemId
     const item = itemMap.value.get(itemId)
