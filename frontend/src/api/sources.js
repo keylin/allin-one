@@ -48,6 +48,18 @@ export function exportOPML() {
   return api.get('/sources/export', { responseType: 'blob' })
 }
 
+export function exportFull() {
+  return api.get('/sources/export/full', { responseType: 'blob' })
+}
+
+export function importFull(file) {
+  const formData = new FormData()
+  formData.append('file', file)
+  return api.post('/sources/import/full', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  })
+}
+
 export function cleanupDuplicates() {
   return api.post('/sources/cleanup-duplicates')
 }

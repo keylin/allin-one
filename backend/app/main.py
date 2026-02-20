@@ -17,7 +17,7 @@ from app.core.config import settings
 from app.core.logging_config import setup_logging
 from app.core.auth import APIKeyMiddleware
 from app.core.database import init_db
-from app.api.routes import dashboard, sources, content, pipelines, templates, video, audio, system_settings, prompt_templates, finance, credentials, opml, bilibili_auth
+from app.api.routes import dashboard, sources, content, pipelines, templates, video, audio, media, system_settings, prompt_templates, finance, credentials, opml, export as export_router, bilibili_auth
 
 setup_logging("backend")
 
@@ -99,6 +99,7 @@ async def health_check():
 
 # API Routes
 app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
+app.include_router(export_router.router, prefix="/api/sources", tags=["sources"])
 app.include_router(opml.router, prefix="/api/sources", tags=["sources"])
 app.include_router(sources.router, prefix="/api/sources", tags=["sources"])
 app.include_router(content.router, prefix="/api/content", tags=["content"])
@@ -106,69 +107,12 @@ app.include_router(pipelines.router, prefix="/api/pipelines", tags=["pipelines"]
 app.include_router(templates.router, prefix="/api/pipeline-templates", tags=["pipeline-templates"])
 app.include_router(video.router, prefix="/api/video", tags=["video"])
 app.include_router(audio.router, prefix="/api/audio", tags=["audio"])
+app.include_router(media.router, prefix="/api/media", tags=["media"])
 app.include_router(system_settings.router, prefix="/api/settings", tags=["settings"])
 app.include_router(prompt_templates.router, prefix="/api/prompt-templates", tags=["prompt-templates"])
 app.include_router(finance.router, prefix="/api/finance", tags=["finance"])
 app.include_router(credentials.router, prefix="/api/credentials", tags=["credentials"])
 app.include_router(bilibili_auth.router, prefix="/api/credentials/bilibili", tags=["credentials"])
-
-# ---- 通用媒体文件服务 ----
-
-@app.get("/api/media/{content_id}/thumbnail", tags=["media"])
-async def serve_content_thumbnail(content_id: str):
-    """通用缩略图: 优先 video 封面 → 回退第一张已下载 image MediaItem"""
-    import json
-    from fastapi.responses import FileResponse
-    from app.core.database import SessionLocal
-    from app.models.content import MediaItem
-
-    with SessionLocal() as db:
-        # 1. Video thumbnail (from metadata)
-        video_mi = db.query(MediaItem).filter(
-            MediaItem.content_id == content_id,
-            MediaItem.media_type == "video",
-            MediaItem.status == "downloaded",
-        ).first()
-        if video_mi and video_mi.metadata_json:
-            try:
-                meta = json.loads(video_mi.metadata_json)
-                path = meta.get("thumbnail_path")
-                if path and os.path.isfile(path):
-                    mime, _ = mimetypes.guess_type(path)
-                    return FileResponse(path, media_type=mime or "image/jpeg")
-            except (json.JSONDecodeError, TypeError):
-                pass
-
-        # 2. First downloaded image MediaItem
-        image_mi = db.query(MediaItem).filter(
-            MediaItem.content_id == content_id,
-            MediaItem.media_type == "image",
-            MediaItem.status == "downloaded",
-        ).first()
-        if image_mi and image_mi.local_path and os.path.isfile(image_mi.local_path):
-            mime, _ = mimetypes.guess_type(image_mi.local_path)
-            return FileResponse(image_mi.local_path, media_type=mime or "image/jpeg")
-
-    raise HTTPException(status_code=404, detail="Thumbnail not found")
-
-
-@app.get("/api/media/{content_id}/{file_path:path}", tags=["media"])
-async def serve_media(content_id: str, file_path: str):
-    """从 MEDIA_DIR/{content_id}/ 读取媒体文件"""
-    import mimetypes
-    from fastapi.responses import FileResponse
-
-    full_path = os.path.join(settings.MEDIA_DIR, content_id, file_path)
-    # 安全检查: 不能跳出 MEDIA_DIR
-    real_path = os.path.realpath(full_path)
-    real_media_dir = os.path.realpath(settings.MEDIA_DIR)
-    if not real_path.startswith(real_media_dir):
-        raise HTTPException(status_code=403, detail="Access denied")
-    if not os.path.isfile(real_path):
-        raise HTTPException(status_code=404, detail="File not found")
-
-    mime_type, _ = mimetypes.guess_type(real_path)
-    return FileResponse(real_path, media_type=mime_type or "application/octet-stream")
 
 # Static files (Vue frontend) — 必须最后注册，catch-all 会拦截未匹配路由
 if os.path.isdir("static"):

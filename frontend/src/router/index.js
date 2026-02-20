@@ -11,9 +11,10 @@ const routes = [
   { path: '/pipelines', component: () => import('@/views/PipelinesView.vue') },
   { path: '/processing', redirect: '/pipelines' },
   { path: '/prompt-templates', redirect: '/pipelines?tab=prompts' },
-  { path: '/videos', component: () => import('@/views/VideoView.vue') },
+  { path: '/media', component: () => import('@/views/media-view.vue') },
+  { path: '/videos', redirect: '/media' },
+  { path: '/video-download', redirect: '/media' },
   { path: '/finance', component: () => import('@/views/FinanceView.vue') },
-  { path: '/video-download', redirect: '/videos' },
   { path: '/settings', component: () => import('@/views/SettingsView.vue') },
   { path: '/:pathMatch(.*)*', name: 'NotFound', component: () => import('@/views/NotFoundView.vue') },
 ]

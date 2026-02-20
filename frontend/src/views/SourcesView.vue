@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import dayjs from 'dayjs'
 import { useSourcesStore } from '@/stores/sources'
@@ -9,7 +9,7 @@ import SourceFormModal from '@/components/source-form-modal.vue'
 import ContentSubmitModal from '@/components/content-submit-modal.vue'
 import SourceDetailPanel from '@/components/source-detail-panel.vue'
 import DetailDrawer from '@/components/detail-drawer.vue'
-import { importOPML, exportOPML } from '@/api/sources'
+import { importOPML, exportOPML, importFull, exportFull } from '@/api/sources'
 
 const route = useRoute()
 const router = useRouter()
@@ -17,6 +17,11 @@ const store = useSourcesStore()
 const toast = useToast()
 
 const fileInputRef = ref(null)
+const jsonFileInputRef = ref(null)
+
+// Dropdown menu state
+const showImportMenu = ref(false)
+const showExportMenu = ref(false)
 
 const searchQuery = ref(route.query.q || '')
 const filterType = ref(route.query.type || '')
@@ -126,12 +131,22 @@ function fetchWithFilters() {
   syncQueryParams()
 }
 
+function closeAllMenus() {
+  showImportMenu.value = false
+  showExportMenu.value = false
+}
+
 onMounted(() => {
   if (route.query.page) store.currentPage = parseInt(route.query.page) || 1
   if (route.query.sort_by) sortBy.value = route.query.sort_by
   if (route.query.sort_order) sortOrder.value = route.query.sort_order
   if (route.query.category) filterCategory.value = route.query.category
   fetchWithFilters()
+  document.addEventListener('click', closeAllMenus)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('click', closeAllMenus)
 })
 
 function handleSearch() {
@@ -357,6 +372,7 @@ async function handleCleanupDuplicates() {
 
 // OPML import/export
 function triggerFileImport() {
+  showImportMenu.value = false
   fileInputRef.value?.click()
 }
 
@@ -366,7 +382,7 @@ async function handleFileImport(event) {
   try {
     const res = await importOPML(file)
     if (res.code === 0) {
-      toast.success(`导入完成: 新增 ${res.data.created} 个源，跳过 ${res.data.skipped} 个`)
+      toast.success(`导入完成：新增 ${res.data.created} 个源，跳过 ${res.data.skipped} 个`)
       fetchWithFilters()
     } else {
       toast.error(res.message || '导入失败')
@@ -378,7 +394,8 @@ async function handleFileImport(event) {
   }
 }
 
-async function handleExport() {
+async function handleExportOPML() {
+  showExportMenu.value = false
   try {
     const blob = await exportOPML()
     const url = URL.createObjectURL(blob)
@@ -393,17 +410,68 @@ async function handleExport() {
     toast.error('导出失败')
   }
 }
+
+// JSON full backup import/export
+function triggerJsonImport() {
+  showImportMenu.value = false
+  jsonFileInputRef.value?.click()
+}
+
+async function handleJsonFileImport(event) {
+  const file = event.target.files?.[0]
+  if (!file) return
+  try {
+    const res = await importFull(file)
+    if (res.code === 0) {
+      const d = res.data
+      let msg = `导入完成：新增 ${d.created} 个源，跳过 ${d.skipped} 个重复`
+      if (d.warnings?.length) msg += `，${d.warnings.length} 个警告`
+      toast.success(msg)
+      fetchWithFilters()
+    } else {
+      toast.error(res.message || '导入失败')
+    }
+  } catch {
+    toast.error('导入备份失败')
+  } finally {
+    event.target.value = ''
+  }
+}
+
+async function handleExportFull() {
+  showExportMenu.value = false
+  try {
+    const blob = await exportFull()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    const date = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+    a.href = url
+    a.download = `allin-one-sources-${date}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    toast.success('备份文件已导出')
+  } catch {
+    toast.error('导出失败')
+  }
+}
 </script>
 
 <template>
   <div class="flex flex-col h-full">
-    <!-- Hidden file input -->
+    <!-- Hidden file inputs -->
     <input
       ref="fileInputRef"
       type="file"
       accept=".opml,.xml,text/xml,application/xml,text/x-opml"
       class="hidden"
       @change="handleFileImport"
+    />
+    <input
+      ref="jsonFileInputRef"
+      type="file"
+      accept=".json,application/json"
+      class="hidden"
+      @change="handleJsonFileImport"
     />
 
     <!-- Sticky header -->
@@ -440,24 +508,95 @@ async function handleExport() {
               <path stroke-linecap="round" stroke-linejoin="round" d="M15 12H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
           </button>
-          <button
-            class="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-all"
-            title="导入 OPML"
-            @click="triggerFileImport"
-          >
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-            </svg>
-          </button>
-          <button
-            class="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-all"
-            title="导出 OPML"
-            @click="handleExport"
-          >
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-            </svg>
-          </button>
+          <!-- Import dropdown -->
+          <div class="relative">
+            <button
+              class="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-all flex items-center gap-0.5"
+              title="导入"
+              @click.stop="showImportMenu = !showImportMenu; showExportMenu = false"
+            >
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+              </svg>
+              <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+            <Transition name="dropdown">
+              <div
+                v-if="showImportMenu"
+                class="absolute right-0 top-full mt-1 w-52 bg-white border border-slate-200 rounded-xl shadow-lg z-20 overflow-hidden"
+                @click.stop
+              >
+                <button
+                  class="w-full flex items-start gap-3 px-4 py-3 text-left hover:bg-slate-50 transition-colors"
+                  @click="triggerJsonImport"
+                >
+                  <span class="text-base leading-none mt-0.5">📦</span>
+                  <div>
+                    <div class="text-sm font-medium text-slate-700">导入备份（JSON）</div>
+                    <div class="text-xs text-slate-400 mt-0.5">恢复完整备份，支持所有类型</div>
+                  </div>
+                </button>
+                <div class="border-t border-slate-100"></div>
+                <button
+                  class="w-full flex items-start gap-3 px-4 py-3 text-left hover:bg-slate-50 transition-colors"
+                  @click="triggerFileImport"
+                >
+                  <span class="text-base leading-none mt-0.5">📡</span>
+                  <div>
+                    <div class="text-sm font-medium text-slate-700">导入 OPML</div>
+                    <div class="text-xs text-slate-400 mt-0.5">从 RSS 阅读器迁移</div>
+                  </div>
+                </button>
+              </div>
+            </Transition>
+          </div>
+
+          <!-- Export dropdown -->
+          <div class="relative">
+            <button
+              class="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-all flex items-center gap-0.5"
+              title="导出"
+              @click.stop="showExportMenu = !showExportMenu; showImportMenu = false"
+            >
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+            <Transition name="dropdown">
+              <div
+                v-if="showExportMenu"
+                class="absolute right-0 top-full mt-1 w-52 bg-white border border-slate-200 rounded-xl shadow-lg z-20 overflow-hidden"
+                @click.stop
+              >
+                <button
+                  class="w-full flex items-start gap-3 px-4 py-3 text-left hover:bg-slate-50 transition-colors"
+                  @click="handleExportFull"
+                >
+                  <span class="text-base leading-none mt-0.5">📦</span>
+                  <div>
+                    <div class="text-sm font-medium text-slate-700">完整备份（JSON）</div>
+                    <div class="text-xs text-slate-400 mt-0.5">导出所有类型，用于备份迁移</div>
+                  </div>
+                </button>
+                <div class="border-t border-slate-100"></div>
+                <button
+                  class="w-full flex items-start gap-3 px-4 py-3 text-left hover:bg-slate-50 transition-colors"
+                  @click="handleExportOPML"
+                >
+                  <span class="text-base leading-none mt-0.5">📡</span>
+                  <div>
+                    <div class="text-sm font-medium text-slate-700">导出 OPML</div>
+                    <div class="text-xs text-slate-400 mt-0.5">兼容 Feedly / NetNewsWire</div>
+                  </div>
+                </button>
+              </div>
+            </Transition>
+          </div>
           <button
             class="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-all flex items-center gap-1.5"
             @click="openCreate"
@@ -899,3 +1038,15 @@ async function handleExport() {
     </Transition>
   </div>
 </template>
+
+<style scoped>
+.dropdown-enter-active,
+.dropdown-leave-active {
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+.dropdown-enter-from,
+.dropdown-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+</style>
