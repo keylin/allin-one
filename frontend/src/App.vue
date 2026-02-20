@@ -136,25 +136,22 @@ watch(() => route.path, () => {
           </button>
         </div>
         <nav class="sidebar-nav">
-          <template v-for="(group, gi) in sidebarGroups" :key="gi">
-            <div v-if="group.label" class="sidebar-group-label">{{ group.label }}</div>
-            <RouterLink
-              v-for="item in group.items"
-              :key="item.path"
-              :to="item.path"
-              class="sidebar-link"
+          <RouterLink
+            v-for="item in sidebarNavItems"
+            :key="item.path"
+            :to="item.path"
+            class="sidebar-link"
+            :class="{ active: isActive(item.path) }"
+          >
+            <svg
+              class="sidebar-link-icon"
               :class="{ active: isActive(item.path) }"
+              fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5"
             >
-              <svg
-                class="sidebar-link-icon"
-                :class="{ active: isActive(item.path) }"
-                fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5"
-              >
-                <path stroke-linecap="round" stroke-linejoin="round" :d="item.icon" />
-              </svg>
-              <span>{{ item.label }}</span>
-            </RouterLink>
-          </template>
+              <path stroke-linecap="round" stroke-linejoin="round" :d="item.icon" />
+            </svg>
+            <span>{{ item.label }}</span>
+          </RouterLink>
         </nav>
         <div class="sidebar-footer">
           <button
@@ -308,6 +305,8 @@ watch(() => route.path, () => {
   flex-direction: column;
   overflow: hidden;
   transition: transform 0.3s ease;
+  background: white;
+  border-right: 1px solid rgb(226 232 240 / 0.6);
 }
 
 .sidebar-header {
@@ -499,7 +498,7 @@ watch(() => route.path, () => {
 }
 
 @media (min-width: 768px) {
-  .sidebar-close-btn {
+  .sidebar-header {
     display: none;
   }
 }
