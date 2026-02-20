@@ -874,7 +874,7 @@ onUnmounted(() => {
 
               <!-- 未读 toggle -->
               <button
-                class="p-2.5 md:p-2 rounded-lg transition-all duration-200 border shrink-0"
+                class="p-2 rounded-lg transition-all duration-200 border shrink-0"
                 :class="showUnreadOnly
                   ? 'text-blue-600 bg-blue-50 border-blue-200'
                   : 'text-slate-400 hover:text-slate-600 bg-slate-50 border-slate-200 hover:border-slate-300'"
@@ -889,7 +889,7 @@ onUnmounted(() => {
 
               <!-- 密度切换（移动端隐藏） -->
               <button
-                class="hidden md:inline-flex p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-all"
+                class="hidden md:inline-flex p-2 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-all"
                 :title="densityMode === 'compact' ? '切换舒适模式' : '切换紧凑模式'"
                 @click="toggleDensity"
               >
@@ -902,7 +902,7 @@ onUnmounted(() => {
               </button>
               <!-- 快捷键帮助（移动端隐藏） -->
               <button
-                class="hidden md:inline-flex p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-all"
+                class="hidden md:inline-flex p-2 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-all"
                 title="快捷键 (?)"
                 @click="showShortcutHelp = !showShortcutHelp"
               >
