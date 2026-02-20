@@ -180,9 +180,7 @@ async def preview_cleanup(db: Session = Depends(get_db)):
     content_count = 0
 
     if default_retention > 0:
-        sources = db.query(SourceConfig).filter(
-            SourceConfig.auto_cleanup_enabled == True,
-        ).all()
+        sources = db.query(SourceConfig).all()
 
         for source in sources:
             retention = source.retention_days if source.retention_days and source.retention_days > 0 else default_retention

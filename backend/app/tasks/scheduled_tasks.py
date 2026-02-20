@@ -341,12 +341,10 @@ async def cleanup_expired_content():
             logger.info("Cleanup skipped: global retention is 0 (keep forever)")
             return
 
-        sources = db.query(SourceConfig).filter(
-            SourceConfig.auto_cleanup_enabled == True,
-        ).all()
+        sources = db.query(SourceConfig).all()
 
         if not sources:
-            logger.info("Cleanup: no sources with auto_cleanup_enabled")
+            logger.info("Cleanup: no sources found")
             return
 
         now = utcnow()
