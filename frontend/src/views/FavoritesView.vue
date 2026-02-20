@@ -436,7 +436,7 @@ onUnmounted(() => {
 
           <!-- 搜索按钮 -->
           <button
-            class="p-2 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-all"
+            class="p-2.5 md:p-2 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-all"
             :class="searchQuery ? 'text-indigo-600 bg-indigo-50' : ''"
             @click="toggleMobileSearch"
           >
@@ -447,7 +447,7 @@ onUnmounted(() => {
 
           <!-- 筛选按钮 -->
           <button
-            class="relative p-2 rounded-lg transition-all"
+            class="relative p-2.5 md:p-2 rounded-lg transition-all"
             :class="mobileFilterOpen || activeFilterCount > 0
               ? 'text-indigo-600 bg-indigo-50'
               : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'"
@@ -590,7 +590,7 @@ onUnmounted(() => {
     </div>
 
     <!-- Scrollable content -->
-    <div class="flex-1 overflow-y-auto">
+    <div class="flex-1 overflow-y-auto overscroll-contain">
       <div class="px-3 py-3 md:px-4 md:py-4">
         <!-- Loading -->
         <div v-if="loading" class="flex items-center justify-center py-24">
@@ -677,7 +677,7 @@ onUnmounted(() => {
                 </div>
 
                 <!-- 视频信息 -->
-                <div class="p-3">
+                <div class="p-3 sm:p-4">
                   <h4 class="text-sm font-medium text-slate-800 line-clamp-2 leading-snug min-h-[2.5rem]">
                     {{ item.title || '未知标题' }}
                   </h4>

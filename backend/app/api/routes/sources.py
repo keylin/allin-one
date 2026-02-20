@@ -136,6 +136,11 @@ async def create_source(body: SourceCreate, db: Session = Depends(get_db)):
         if not tpl:
             return error_response(400, f"Pipeline template '{body.pipeline_template_id}' not found")
 
+    # 名称唯一性校验
+    existing = db.query(SourceConfig).filter(SourceConfig.name == body.name.strip()).first()
+    if existing:
+        return error_response(400, f"数据源「{body.name}」已存在，请使用不同名称")
+
     data = body.model_dump()
 
     # 用户类型源自动禁用调度
@@ -159,6 +164,69 @@ async def list_source_options(db: Session = Depends(get_db)):
         .order_by(SourceConfig.name).all()
     return {"code": 0, "data": [{"id": s.id, "name": s.name} for s in sources], "message": "ok"}
 
+
+
+@router.post("/cleanup-duplicates")
+async def cleanup_duplicate_sources(db: Session = Depends(get_db)):
+    """自动清理同名重复数据源：保留内容最多的（tie-break：最早创建），其余删除"""
+    from collections import defaultdict
+    from app.models.content import ContentItem
+    from app.services.source_cleanup import cascade_delete_source
+
+    # 1. 找出有重复名称的所有源
+    dup_name_subq = (
+        db.query(SourceConfig.name)
+        .group_by(SourceConfig.name)
+        .having(func.count(SourceConfig.id) > 1)
+        .subquery()
+    )
+    dup_sources = (
+        db.query(SourceConfig)
+        .filter(SourceConfig.name.in_(db.query(dup_name_subq.c.name)))
+        .order_by(SourceConfig.name, SourceConfig.created_at)
+        .all()
+    )
+
+    if not dup_sources:
+        return {"code": 0, "data": {"groups_cleaned": 0, "sources_deleted": 0, "content_reassigned": 0}, "message": "无重复数据源"}
+
+    # 2. 按名称分组
+    groups: dict[str, list] = defaultdict(list)
+    for s in dup_sources:
+        groups[s.name].append(s)
+
+    groups_cleaned = 0
+    sources_deleted = 0
+    content_reassigned = 0
+
+    for name, members in groups.items():
+        # 3. 选 winner：content_count 最多，tie-break 最早创建
+        def sort_key(s):
+            cnt = db.query(func.count(ContentItem.id)).filter(ContentItem.source_id == s.id).scalar()
+            return (-cnt, s.created_at)
+        members.sort(key=sort_key)
+        winner = members[0]
+        losers = members[1:]
+        loser_ids = [s.id for s in losers]
+
+        # 4. 重新归属 loser 的 ContentItem 到 winner
+        reassigned = db.query(ContentItem).filter(
+            ContentItem.source_id.in_(loser_ids)
+        ).update({"source_id": winner.id}, synchronize_session=False)
+        content_reassigned += reassigned
+
+        # 5. 删除 losers（内容已迁移，无孤儿内容）
+        cascade_delete_source(loser_ids, db, cascade=False)
+        sources_deleted += len(loser_ids)
+        groups_cleaned += 1
+
+    db.commit()
+    logger.info(f"Cleanup duplicates: {groups_cleaned} groups, {sources_deleted} sources deleted, {content_reassigned} items reassigned")
+    return {
+        "code": 0,
+        "data": {"groups_cleaned": groups_cleaned, "sources_deleted": sources_deleted, "content_reassigned": content_reassigned},
+        "message": f"清理完成：{groups_cleaned} 组重复，删除 {sources_deleted} 个源，迁移 {content_reassigned} 条内容",
+    }
 
 
 # ---- 单个数据源操作（参数路径必须在字面路径之后） ----
@@ -211,6 +279,15 @@ async def update_source(source_id: str, body: SourceUpdate, db: Session = Depend
         tpl = db.get(PipelineTemplate, update_data["pipeline_template_id"])
         if not tpl:
             return error_response(400, f"Pipeline template '{update_data['pipeline_template_id']}' not found")
+
+    # 名称唯一性校验（排除自身）
+    if "name" in update_data and update_data["name"].strip() != source.name:
+        conflict = db.query(SourceConfig).filter(
+            SourceConfig.name == update_data["name"].strip(),
+            SourceConfig.id != source_id,
+        ).first()
+        if conflict:
+            return error_response(400, f"数据源「{update_data['name']}」已存在，请使用不同名称")
 
     for key, value in update_data.items():
         setattr(source, key, value)

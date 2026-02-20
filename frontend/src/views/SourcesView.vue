@@ -32,6 +32,7 @@ const showDeleteDialog = ref(false)
 const deleteContentChecked = ref(false)
 const collectingId = ref(null)
 const collectingAll = ref(false)
+const cleaningDups = ref(false)
 const showSubmitModal = ref(false)
 const submitTargetSource = ref(null)
 
@@ -198,6 +199,8 @@ async function handleFormSubmit(formData) {
       const updated = store.sources.find(s => s.id === editingSource.value.id)
       if (updated) selectedSource.value = updated
     }
+  } else {
+    toast.error(res.message || '操作失败')
   }
 }
 
@@ -335,6 +338,23 @@ function isOverdue(nextCollectionAt) {
   return dayjs.utc(nextCollectionAt).local().isBefore(dayjs())
 }
 
+async function handleCleanupDuplicates() {
+  cleaningDups.value = true
+  try {
+    const res = await store.cleanupDuplicates()
+    if (res.code === 0) {
+      if (res.data.groups_cleaned === 0) toast.info('没有重复数据源')
+      else toast.success(res.message)
+    } else {
+      toast.error(res.message || '清理失败')
+    }
+  } catch {
+    toast.error('清理请求失败')
+  } finally {
+    cleaningDups.value = false
+  }
+}
+
 // OPML import/export
 function triggerFileImport() {
   fileInputRef.value?.click()
@@ -358,9 +378,20 @@ async function handleFileImport(event) {
   }
 }
 
-function handleExport() {
-  window.open(exportOPML(), '_blank')
-  toast.success('正在导出 OPML 文件')
+async function handleExport() {
+  try {
+    const blob = await exportOPML()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    const date = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+    a.href = url
+    a.download = `allin-one-feeds-${date}.opml`
+    a.click()
+    URL.revokeObjectURL(url)
+    toast.success('OPML 文件已导出')
+  } catch {
+    toast.error('导出失败')
+  }
 }
 </script>
 
@@ -393,6 +424,20 @@ function handleExport() {
             </svg>
             <svg v-else class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
               <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182" />
+            </svg>
+          </button>
+          <button
+            class="p-2 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-all disabled:opacity-50"
+            title="清理重复数据源"
+            :disabled="cleaningDups"
+            @click="handleCleanupDuplicates"
+          >
+            <svg v-if="cleaningDups" class="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
+            <svg v-else class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15 12H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
           </button>
           <button

@@ -86,8 +86,8 @@ const audioDuration = computed(() => {
   return props.item.audio_duration || ''
 })
 
-const showThumbnail = computed(() => !props.compact && (props.item.has_thumbnail || (derivedMediaType.value === 'video' && props.item.has_thumbnail)))
-const thumbnailUrl = computed(() => showThumbnail.value ? `/api/video/${props.item.id}/thumbnail` : null)
+const showThumbnail = computed(() => !props.compact && props.item.has_thumbnail)
+const thumbnailUrl = computed(() => showThumbnail.value ? `/api/media/${props.item.id}/thumbnail` : null)
 
 // 计算已读状态
 const isRead = computed(() => (props.item.view_count || 0) > 0)
@@ -115,7 +115,7 @@ function onThumbError(e) {
       <svg :class="mediaColor" class="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
         <path stroke-linecap="round" stroke-linejoin="round" :d="mediaIcon" />
       </svg>
-      <span v-if="audioDuration" class="text-[10px] font-medium text-rose-400 tabular-nums shrink-0">{{ audioDuration }}</span>
+      <span v-if="audioDuration" class="text-xs md:text-[10px] font-medium text-rose-400 tabular-nums shrink-0">{{ audioDuration }}</span>
 
       <!-- 标题 -->
       <h3
@@ -135,7 +135,7 @@ function onThumbError(e) {
 
       <!-- 收藏 -->
       <button
-        class="shrink-0 p-0.5 rounded transition-all duration-200"
+        class="shrink-0 p-2 md:p-0.5 rounded transition-all duration-200"
         :class="item.is_favorited ? 'text-amber-400 hover:text-amber-500' : 'text-slate-200 hover:text-amber-400'"
         @click.stop="emit('favorite', item.id)"
       >
@@ -155,7 +155,7 @@ function onThumbError(e) {
       (selected || !isRead) ? 'border-l-indigo-500' : 'border-l-transparent',
       selected
         ? 'bg-indigo-50/60 border-indigo-200 ring-1 ring-indigo-200/50 shadow-sm'
-        : 'border-slate-200/80 hover:shadow-md hover:border-slate-300 hover:-translate-y-0.5',
+        : 'border-slate-200/80 md:hover:shadow-md md:hover:border-slate-300 md:hover:-translate-y-0.5',
     ]"
     @click="handleCardClick"
   >
@@ -182,7 +182,7 @@ function onThumbError(e) {
       <!-- 视频封面（左侧） -->
       <div
         v-if="showThumbnail"
-        class="relative shrink-0 w-24 md:w-36 bg-slate-100 overflow-hidden"
+        class="relative shrink-0 w-20 sm:w-24 md:w-36 bg-slate-100 overflow-hidden"
       >
         <img
           :src="thumbnailUrl"
@@ -191,8 +191,8 @@ function onThumbError(e) {
           class="w-full h-full object-cover"
           @error="onThumbError"
         />
-        <!-- 播放图标 overlay -->
-        <div class="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/20 transition-colors duration-200">
+        <!-- 播放图标 overlay (仅视频) -->
+        <div v-if="derivedMediaType === 'video'" class="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/20 transition-colors duration-200">
           <div class="w-8 h-8 rounded-full bg-white/80 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200">
             <svg class="w-4 h-4 text-slate-700 ml-0.5" fill="currentColor" viewBox="0 0 24 24">
               <path d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z" />
@@ -210,7 +210,7 @@ function onThumbError(e) {
             <svg :class="mediaColor" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
               <path stroke-linecap="round" stroke-linejoin="round" :d="mediaIcon" />
             </svg>
-            <span v-if="audioDuration" class="text-[10px] font-medium text-rose-400 tabular-nums">{{ audioDuration }}</span>
+            <span v-if="audioDuration" class="text-xs md:text-[10px] font-medium text-rose-400 tabular-nums">{{ audioDuration }}</span>
             <span
               v-if="sentimentColor"
               :class="sentimentColor"

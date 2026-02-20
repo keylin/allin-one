@@ -9,6 +9,7 @@ import DOMPurify from 'dompurify'
 import dayjs from 'dayjs'
 import { formatTimeFull } from '@/utils/time'
 import PodcastPlayer from '@/components/podcast-player.vue'
+import ImageLightbox from '@/components/image-lightbox.vue'
 
 const props = defineProps({
   visible: Boolean,
@@ -46,11 +47,14 @@ const {
   getContentId: () => props.contentId,
 })
 
-// DOMPurify: 所有链接强制新窗口打开
+// DOMPurify: 所有链接强制新窗口打开，图片加 referrerpolicy
 DOMPurify.addHook('afterSanitizeAttributes', (node) => {
   if (node.tagName === 'A') {
     node.setAttribute('target', '_blank')
     node.setAttribute('rel', 'noopener noreferrer')
+  }
+  if (node.tagName === 'IMG') {
+    node.setAttribute('referrerpolicy', 'no-referrer')
   }
 })
 
@@ -61,10 +65,33 @@ const md = new MarkdownIt({
   typographer: true,
 })
 
+// --- Lightbox 图片浏览器 ---
+const lightboxVisible = ref(false)
+const lightboxImages = ref([])
+const lightboxIndex = ref(0)
+
+function handleContentDblClick(e) {
+  const img = e.target.closest('img')
+  if (!img) return
+  e.preventDefault()
+
+  const container = e.currentTarget
+  const allImgs = Array.from(container.querySelectorAll('img'))
+    .map(el => el.src)
+    .filter(src => src && !src.startsWith('data:'))
+  if (!allImgs.length) return
+
+  lightboxImages.value = allImgs
+  const idx = allImgs.indexOf(img.src)
+  lightboxIndex.value = idx >= 0 ? idx : 0
+  lightboxVisible.value = true
+}
+
 // 键盘导航 — watchEffect 自动清理，避免事件泄漏
 watchEffect((onCleanup) => {
   if (props.visible) {
     const handler = (e) => {
+      if (lightboxVisible.value) return // Lightbox handles its own keys
       if (['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return
       if (e.key === 'ArrowLeft' && props.hasPrev) {
         e.preventDefault()
@@ -204,8 +231,8 @@ const renderedRawContent = computed(() => {
         'figure', 'figcaption', 'video', 'source', 'audio',
         'div', 'span',
       ],
-      ALLOWED_ATTR: ['href', 'src', 'alt', 'title', 'width', 'height', 'target', 'rel', 'class'],
-      ADD_ATTR: ['target'],
+      ALLOWED_ATTR: ['href', 'src', 'alt', 'title', 'width', 'height', 'target', 'rel', 'class', 'referrerpolicy'],
+      ADD_ATTR: ['target', 'referrerpolicy'],
       FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form', 'input', 'textarea', 'select'],
     })
   } catch {
@@ -314,10 +341,10 @@ function formatTime(t) {
     >
       <div class="bg-white md:rounded-2xl shadow-2xl md:max-w-4xl w-full h-full md:h-auto md:max-h-[90vh] overflow-hidden flex flex-col">
         <!-- Header -->
-        <div class="flex items-start justify-between p-3 md:p-6 border-b border-slate-100">
+        <div class="flex items-start justify-between p-3 sm:p-4 md:p-6 border-b border-slate-100">
           <div class="flex-1 min-w-0 pr-2 md:pr-4">
             <h2 class="text-base md:text-xl font-bold text-slate-900 mb-1 md:mb-2 line-clamp-2">{{ content?.title || '内容详情' }}</h2>
-            <div class="flex items-center gap-1.5 md:gap-3 text-xs md:text-sm text-slate-400 flex-wrap">
+            <div class="flex items-center gap-1.5 md:gap-3 text-sm md:text-xs text-slate-400 flex-wrap">
               <span v-if="content?.source_name" class="font-medium text-slate-500">{{ content.source_name }}</span>
               <span v-if="content?.published_at" title="发布时间">发布于 {{ formatTime(content.published_at) }}</span>
               <span v-if="content?.author" class="hidden md:inline">{{ content.author }}</span>
@@ -326,7 +353,7 @@ function formatTime(t) {
           </div>
           <button
             @click="emit('close')"
-            class="flex-shrink-0 p-1.5 md:p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-lg transition-colors"
+            class="flex-shrink-0 p-2.5 md:p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-lg transition-colors"
           >
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
               <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -335,7 +362,7 @@ function formatTime(t) {
         </div>
 
         <!-- Content -->
-        <div class="flex-1 overflow-y-auto p-3 md:p-6">
+        <div class="flex-1 overflow-y-auto overscroll-contain p-3 md:p-6">
           <div v-if="loading" class="flex items-center justify-center py-16">
             <svg class="w-8 h-8 animate-spin text-slate-200" fill="none" viewBox="0 0 24 24">
               <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -405,8 +432,16 @@ function formatTime(t) {
                   {{ currentViewLabel === '处理版' ? '查看原文' : '查看处理版' }}
                 </button>
               </div>
-              <div class="prose prose-sm max-w-none markdown-content text-slate-700 mt-2" v-html="displayedBodyHtml"></div>
+              <div class="prose prose-sm max-w-none markdown-content text-slate-700 mt-2" v-html="displayedBodyHtml" @dblclick="handleContentDblClick"></div>
             </div>
+
+            <!-- 图片浏览器 Lightbox -->
+            <ImageLightbox
+              :visible="lightboxVisible"
+              :images="lightboxImages"
+              :start-index="lightboxIndex"
+              @close="lightboxVisible = false"
+            />
 
             <!-- AI 对话 -->
             <ChatPanel
@@ -517,6 +552,13 @@ function formatTime(t) {
 </template>
 
 <style scoped>
+/* 图片双击放大提示 */
+.markdown-content :deep(img) {
+  max-width: 100%;
+  height: auto;
+  cursor: zoom-in;
+}
+
 /* Markdown 内容样式 */
 .markdown-content :deep(h1),
 .markdown-content :deep(h2),

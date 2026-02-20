@@ -45,7 +45,10 @@ export function importOPML(file) {
 }
 
 export function exportOPML() {
-  // 返回下载 URL，需要在前端手动处理下载
-  return '/api/sources/export'
+  return api.get('/sources/export', { responseType: 'blob' })
+}
+
+export function cleanupDuplicates() {
+  return api.post('/sources/cleanup-duplicates')
 }
 

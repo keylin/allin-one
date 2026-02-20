@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { listSources, createSource as apiCreate, updateSource as apiUpdate, deleteSource as apiDelete, batchDeleteSources as apiBatchDelete, collectSource as apiCollect, collectAllSources as apiCollectAll } from '@/api/sources'
+import { listSources, createSource as apiCreate, updateSource as apiUpdate, deleteSource as apiDelete, batchDeleteSources as apiBatchDelete, collectSource as apiCollect, collectAllSources as apiCollectAll, cleanupDuplicates as apiCleanupDuplicates } from '@/api/sources'
 
 export const useSourcesStore = defineStore('sources', () => {
   const sources = ref([])
@@ -58,5 +58,11 @@ export const useSourcesStore = defineStore('sources', () => {
     return await apiCollectAll()
   }
 
-  return { sources, total, loading, currentPage, pageSize, fetchSources, createSource, updateSource, deleteSource, batchDelete, collectSource, collectAll }
+  async function cleanupDuplicates() {
+    const res = await apiCleanupDuplicates()
+    if (res.code === 0) fetchSources()
+    return res
+  }
+
+  return { sources, total, loading, currentPage, pageSize, fetchSources, createSource, updateSource, deleteSource, batchDelete, collectSource, collectAll, cleanupDuplicates }
 })

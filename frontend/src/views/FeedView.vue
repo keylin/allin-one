@@ -755,7 +755,7 @@ onUnmounted(() => {
       <!-- 左栏：列表 -->
       <div
         ref="leftPanelRef"
-        class="w-full md:w-[480px] md:shrink-0 md:border-r border-slate-200 overflow-y-auto relative"
+        class="w-full md:w-[480px] md:shrink-0 md:border-r border-slate-200 overflow-y-auto overscroll-contain relative"
         :class="{ 'hidden md:block': showMobileDetail }"
         @scroll="handleLeftScroll"
       >
@@ -792,7 +792,7 @@ onUnmounted(() => {
           <!-- 计数 + 排序 + 密度切换 -->
           <div class="flex items-center justify-between">
             <div class="flex items-center gap-2">
-              <p class="text-xs text-slate-400">
+              <p class="text-sm md:text-xs text-slate-400">
                 <span v-if="contentStats.unread > 0" class="inline-flex items-center gap-1">
                   <span class="inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1.5 text-xs font-medium rounded-full bg-indigo-100 text-indigo-700">
                     {{ contentStats.unread }}
@@ -804,7 +804,7 @@ onUnmounted(() => {
               <!-- 全部已读按钮 -->
               <button
                 v-if="contentStats.unread > 0"
-                class="text-xs text-slate-400 hover:text-indigo-600 transition-colors disabled:opacity-40"
+                class="text-sm md:text-xs text-slate-400 hover:text-indigo-600 transition-colors disabled:opacity-40 py-2 md:py-1.5"
                 :disabled="markingAllRead"
                 title="标记全部已读"
                 @click="handleMarkAllRead"
@@ -874,7 +874,7 @@ onUnmounted(() => {
 
               <!-- 未读 toggle -->
               <button
-                class="p-1.5 md:p-2 rounded-lg transition-all duration-200 border shrink-0"
+                class="p-2.5 md:p-2 rounded-lg transition-all duration-200 border shrink-0"
                 :class="showUnreadOnly
                   ? 'text-blue-600 bg-blue-50 border-blue-200'
                   : 'text-slate-400 hover:text-slate-600 bg-slate-50 border-slate-200 hover:border-slate-300'"
@@ -913,7 +913,7 @@ onUnmounted(() => {
               <select
                 :value="sortBy"
                 @change="switchSort($event.target.value)"
-                class="bg-slate-50 text-xs text-slate-600 rounded-lg px-2.5 py-1.5 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all appearance-none cursor-pointer"
+                class="bg-slate-50 text-xs text-slate-600 rounded-lg px-3 py-2 md:px-2.5 md:py-1.5 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all appearance-none cursor-pointer"
               >
                 <option v-for="sort in sortOptions" :key="sort.value" :value="sort.value">{{ sort.label }}</option>
               </select>
@@ -1189,7 +1189,7 @@ onUnmounted(() => {
                 v-model="chatInput"
                 :disabled="chatStreaming"
                 rows="1"
-                class="flex-1 resize-none rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all disabled:opacity-50"
+                class="flex-1 resize-none rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-[16px] md:text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all disabled:opacity-50"
                 :class="{ 'max-h-[6rem] overflow-y-auto': true }"
                 placeholder="讨论这篇内容..."
                 @keydown="handleChatKeydown"
