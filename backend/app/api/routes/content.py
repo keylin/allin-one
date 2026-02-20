@@ -280,9 +280,9 @@ async def list_content(
         data.update(_extract_summary_fields(item))
         mi_list = media_items_map.get(item.id, [])
         data["media_items"] = _build_media_summaries(mi_list)
-        # has_thumbnail: 存在已下载的 video MediaItem 且有 thumbnail
+        # has_thumbnail: 存在已下载的 video/image MediaItem
         data["has_thumbnail"] = any(
-            mi.media_type == "video" and mi.status == "downloaded"
+            mi.media_type in ("video", "image") and mi.status == "downloaded"
             for mi in mi_list
         )
         data["reading_time_min"] = _estimate_reading_time(item)
@@ -892,7 +892,26 @@ async def toggle_favorite(content_id: str, db: Session = Depends(get_db)):
 
         # 有 pending 或 failed(已重置) 的媒体，触发流水线
         need_download_count = pending_count + len(failed_items)
-        if need_download_count > 0:
+        should_trigger = need_download_count > 0
+
+        # 无任何 MediaItem，但 HTML 中可能有 <img> → 也触发 localize_media 扫描
+        if not should_trigger and downloaded_count == 0:
+            if item.raw_data:
+                try:
+                    raw = json.loads(item.raw_data)
+                    html = ""
+                    contents = raw.get("content", [])
+                    if isinstance(contents, list) and contents:
+                        first = contents[0]
+                        html = first.get("value", "") if isinstance(first, dict) else str(first)
+                    if not html:
+                        html = raw.get("summary", "")
+                    if "<img" in html.lower():
+                        should_trigger = True
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+        if should_trigger:
             # 查找"媒体下载"内置模板
             template = db.query(PipelineTemplate).filter(
                 PipelineTemplate.name == "媒体下载",

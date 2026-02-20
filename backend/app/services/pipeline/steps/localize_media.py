@@ -8,6 +8,11 @@ import re
 
 logger = logging.getLogger(__name__)
 
+_BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+}
+
 
 def _extract_thumbnail_ffmpeg(video_path: str, output_dir: str) -> str | None:
     """用 ffmpeg 从视频第 3 秒截取一帧作为封面"""
@@ -45,7 +50,7 @@ def _handle_localize_media(context: dict) -> dict:
     3. 更新 processed_content
     """
     import httpx
-    from urllib.parse import urlparse
+    from urllib.parse import urlparse, urljoin
     from bs4 import BeautifulSoup
 
     from app.core.config import settings
@@ -262,7 +267,7 @@ def _handle_localize_media(context: dict) -> dict:
             local_path = os.path.join(audio_dir, filename)
 
             # Stream download (audio files can be tens of MB)
-            with httpx.Client(timeout=120, follow_redirects=True) as client:
+            with httpx.Client(timeout=120, follow_redirects=True, headers=_BROWSER_HEADERS) as client:
                 with client.stream("GET", audio_url) as resp:
                     resp.raise_for_status()
                     with open(local_path, "wb") as f:
@@ -325,10 +330,25 @@ def _handle_localize_media(context: dict) -> dict:
     images_downloaded = 0
 
     # Scan <img> tags
+    # Build download headers with Referer
+    dl_headers = {**_BROWSER_HEADERS}
+    if content_url:
+        parsed_base = urlparse(content_url)
+        dl_headers["Referer"] = f"{parsed_base.scheme}://{parsed_base.netloc}/"
+
     for img in soup.find_all("img"):
         src = img.get("src", "")
         if not src or src.startswith("data:") or src.startswith("/api/media/"):
             continue
+
+        # Resolve relative / protocol-relative URLs
+        if src.startswith("//"):
+            src = "https:" + src
+        elif not src.startswith(("http://", "https://")):
+            if content_url:
+                src = urljoin(content_url, src)
+            else:
+                continue
 
         # Skip very small images (likely icons/trackers)
         width = img.get("width", "")
@@ -351,8 +371,8 @@ def _handle_localize_media(context: dict) -> dict:
             filename = f"{url_hash}{ext}"
             local_path = os.path.join(images_dir, filename)
 
-            # Download image
-            with httpx.Client(timeout=15, follow_redirects=True) as client:
+            # Download image with browser headers + Referer
+            with httpx.Client(timeout=15, follow_redirects=True, headers=dl_headers) as client:
                 resp = client.get(src)
                 resp.raise_for_status()
                 with open(local_path, "wb") as f:
@@ -386,13 +406,12 @@ def _handle_localize_media(context: dict) -> dict:
             logger.warning(f"[localize_media] Failed to download image {src[:80]}: {e}")
             continue
 
-    # Update processed_content with rewritten HTML
-    if images_downloaded > 0:
-        with SessionLocal() as db:
-            content = db.get(ContentItem, content_id)
-            if content:
-                content.processed_content = str(soup)
-                db.commit()
+    # Always save processed_content (even if no images downloaded, preserves HTML structure)
+    with SessionLocal() as db:
+        content = db.get(ContentItem, content_id)
+        if content:
+            content.processed_content = str(soup)
+            db.commit()
 
     # 按类型汇总
     type_counts = {}

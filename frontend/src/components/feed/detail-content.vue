@@ -2,6 +2,7 @@
 import { ref, computed } from 'vue'
 import IframeVideoPlayer from '@/components/iframe-video-player.vue'
 import PodcastPlayer from '@/components/podcast-player.vue'
+import ImageLightbox from '@/components/image-lightbox.vue'
 import MarkdownIt from 'markdown-it'
 import DOMPurify from 'dompurify'
 import { formatTimeFull, formatTimeShort } from '@/utils/time'
@@ -23,6 +24,9 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
   if (node.tagName === 'A') {
     node.setAttribute('target', '_blank')
     node.setAttribute('rel', 'noopener noreferrer')
+  }
+  if (node.tagName === 'IMG') {
+    node.setAttribute('referrerpolicy', 'no-referrer')
   }
 })
 
@@ -64,8 +68,8 @@ const renderedContent = computed(() => {
         'table', 'thead', 'tbody', 'tr', 'td', 'th', 'caption',
         'figure', 'figcaption', 'div', 'span',
       ],
-      ALLOWED_ATTR: ['href', 'src', 'alt', 'title', 'width', 'height', 'target', 'rel', 'class'],
-      ADD_ATTR: ['target'],
+      ALLOWED_ATTR: ['href', 'src', 'alt', 'title', 'width', 'height', 'target', 'rel', 'class', 'referrerpolicy'],
+      ADD_ATTR: ['target', 'referrerpolicy'],
       FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form', 'input', 'textarea', 'select'],
     })
   }
@@ -99,8 +103,8 @@ const renderedRawContent = computed(() => {
         'figure', 'figcaption', 'video', 'source', 'audio',
         'div', 'span',
       ],
-      ALLOWED_ATTR: ['href', 'src', 'alt', 'title', 'width', 'height', 'target', 'rel', 'class'],
-      ADD_ATTR: ['target'],
+      ALLOWED_ATTR: ['href', 'src', 'alt', 'title', 'width', 'height', 'target', 'rel', 'class', 'referrerpolicy'],
+      ADD_ATTR: ['target', 'referrerpolicy'],
       FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form', 'input', 'textarea', 'select'],
     })
   } catch {
@@ -185,6 +189,28 @@ function renderEnrichMarkdown(text) {
 function formatBytes(len) {
   if (len < 1024) return `${len} B`
   return `${(len / 1024).toFixed(1)} KB`
+}
+
+// --- Lightbox 图片浏览器 ---
+const lightboxVisible = ref(false)
+const lightboxImages = ref([])
+const lightboxIndex = ref(0)
+
+function handleContentDblClick(e) {
+  const img = e.target.closest('img')
+  if (!img) return
+  e.preventDefault()
+
+  const container = e.currentTarget
+  const allImgs = Array.from(container.querySelectorAll('img'))
+    .map(el => el.src)
+    .filter(src => src && !src.startsWith('data:'))
+  if (!allImgs.length) return
+
+  lightboxImages.value = allImgs
+  const idx = allImgs.indexOf(img.src)
+  lightboxIndex.value = idx >= 0 ? idx : 0
+  lightboxVisible.value = true
 }
 
 defineExpose({ resetViewMode })
@@ -414,7 +440,7 @@ defineExpose({ resetViewMode })
           {{ currentViewLabel === '处理版' ? '查看原文' : '查看处理版' }}
         </button>
       </div>
-      <div class="prose prose-sm max-w-none markdown-content text-slate-700 mt-2" v-html="displayedBodyHtml"></div>
+      <div class="prose prose-sm max-w-none markdown-content text-slate-700 mt-2" v-html="displayedBodyHtml" @dblclick="handleContentDblClick"></div>
     </div>
 
     <!-- 弹性间距：内容短时将按钮推到下半屏 -->
@@ -451,6 +477,14 @@ defineExpose({ resetViewMode })
 
   <!-- Slot for chat messages -->
   <div :class="isMobileOverlay ? 'px-4 !mt-2' : '!mt-3'"><slot></slot></div>
+
+  <!-- 图片浏览器 Lightbox -->
+  <ImageLightbox
+    :visible="lightboxVisible"
+    :images="lightboxImages"
+    :start-index="lightboxIndex"
+    @close="lightboxVisible = false"
+  />
 
   <!-- 富化对比弹窗 -->
   <Teleport to="body">
@@ -566,6 +600,7 @@ defineExpose({ resetViewMode })
 .raw-content :deep(img) {
   max-width: 100%;
   height: auto;
+  cursor: zoom-in;
 }
 .markdown-content :deep(pre),
 .raw-content :deep(pre) {
