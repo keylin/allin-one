@@ -1,6 +1,6 @@
 # Allin-One 产品方案 (PRD)
 
-> 版本: v1.1 | 更新日期: 2026-02-14
+> 版本: v1.2 | 更新日期: 2026-02-21
 
 ---
 
@@ -66,26 +66,28 @@
 
 | 类别 | 类型代码 | 描述 | 采集方式 |
 |------|----------|------|----------|
-| RSS | `rsshub` | RSSHub 生成的订阅源 | RSSHub 服务 (B站/微博/YouTube 等都走这个) |
-| RSS | `rss_std` | 标准 RSS/Atom 订阅源 | feedparser 直接解析 |
-| 数据 | `akshare` | AkShare 宏观经济数据 | AkShare API |
-| 网页 | `scraper` | 网页抓取 | L1 HTTP / L2 Browserless / L3 browser-use |
-| 文件 | `file_upload` | 用户上传文件 | Web UI 上传 |
-| 账号 | `account_bilibili` | B站账号 (Cookie) | 需登录态的 API |
-| 账号 | `account_other` | 其他平台账号 | 平台特定 API |
-| 记录 | `user_note` | 日常笔记 | 用户手动输入 |
-| 记录 | `user_message` | 用户消息 | 系统通知 |
+| RSS | `rss.hub` | RSSHub 生成的订阅源 | RSSHub 服务 (B站/微博/YouTube 等都走这个) |
+| RSS | `rss.standard` | 标准 RSS/Atom 订阅源 | feedparser 直接解析 |
+| 数据 | `api.akshare` | AkShare 宏观经济数据 | AkShare API |
+| 网页 | `web.scraper` | 网页抓取 | L1 HTTP / L2 Browserless / L3 browser-use |
+| 文件 | `file.upload` | 用户上传文件 | Web UI 上传 |
+| 播客 | `podcast.apple` | Apple Podcasts | 播客 RSS 解析 |
+| 账号 | `account.bilibili` | B站账号 (Cookie) | 需登录态的 API |
+| 账号 | `account.generic` | 其他平台账号 | 平台特定 API |
+| 记录 | `user.note` | 日常笔记 | 用户手动输入 |
+| 记录 | `system.notification` | 系统消息 | 系统通知 |
 
-**关键设计**: 没有 `video_bilibili` / `video_youtube` 等类型。B站/YouTube 视频通过 `rsshub` 数据源发现新内容，再由流水线预处理阶段的 `localize_media` 步骤自动处理。
+**关键设计**: 没有 `video_bilibili` / `video_youtube` 等类型。B站/YouTube 视频通过 `rss.hub` 数据源发现新内容，再由流水线中的 `localize_media` 步骤处理。
 
 **组合示例**:
 | 场景 | 数据源 | 绑定的流水线模板 |
 |------|--------|------------------|
-| B站UP主视频分析 | `rsshub` (路由: /bilibili/user/video/12345) | "视频下载分析" |
-| YouTube频道翻译 | `rsshub` (路由: /youtube/channel/UCxxx) | "视频翻译分析" |
-| 英文科技博客 | `rss_std` (URL: feeds.arstechnica.com) | "英文文章翻译分析" |
-| 中文新闻 | `rss_std` (URL: 36kr.com/feed) | "文章分析" |
-| 公告页面监控 | `scraper` (URL + 选择器) | "文章分析" |
+| B站UP主视频分析 | `rss.hub` (路由: /bilibili/user/video/12345) | "视频下载分析" |
+| YouTube频道翻译 | `rss.hub` (路由: /youtube/channel/UCxxx) | "视频翻译分析" |
+| 英文科技博客 | `rss.standard` (URL: feeds.arstechnica.com) | "英文文章翻译分析" |
+| 中文新闻 | `rss.standard` (URL: 36kr.com/feed) | "文章分析" |
+| 公告页面监控 | `web.scraper` (URL + 选择器) | "文章分析" |
+| 宏观经济数据 | `api.akshare` (指标: macro_china_cpi) | "金融数据分析" |
 
 ### 2.3 内容管理 (Content)
 
@@ -147,6 +149,12 @@
 
 原子操作是 Pipeline 的基本构建单元，每个操作独立、可配置、可重试。
 
+### 3.0 提取内容 (extract_content)
+
+- **功能**: 从 `raw_data` 中提取文本内容到 `processed_content`
+- **位置**: 通常作为流水线的第一个步骤，由模板显式包含
+- **说明**: 将 Collector 采集的原始 JSON 数据解析为可读文本
+
 ### 3.1 抓取全文 (enrich_content)
 
 采用三级递进策略，根据内容复杂度自动升级:
@@ -201,24 +209,26 @@
 
 ## 4. 任务调度设计
 
-采用「定时器 + 流水线」双层调度模式:
+采用「定时器 + 流水线」双层调度模式，均基于 Procrastinate (PG-backed 任务队列):
 
-### 4.1 定时器层 (APScheduler)
+### 4.1 定时器层 (Procrastinate periodic)
 
 | 任务类型 | 调度策略 | 说明 |
 |----------|----------|------|
-| 数据抓取 | 智能调度 | 根据源的更新频率动态调整，活跃源 15 分钟，低频源 2 小时 |
-| 数据抓取 | 退避策略 | 连续失败时指数退避 (15min → 30min → 1h → 2h) |
-| 信息流抓取 | 批量轮询 | 每轮随机选取一批源进行抓取，避免突发流量 |
-| 周期任务 | 定时执行 | 日报 (每天 22:00)、周报 (每周日)、月报 (每月 1 日) |
-| 内容清理 | 每天 03:00 | 按数据源 retention_days 清理过期内容 |
-| 记录清理 | 每天 03:30 | 按保留天数/数量上限清理执行记录和采集记录 |
+| 数据采集 | 智能调度 (每分钟检查) | 基于 `next_collection_at` 预计算字段，支持 auto/fixed/manual 三种调度模式 |
+| 数据采集 | 退避策略 | 连续失败时指数退避，由 SchedulingService 计算 |
+| 数据采集 | 并发 defer | 每个源的采集任务 defer 到 scheduled 队列并发执行 |
+| 周期分析 | 每天 04:00 | 分析活跃源的更新模式 (periodicity)，优化调度间隔 |
+| 日报 | 每天 22:00 | 自动生成日报 |
+| 周报 | 每周一 09:00 | 自动生成周报 |
+| 清理调度 | 每小时检查 | 根据 system_settings 配置的清理时间动态执行内容清理和记录清理 |
 
-### 4.2 流水线层 (Huey)
+### 4.2 流水线层 (Procrastinate Worker)
 
-- 定时器触发后，为每个需要处理的内容创建一个 Pipeline 实例
-- Pipeline 中的步骤由 Huey Worker 异步执行
-- 支持步骤级别的并发控制 (避免 LLM API 限流)
+- 采集产出新内容后，Orchestrator 为每条内容创建 Pipeline 实例
+- Pipeline 步骤由 Procrastinate Worker (pipeline 队列, concurrency=4) 异步执行
+- 定时调度任务由另一个 Worker (scheduled 队列, concurrency=2) 执行，互不阻塞
+- 支持步骤级别的并发控制和卡住任务自动恢复
 
 ---
 
@@ -292,8 +302,7 @@ ContentItem 不再有 `media_type` 字段。媒体通过 `MediaItem` 一对多�
 |------|----------|------|
 | 媒体文件 | `data/media/{content_id}/` | 按内容 ID 分目录存放视频/图片/音频 |
 | 分析报告 | `data/reports/` | LLM 生成的分析报告 |
-| 数据库 | `data/db/allin.db` | SQLite 主数据库 |
-| 任务队列 | `data/db/huey.db` | Huey 任务队列数据库 |
+| 数据库 | PostgreSQL (`allinone` database) | 应用数据 + Procrastinate 任务队列共用 |
 | 日志文件 | `data/logs/` | backend.log, worker.log, error.log |
 | 数据备份 | `data/backups/` | 数据库自动/手动备份 |
 
@@ -303,12 +312,16 @@ ContentItem 不再有 `media_type` 字段。媒体通过 `MediaItem` 一对多�
 
 | 路径 | 页面 | 核心功能 |
 |------|------|----------|
+| `/` | 重定向 | → `/feed` |
+| `/login` | 登录 | API Key 认证 (可选) |
 | `/dashboard` | 仪表盘 | 系统概览、统计、告警 |
 | `/feed` | 信息流 | 内容消费、AI 分析阅读 |
+| `/favorites` | 收藏 | 收藏内容专属视图 |
 | `/sources` | 数据源管理 | CRUD、批量导入导出 |
 | `/content` | 内容库 | 表格管理、筛选排序去重 |
 | `/pipelines` | 流水线 | 执行记录、流水线模板、提示词配置 |
-| `/video-download` | 视频下载 | 视频下载与播放 |
+| `/media` | 媒体管理 | 视频/音频下载与播放 |
+| `/finance` | 金融数据 | 宏观经济数据展示 |
 | `/settings` | 系统设置 | API Key、代理、账号 |
 
 ---
@@ -327,20 +340,26 @@ ContentItem 不再有 `media_type` 字段。媒体通过 `MediaItem` 一对多�
 - [x] 视频字幕提取与分析
 - [x] 内嵌视频播放器
 - [x] MediaItem 独立媒体管理 (localize_media 取代 download_video)
-- [x] 自动预处理: enrich_content + localize_media 由 Orchestrator 注入
 - [x] 凭证管理 (B站扫码、RSSHub 同步)
 - [x] 金融数据源 (AkShare 集成)
 - [x] 数据保留策略 (执行记录/采集记录清理)
 - [x] 结构化日志系统 (backend.log / worker.log / error.log)
 - [x] 批量操作 (源批量删除、一键采集、内容清空)
 
-### v1.2 — 智能调度与推送
-- [ ] 智能抓取频率调整
-- [ ] 日报/周报/月报自动生成
-- [ ] 邮件/钉钉推送
+### v1.2 — 智能调度 + 增强功能
+- [x] 智能调度系统 (auto/fixed/manual 三模式, 周期性分析, 热点检测)
+- [x] Procrastinate 双队列隔离 (pipeline + scheduled)
+- [x] 流水线模板显式步骤 (extract_content 取代自动注入预处理)
+- [x] 内容 AI 对话 (chat_history)
+- [x] 收藏页面 (/favorites)
+- [x] 媒体统一管理页 (/media, 取代 /video-download)
+- [x] API Key 认证 + 登录页
+- [x] 播客数据源 (podcast.apple)
+- [x] 收藏触发媒体下载 (favorite trigger)
+- [x] 全量数据导入/导出
 
 ### v2.0 — 高级功能
 - [ ] browser-use AI 浏览器操控
 - [ ] 多语言翻译 Pipeline
 - [ ] 内容关联与知识图谱
-- [ ] 用户笔记系统
+- [ ] 邮件/钉钉推送

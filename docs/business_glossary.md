@@ -23,7 +23,7 @@
 | **RSSHub** | 开源项目，将各种网站 (B站、微博、YouTube) 转换为标准 RSS Feed。 |
 | **Browserless** | 基于 Headless Chrome 的服务，用于网页渲染与抓取。 |
 | **browser-use** | AI 驱动的浏览器操控框架，L3 级别抓取。 |
-| **Huey** | Python 轻量级异步任务队列库，本项目使用 SQLite 后端。 |
+| **Procrastinate** | Python 异步任务队列库，基于 PostgreSQL 后端，与应用共用同一数据库。 |
 | **yt-dlp** | 命令行视频下载工具，从 YouTube/Bilibili 等平台下载视频。 |
 | **FFmpeg** | 音视频处理工具，用于转码、音频提取等。 |
 | **DeepSeek** | 默认 LLM 服务提供商，兼容 OpenAI API 格式。 |
@@ -48,6 +48,7 @@
 | `rss.standard` | network | 标准 RSS/Atom 订阅源 | 博客、新闻站点 |
 | `api.akshare` | network | AkShare 金融数据 | 宏观经济指标 |
 | `web.scraper` | network | 网页抓取 | 内部分 L1/L2/L3 级别 |
+| `podcast.apple` | network | Apple Podcasts | 播客 RSS 解析 |
 | `account.bilibili` | network | B站账号 | 需要 Cookie/登录态 |
 | `account.generic` | network | 其他平台账号 | 需要认证的平台 |
 | `user.note` | user | 日常笔记 | 用户手动输入，通过 `/api/content/submit` 提交 |
@@ -60,7 +61,7 @@
 
 | 枚举值 | 描述 | 前缀 | 特征 |
 | :--- | :--- | :--- | :--- |
-| `network` | 网络数据 | rss, api, web, account | 有 Collector，定时采集，需要 URL/配置 |
+| `network` | 网络数据 | rss, podcast, api, web, account | 有 Collector，定时采集，需要 URL/配置 |
 | `user` | 用户数据 | user, file, system | 无 Collector，用户/系统主动提交，无调度 |
 
 ### 3.2 StepType (原子操作类型)
@@ -69,17 +70,18 @@
 
 | 枚举值 | 显示名 | 配置项 | 说明 |
 | :--- | :--- | :--- | :--- |
-| `enrich_content` | 抓取全文 | `scrape_level`: L1/L2/L3/auto | 预处理步骤，系统自动注入 |
-| `localize_media` | 媒体本地化 | — | 预处理步骤，检测并下载图片/视频/音频，创建 MediaItem |
+| `extract_content` | 提取内容 | — | 从 raw_data 提取文本到 processed_content |
+| `enrich_content` | 抓取全文 | `scrape_level`: L1/L2/L3/auto | 三级递进全文抓取 |
+| `localize_media` | 媒体本地化 | — | 检测并下载图片/视频/音频，创建 MediaItem |
 | `extract_audio` | 音频提取 | (待实现) | |
 | `transcribe_content` | 语音转文字 | — | |
 | `translate_content` | 文章翻译 | `target_language`: zh/en/ja... | |
 | `analyze_content` | 模型分析 | `model`: 下拉枚举, `prompt_template_id`: 关联, `output_format`: json/markdown/text | |
-| `publish_content` | 消息推送 | `channel`: email/dingtalk/webhook, `frequency`: immediate/daily | |
+| `publish_content` | 消息推送 | `channel`: email/dingtalk/webhook/none, `frequency`: immediate/hourly/daily | |
 
 注意:
 - 没有 `fetch_content`。数据抓取由定时器 + Collector 完成，不是流水线步骤。
-- `enrich_content` 和 `localize_media` 是预处理步骤，由 Orchestrator 自动注入，用户模板中无需包含。
+- 模板显式包含所有步骤（含 `extract_content`、`localize_media`），Orchestrator 不再自动注入预处理步骤。
 - 原 `download_video` 已被 `localize_media` 取代，后者统一处理所有媒体类型。
 
 ### 3.3 MediaType (媒体项类型)
@@ -139,6 +141,7 @@ MediaType 现在仅用于 `MediaItem`（媒体项），不再是 ContentItem 或
 | `manual` | 手动触发 |
 | `api` | API 调用 |
 | `webhook` | 外部 Webhook |
+| `favorite` | 收藏时自动触发媒体下载 |
 
 ### 3.9 TemplateType (提示词模板类型)
 
@@ -153,16 +156,18 @@ MediaType 现在仅用于 `MediaItem`（媒体项），不再是 ContentItem 或
 
 定义在 `app/services/pipeline/registry.py`，首次启动写入数据库。
 
-| 模板名称 | 包含步骤 (用户模板部分) | 适用场景 |
+| 模板名称 | 包含步骤 | 适用场景 |
 | :--- | :--- | :--- |
-| 文章分析 | analyze → publish | 中文新闻/博客 |
-| 英文文章翻译分析 | translate → analyze → publish | 英文站点 |
-| 视频下载分析 | transcribe → analyze → publish | B站视频 |
-| 视频翻译分析 | transcribe → translate → analyze → publish | YouTube 视频 |
-| 仅分析 | analyze → publish | RSS 全文输出的源 |
-| 仅推送 | publish | 纯通知, 不做分析 |
+| 文章分析 | extract → localize → analyze → publish | 中文新闻/博客 |
+| 英文文章翻译分析 | extract → localize → translate → analyze → publish | 英文站点 |
+| 视频下载分析 | extract → localize → transcribe → analyze → publish | B站视频 |
+| 视频翻译分析 | extract → localize → transcribe → translate → analyze → publish | YouTube 视频 |
+| 仅分析 | extract → analyze → publish | RSS 全文输出的源 |
+| 仅推送 | extract → publish | 纯通知, 不做分析 |
+| 金融数据分析 | extract → analyze → publish | AkShare 宏观数据 |
+| 媒体下载 | localize | 仅执行媒体本地化（收藏触发或手动下载） |
 
-**关键变更**: 用户模板不再包含预处理步骤 (enrich_content / localize_media)。Orchestrator 会根据内容检测自动注入预处理步骤，然后拼接用户模板的后置步骤。启动时会自动更新内置模板的 steps_config。
+**说明**: 模板包含所有步骤（含 extract_content、localize_media），Orchestrator 不再自动注入预处理步骤。
 
 ## 5. 术语使用规范
 
@@ -200,10 +205,10 @@ MediaType 现在仅用于 `MediaItem`（媒体项），不再是 ContentItem 或
 
 | 使用场景 | 数据源类型 | 数据源配置 | 绑定流水线 |
 | :--- | :--- | :--- | :--- |
-| 关注某 B站 UP 主 | `rsshub` | `{"rsshub_route": "/bilibili/user/video/12345"}` | 视频下载分析 |
-| 订阅 YouTube 频道 | `rsshub` | `{"rsshub_route": "/youtube/channel/UCxxx"}` | 视频翻译分析 |
-| 读英文科技博客 | `rss_std` | URL: feeds.arstechnica.com | 英文文章翻译分析 |
-| 读 36kr 新闻 | `rss_std` | URL: 36kr.com/feed | 文章分析 |
-| 监控政府公告页 | `scraper` | `{"scrape_level": "L2", "selectors": {...}}` | 文章分析 |
-| 跟踪宏观数据 | `akshare` | `{"indicator": "macro_china_cpi"}` | 仅分析 |
-| 纯采集不处理 | `rss_std` | URL: any-feed.xml | (不绑定模板) |
+| 关注某 B站 UP 主 | `rss.hub` | `{"rsshub_route": "/bilibili/user/video/12345"}` | 视频下载分析 |
+| 订阅 YouTube 频道 | `rss.hub` | `{"rsshub_route": "/youtube/channel/UCxxx"}` | 视频翻译分析 |
+| 读英文科技博客 | `rss.standard` | URL: feeds.arstechnica.com | 英文文章翻译分析 |
+| 读 36kr 新闻 | `rss.standard` | URL: 36kr.com/feed | 文章分析 |
+| 监控政府公告页 | `web.scraper` | `{"scrape_level": "L2", "selectors": {...}}` | 文章分析 |
+| 跟踪宏观数据 | `api.akshare` | `{"indicator": "macro_china_cpi"}` | 金融数据分析 |
+| 纯采集不处理 | `rss.standard` | URL: any-feed.xml | (不绑定模板) |

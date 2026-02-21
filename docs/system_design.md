@@ -1,6 +1,6 @@
 # Allin-One 系统方案
 
-> 版本: v1.1 | 更新日期: 2026-02-14
+> 版本: v1.2 | 更新日期: 2026-02-21
 
 ---
 
@@ -22,12 +22,12 @@
 │         ▼                  ▼                  ▼          │
 │  ┌─────────────────────────────────────────────────┐     │
 │  │              FastAPI Application                 │     │
-│  │  ┌─────────┐ ┌───────────┐ ┌─────────────────┐ │     │
-│  │  │ Router  │ │ Scheduler │ │ Static Files    │ │     │
-│  │  │ Layer   │ │(APScheduler)│(Vue dist/)      │ │     │
-│  │  └────┬────┘ └─────┬─────┘ └─────────────────┘ │     │
-│  │       │             │                            │     │
-│  │  ┌────▼─────────────▼────────────────────────┐  │     │
+│  │  ┌─────────┐ ┌─────────────────┐                │     │
+│  │  │ Router  │ │ Static Files    │                │     │
+│  │  │ Layer   │ │ (Vue dist/)     │                │     │
+│  │  └────┬────┘ └─────────────────┘                │     │
+│  │       │                                          │     │
+│  │  ┌────▼──────────────────────────────────────┐  │     │
 │  │  │           Service Layer                    │  │     │
 │  │  │  ┌──────────────────────────────────────┐  │  │     │
 │  │  │  │     Pipeline Orchestrator             │  │  │     │
@@ -39,11 +39,13 @@
 │  └───────────────────────┼──────────────────────────┘     │
 │                          ▼                                │
 │  ┌─────────────────────────────────────────────────┐     │
-│  │           Huey Worker (异步任务层)                │     │
-│  │              ┌─────────┐ ┌─────────┐           │     │
-│  │              │ enrich  │ │ analyze │ ...        │     │
-│  │              │_content │ │_content │            │     │
-│  │              └────┬────┘ └────┬────┘           │     │
+│  │      Procrastinate Workers (异步任务层)           │     │
+│  │  ┌──────────────────┐ ┌──────────────────────┐  │     │
+│  │  │ pipeline 队列     │ │ scheduled 队列        │  │     │
+│  │  │ (concurrency=4)  │ │ (concurrency=2)      │  │     │
+│  │  │ enrich/analyze/  │ │ 采集循环/日报/清理     │  │     │
+│  │  │ localize/publish │ │                       │  │     │
+│  │  └──────────────────┘ └──────────────────────┘  │     │
 │  └───────┼───────────┼───────────┼─────────────────┘     │
 │                                                           │
 │       处理层 (Processing Layer)                            │
@@ -61,10 +63,11 @@
         │           │           │           │
 ┌───────┼───────────┼───────────┼───────────┼──────────────┐
 │       ▼           ▼           ▼           ▼              │
-│  ┌──────────┐ ┌──────────┐ ┌──────────────────────┐     │
-│  │ SQLite   │ │ Huey DB  │ │ File System          │     │
-│  │ (主数据库)│ │ (任务队列)│ │ videos/images/files  │     │
-│  └──────────┘ └──────────┘ └──────────────────────┘     │
+│  ┌────────────┐ ┌──────────────────────────────────┐     │
+│  │ PostgreSQL │ │ File System                      │     │
+│  │(应用数据 +  │ │ data/media/ data/logs/           │     │
+│  │ 任务队列)   │ │ data/reports/                    │     │
+│  └────────────┘ └──────────────────────────────────┘     │
 │                                                          │
 │       数据层 (Data Layer)                                 │
 └──────────────────────────────────────────────────────────┘
@@ -76,10 +79,12 @@
 
 | 进程 | 容器 | 职责 |
 |------|------|------|
-| FastAPI (uvicorn) | allin-one | Web 服务、API、调度器 |
-| Huey Consumer | allin-worker | 异步任务执行 |
-| RSSHub | rsshub | RSS 转换服务 |
-| Browserless | browserless | 无头浏览器服务 |
+| FastAPI (uvicorn) | allin-one | Web 服务、API、静态文件服务 |
+| Procrastinate Worker (pipeline) | allin-worker-pipeline | 流水线步骤执行 (concurrency=4) |
+| Procrastinate Worker (scheduled) | allin-worker-scheduled | 定时采集/报告/清理 (concurrency=2) |
+| PostgreSQL | allin-postgres | 主数据库 + Procrastinate 任务队列 |
+| RSSHub | allin-rsshub | RSS 转换服务 |
+| Browserless | allin-browserless | 无头浏览器服务 |
 
 ---
 
@@ -98,8 +103,10 @@ source_configs 1───∞ content_items 1───∞ pipeline_executions 1�
 
 prompt_templates (独立, 被 step_config 引用)
 system_settings  (独立配置表)
-platform_credentials (平台凭证)
-finance_data_points (金融数据)
+
+platform_credentials 1─ ─ ─ ─∞ source_configs  (credential_id FK)
+
+source_configs 1───∞ finance_data_points  (source_id FK)
 ```
 
 **核心解耦关系**: `source_configs.pipeline_template_id → pipeline_templates.id`
@@ -112,7 +119,7 @@ finance_data_points (金融数据)
 只描述「从哪获取信息」，source_type 不含视频平台等混合类型。
 
 数据源分为两大类（派生属性，非 DB 列）：
-- **网络数据 (network)**: rss.hub, rss.standard, api.akshare, web.scraper, account.bilibili, account.generic — 有 Collector，定时自动采集
+- **网络数据 (network)**: rss.hub, rss.standard, api.akshare, web.scraper, podcast.apple, account.bilibili, account.generic — 有 Collector，定时自动采集
 - **用户数据 (user)**: user.note, file.upload, system.notification — 用户/系统主动提交，schedule_enabled 自动置 false
 
 通用内容提交 API：`POST /api/content/submit`（文本）、`POST /api/content/upload`（文件），校验目标源必须为 user 分类。
@@ -121,23 +128,39 @@ finance_data_points (金融数据)
 CREATE TABLE source_configs (
     id              TEXT PRIMARY KEY,           -- UUID
     name            TEXT NOT NULL,              -- 源名称 (e.g. "B站-某UP主")
-    source_type     TEXT NOT NULL,              -- 来源渠道: rss.hub/rss.standard/web.scraper/api.akshare/...
+    source_type     TEXT NOT NULL,              -- 来源渠道: rss.hub/rss.standard/web.scraper/api.akshare/podcast.apple/...
     url             TEXT,                       -- 订阅/采集地址
     description     TEXT,
+    -- 调度
     schedule_enabled BOOLEAN DEFAULT TRUE,
-    schedule_interval INTEGER DEFAULT 3600,
+    schedule_mode   TEXT DEFAULT 'auto',        -- auto / fixed / manual
+    schedule_interval_override INTEGER,         -- 固定间隔覆盖值（仅 fixed 模式）
+    calculated_interval INTEGER,                -- 系统计算的间隔（仅供展示）
+    next_collection_at DATETIME,                -- 预计算的下次采集时间
+    -- 高级调度
+    periodicity_data TEXT,                      -- 周期模式识别结果 JSON
+    periodicity_updated_at DATETIME,            -- 周期分析更新时间
+    hotspot_level   TEXT,                       -- 热点等级: extreme/high/instant
+    hotspot_detected_at DATETIME,               -- 热点检测时间
+    -- 流水线绑定
     pipeline_template_id TEXT,                  -- 绑定的流水线模板 (解耦关键!)
     config_json     TEXT,                       -- 渠道特定配置 (JSON)
     credential_id   TEXT,                       -- 关联的平台凭证
+    -- 内容保留
     auto_cleanup_enabled BOOLEAN DEFAULT FALSE, -- 启用自动清理
     retention_days  INTEGER,                    -- 内容保留天数 (null=使用全局默认)
+    -- 运行状态
     last_collected_at DATETIME,
     consecutive_failures INTEGER DEFAULT 0,
     is_active       BOOLEAN DEFAULT TRUE,
     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (pipeline_template_id) REFERENCES pipeline_templates(id)
+    FOREIGN KEY (pipeline_template_id) REFERENCES pipeline_templates(id),
+    FOREIGN KEY (credential_id) REFERENCES platform_credentials(id)
 );
+
+CREATE INDEX ix_source_credential_id ON source_configs(credential_id);
+CREATE INDEX ix_source_next_collection ON source_configs(is_active, schedule_enabled, next_collection_at);
 ```
 
 #### collection_records (数据源抓取记录)
@@ -163,7 +186,7 @@ CREATE TABLE collection_records (
 ```sql
 CREATE TABLE content_items (
     id              TEXT PRIMARY KEY,           -- UUID
-    source_id       TEXT NOT NULL,              -- 外键 -> source_configs
+    source_id       TEXT,                       -- 外键 -> source_configs (SET NULL on delete)
     title           TEXT NOT NULL,              -- 内容标题
     external_id     TEXT NOT NULL,              -- 外部唯一标识 (URL hash)
     url             TEXT,                       -- 原始链接
@@ -176,14 +199,16 @@ CREATE TABLE content_items (
     published_at    DATETIME,                   -- 原始发布时间
     collected_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
     is_favorited    BOOLEAN DEFAULT FALSE,      -- 是否收藏
+    favorited_at    DATETIME,                   -- 收藏时间
     user_note       TEXT,                       -- 用户笔记
+    chat_history    TEXT,                       -- AI 对话历史 (JSON: [{role, content}, ...])
     view_count      INTEGER DEFAULT 0,           -- 浏览次数
     last_viewed_at  DATETIME,                     -- 最后浏览时间
     playback_position INTEGER DEFAULT 0,          -- 视频播放进度（秒）
     last_played_at  DATETIME,                     -- 最后播放时间
     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (source_id) REFERENCES source_configs(id),
+    FOREIGN KEY (source_id) REFERENCES source_configs(id) ON DELETE SET NULL,
     UNIQUE (source_id, external_id)            -- 去重约束
 );
 
@@ -219,7 +244,7 @@ CREATE INDEX ix_media_item_content_id ON media_items(content_id);
 ```sql
 CREATE TABLE pipeline_executions (
     id              TEXT PRIMARY KEY,
-    content_id      TEXT,                       -- 外键 -> content_items
+    content_id      TEXT NOT NULL,               -- 外键 -> content_items
     source_id       TEXT,                       -- 外键 -> source_configs
     template_id     TEXT,                       -- 外键 -> pipeline_templates
     template_name   TEXT,                       -- 冗余存储, 方便展示
@@ -274,11 +299,13 @@ CREATE TABLE pipeline_templates (
 );
 ```
 
-`steps_config` JSON 结构 — 用户模板只包含后置处理步骤，预处理 (enrich_content / localize_media) 由 Orchestrator 自动注入:
+`steps_config` JSON 结构 — 模板包含所有步骤（含 extract_content、localize_media），Orchestrator 不再自动注入:
 ```json
 [
-  {"step_type": "analyze_content", "is_critical": true,  "config": {}},
-  {"step_type": "publish_content", "is_critical": false, "config": {"channel": "none"}}
+  {"step_type": "extract_content",  "is_critical": true,  "config": {}},
+  {"step_type": "localize_media",   "is_critical": false, "config": {}},
+  {"step_type": "analyze_content",  "is_critical": true,  "config": {}},
+  {"step_type": "publish_content",  "is_critical": false, "config": {"channel": "none"}}
 ]
 ```
 
@@ -309,6 +336,61 @@ CREATE TABLE system_settings (
 );
 ```
 
+#### platform_credentials (平台凭证)
+
+集中管理 Cookie/Token 等平台认证信息，多个数据源可引用同一凭证。
+
+```sql
+CREATE TABLE platform_credentials (
+    id              TEXT PRIMARY KEY,           -- UUID
+    platform        TEXT NOT NULL,              -- 平台标识: bilibili/twitter/...
+    credential_type TEXT DEFAULT 'cookie',      -- cookie/oauth_token/api_key
+    credential_data TEXT NOT NULL,              -- 凭证内容 (加密存储)
+    display_name    TEXT NOT NULL,              -- 显示名称
+    status          TEXT DEFAULT 'active',      -- active/expired/error
+    expires_at      DATETIME,                   -- 过期时间
+    extra_info      TEXT,                       -- JSON: 附加信息 (uid, username 等)
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX ix_credential_platform ON platform_credentials(platform);
+```
+
+#### finance_data_points (金融数据点)
+
+专用列式存储金融数值数据，替代 ContentItem 的 raw_data JSON 存储。按数据类型使用不同列：宏观用 value，股票用 OHLCV，基金用 NAV。
+
+```sql
+CREATE TABLE finance_data_points (
+    id              TEXT PRIMARY KEY,           -- UUID
+    source_id       TEXT NOT NULL,              -- 外键 -> source_configs
+    category        TEXT NOT NULL DEFAULT 'unknown', -- 数据分类: macro/stock/fund
+    date_key        TEXT NOT NULL,              -- 原始日期格式: "2024-01-15", "2024-01", "2024Q3"
+    published_at    DATETIME,                   -- 解析后标准时间 (用于排序和范围查询)
+    -- 宏观指标
+    value           FLOAT,                      -- 单值指标 (CPI, GDP 等)
+    -- OHLCV (股票/ETF)
+    open            FLOAT,
+    high            FLOAT,
+    low             FLOAT,
+    close           FLOAT,
+    volume          FLOAT,
+    -- 基金净值
+    unit_nav        FLOAT,                      -- 单位净值
+    cumulative_nav  FLOAT,                      -- 累计净值
+    -- 分析
+    alert_json      TEXT,                       -- 告警信息 (JSON)
+    analysis_result TEXT,                       -- LLM 分析结果
+    collected_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (source_id) REFERENCES source_configs(id)
+);
+
+CREATE UNIQUE INDEX uq_finance_source_date ON finance_data_points(source_id, date_key);
+CREATE INDEX ix_finance_source_date ON finance_data_points(source_id, date_key);
+```
+
 ---
 
 ## 3. Pipeline 引擎设计
@@ -320,23 +402,26 @@ CREATE TABLE system_settings (
 
 STEP_DEFINITIONS = {
     # 原子操作注册表 — 没有 fetch_content (抓取由定时器+Collector完成)
+    "extract_content":     StepDefinition(display_name="提取内容",   description="从 raw_data 提取文本到 processed_content"),
     "enrich_content":      StepDefinition(display_name="抓取全文",   config_schema={"scrape_level": "L1/L2/L3/auto"}),
     "localize_media":      StepDefinition(display_name="媒体本地化", description="检测并下载图片/视频/音频，创建 MediaItem"),
     "extract_audio":       StepDefinition(display_name="音频提取"),
     "transcribe_content":  StepDefinition(display_name="语音转文字"),
     "translate_content":   StepDefinition(display_name="文章翻译",   config_schema={"target_language": "zh"}),
     "analyze_content":     StepDefinition(display_name="模型分析",   config_schema={"model": "下拉枚举", "prompt_template_id": "关联"}),
-    "publish_content":     StepDefinition(display_name="消息推送",   config_schema={"channel": "email/dingtalk", "frequency": "immediate/daily"}),
+    "publish_content":     StepDefinition(display_name="消息推送",   config_schema={"channel": "email/dingtalk/webhook/none", "frequency": "immediate/hourly/daily"}),
 }
 
-# 用户模板只包含后置处理步骤，预处理由 Orchestrator 自动注入
+# 模板包含所有步骤（含 extract_content、localize_media），不再由 Orchestrator 自动注入
 BUILTIN_TEMPLATES = [
-    {"name": "文章分析",         "steps": ["analyze → publish"]},
-    {"name": "英文文章翻译分析", "steps": ["translate → analyze → publish"]},
-    {"name": "视频下载分析",     "steps": ["transcribe → analyze → publish"]},
-    {"name": "视频翻译分析",     "steps": ["transcribe → translate → analyze → publish"]},
-    {"name": "仅分析",          "steps": ["analyze → publish"]},
-    {"name": "仅推送",          "steps": ["publish"]},
+    {"name": "文章分析",         "steps": ["extract → localize → analyze → publish"]},
+    {"name": "英文文章翻译分析", "steps": ["extract → localize → translate → analyze → publish"]},
+    {"name": "视频下载分析",     "steps": ["extract → localize → transcribe → analyze → publish"]},
+    {"name": "视频翻译分析",     "steps": ["extract → localize → transcribe → translate → analyze → publish"]},
+    {"name": "仅分析",          "steps": ["extract → analyze → publish"]},
+    {"name": "仅推送",          "steps": ["extract → publish"]},
+    {"name": "金融数据分析",     "steps": ["extract → analyze → publish"]},
+    {"name": "媒体下载",         "steps": ["localize"]},
 ]
 ```
 
@@ -345,11 +430,8 @@ BUILTIN_TEMPLATES = [
 class PipelineOrchestrator:
     """编排器 - 为已存在的 ContentItem 创建流水线执行
 
-    流水线分两阶段:
-      1. 预处理 (自动): 基于内容检测自动执行
-         - 文本量不足 → enrich_content (抓取全文)
-         - 始终 → localize_media (媒体检测+下载+URL改写, api.akshare 除外)
-      2. 后置处理 (用户模板): analyze / translate / publish 等
+    有模板才创建流水线，无模板直接标记 READY。
+    步骤完全来自模板（包含 extract_content、localize_media 等），不再自动注入。
     """
 
     def get_template_for_source(self, source: SourceConfig) -> PipelineTemplate | None:
@@ -357,8 +439,7 @@ class PipelineOrchestrator:
 
     def trigger_for_content(self, content: ContentItem, template_override_id=None, trigger=...) -> PipelineExecution | None:
         """为一条已存在的 ContentItem 创建并启动流水线
-        自动注入预处理步骤, 然后拼接用户模板的后置步骤。
-        无模板时仍执行预处理; 无预处理也无模板则标记 READY。"""
+        有模板才创建流水线，无模板直接标记 READY。"""
 ```
 
 ```python
@@ -380,7 +461,7 @@ Pipeline 创建
      │
      ▼
 ┌─── Step[0] 执行 ───┐
-│  执行 Huey 任务      │
+│  Procrastinate 任务  │
 │  ┌────────────────┐  │
 │  │ 成功 → output   │──│──▶ 推进到 Step[1]
 │  │ 失败 & 关键步骤  │──│──▶ Pipeline 标记失败
@@ -439,12 +520,13 @@ class BaseCollector(ABC):
 | `RSSStdCollector` | `rss.standard` | feedparser 直接解析 | 标准 RSS/Atom |
 | `ScraperCollector` | `web.scraper` | L1/L2/L3 三级策略 | 通用网页抓取 |
 | `AkShareCollector` | `api.akshare` | AkShare API | 金融数据 |
+| `PodcastCollector` | `podcast.apple` | 播客 RSS 解析 | Apple Podcasts |
 | `FileUploadCollector` | `file.upload` | 读取上传文件 | 文本/图片/文档 |
 | `BilibiliCollector` | `account.bilibili` | B站账号 API | 动态/收藏夹/历史 (需Cookie) |
 | `GenericAccountCollector` | `account.generic` | 平台特定 API | 其他需认证的平台 |
 
 注意: 没有 BilibiliVideoCollector / YouTubeVideoCollector。
-视频下载由流水线预处理阶段的 `localize_media` 步骤 (yt-dlp) 自动处理, 不是 Collector 的职责。
+视频下载由流水线中的 `localize_media` 步骤 (yt-dlp) 处理, 不是 Collector 的职责。
 
 ### 4.3 三级抓取策略实现
 
@@ -567,58 +649,86 @@ class PaginatedResponse(APIResponse):
 
 #### Dashboard
 ```
-GET  /api/dashboard/stats
-     → { sources_count, contents_today, pipelines_running, pipelines_failed }
+GET  /api/dashboard/stats              → { sources_count, contents_today, pipelines_running, pipelines_failed }
+GET  /api/dashboard/collection-trend   → 采集趋势数据
+GET  /api/dashboard/daily-stats        → 每日统计
+GET  /api/dashboard/source-health      → 数据源健康状态
+GET  /api/dashboard/recent-content     → 最近采集的内容
+GET  /api/dashboard/content-status-distribution → 内容状态分布
+GET  /api/dashboard/storage-stats      → 存储统计
+GET  /api/dashboard/today-summary      → 今日概要
+GET  /api/dashboard/recent-activity    → 最近活动
 ```
 
 #### Sources
 ```
 GET    /api/sources                    → PaginatedResponse[SourceConfig]
 POST   /api/sources                    → SourceConfig  (创建)
+GET    /api/sources/options            → 数据源选项列表 (用于下拉)
+POST   /api/sources/cleanup-duplicates → 清理重复数据源
 GET    /api/sources/{id}               → SourceConfig
 PUT    /api/sources/{id}               → SourceConfig  (更新)
 DELETE /api/sources/{id}?cascade=false  → null          (cascade=true 关联删除)
 POST   /api/sources/batch-delete       → { deleted }   (批量删除, body: {ids}, ?cascade=false)
-POST   /api/sources/batch-collect      → { sources_collected, total_items_new, pipelines_started } (一键采集所有启用源)
-POST   /api/sources/{id}/collect       → PipelineExecution (触发采集)
+POST   /api/sources/batch-collect      → 一键采集所有启用源
+POST   /api/sources/{id}/collect       → 触发单源采集
 GET    /api/sources/{id}/history       → PaginatedResponse[CollectionRecord]
-POST   /api/sources/import             → { imported: int } (OPML导入)
-GET    /api/sources/export             → OPML file
+```
+
+#### OPML (导入导出)
+```
+POST   /api/opml/import               → { imported: int } (OPML导入)
+GET    /api/opml/export                → OPML file
 ```
 
 #### Content
 ```
 GET    /api/content                    → PaginatedResponse[ContentItem]
        ?source_id=&status=&has_video=&q=&sort_by=&order=&is_favorited=&is_unread=&date_range=
-GET    /api/content/{id}               → ContentItem (含分析结果和 media_items)
-GET    /api/content/stats              → { total, today, pending, processing, ready, analyzed, failed }
-POST   /api/content/{id}/analyze       → PipelineExecution (重新分析)
-POST   /api/content/{id}/favorite      → null (切换收藏)
-PATCH  /api/content/{id}/note          → null (更新笔记)
-POST   /api/content/batch-delete       → { deleted } (批量删除, body: {ids})
 POST   /api/content/delete-all         → { deleted } (清空全部内容)
+POST   /api/content/batch-delete       → { deleted } (批量删除, body: {ids})
+POST   /api/content/batch-read         → 批量标记已读
+POST   /api/content/batch-favorite     → 批量收藏
+POST   /api/content/mark-all-read      → 全部标记已读
+GET    /api/content/stats              → { total, today, pending, processing, ready, analyzed, failed }
+POST   /api/content/submit             → ContentSubmitResponse (用户提交文本内容)
+POST   /api/content/upload             → ContentSubmitResponse (用户上传文件)
+GET    /api/content/{id}               → ContentItem (含分析结果和 media_items)
+POST   /api/content/{id}/analyze       → PipelineExecution (重新分析)
+POST   /api/content/{id}/enrich        → 抓取全文
+POST   /api/content/{id}/enrich/apply  → 应用抓取结果
+POST   /api/content/{id}/favorite      → null (切换收藏)
+POST   /api/content/{id}/view          → 记录浏览
+PATCH  /api/content/{id}/note          → null (更新笔记)
+GET    /api/content/{id}/chat/history  → AI 对话历史
+PUT    /api/content/{id}/chat/history  → 更新对话历史
+DELETE /api/content/{id}/chat/history  → 清除对话历史
+POST   /api/content/{id}/chat          → AI 对话
 ```
 
 #### Pipelines
 ```
 GET    /api/pipelines                  → PaginatedResponse[PipelineExecution]
-       ?status=&source_id=&pipeline_type=
-GET    /api/pipelines/{id}             → PipelineExecution (含步骤详情)
-POST   /api/pipelines/{id}/retry       → PipelineExecution (重试失败步骤)
-POST   /api/pipelines/{id}/cancel      → null
+       ?status=&source_id=
 POST   /api/pipelines/manual           → PipelineExecution (手动URL处理)
-       body: { url: string, pipeline_type?: string }
+POST   /api/pipelines/test-step        → 测试单个步骤
+POST   /api/pipelines/cancel-all       → 取消所有运行中的流水线
+GET    /api/pipelines/{id}             → PipelineExecution (含步骤详情)
+POST   /api/pipelines/{id}/cancel      → null
+POST   /api/pipelines/{id}/retry       → PipelineExecution (重试失败步骤)
 ```
 
 #### Templates
 ```
 GET    /api/pipeline-templates         → list[PipelineTemplate]
+GET    /api/pipeline-templates/step-definitions → dict[str, StepDefinition]
+GET    /api/pipeline-templates/{id}    → PipelineTemplate
 POST   /api/pipeline-templates         → PipelineTemplate
 PUT    /api/pipeline-templates/{id}    → PipelineTemplate
 DELETE /api/pipeline-templates/{id}    → null
-GET    /api/pipeline-templates/step-definitions → dict[str, StepDefinition]
 
 GET    /api/prompt-templates           → list[PromptTemplate]
+GET    /api/prompt-templates/{id}      → PromptTemplate
 POST   /api/prompt-templates           → PromptTemplate
 PUT    /api/prompt-templates/{id}      → PromptTemplate
 DELETE /api/prompt-templates/{id}      → null
@@ -631,98 +741,119 @@ PUT    /api/settings                   → null  (批量更新)
 POST   /api/settings/test-llm          → { model } (LLM 连接测试)
 POST   /api/settings/clear-executions  → { deleted } (手动清理执行记录)
 POST   /api/settings/clear-collections → { deleted } (手动清理采集记录)
+POST   /api/settings/preview-cleanup   → 预览清理结果
+POST   /api/settings/manual-cleanup    → 手动执行清理
 ```
 
 #### Video
 ```
-POST   /api/video/download             → { task_id } (提交下载任务)
-       body: { url: string, quality?: string }
+POST   /api/video/download             → 提交下载任务
 GET    /api/video/downloads             → PaginatedResponse[DownloadTask]
-GET    /api/video/{id}/stream           → video stream (Range 支持)
+PUT    /api/video/{id}/progress         → 更新播放进度
+DELETE /api/video/{id}                  → 删除视频
 GET    /api/video/{id}/thumbnail        → image file (封面图)
+GET    /api/video/{id}/stream           → video stream (Range 支持)
 ```
 
 #### Media (通用媒体文件服务)
 ```
+GET    /api/media/list                 → 媒体列表
+PUT    /api/media/{content_id}/progress → 更新播放进度
+DELETE /api/media/{content_id}          → 删除媒体
+GET    /api/media/{content_id}/thumbnail → 封面图
 GET    /api/media/{content_id}/{file_path} → FileResponse (从 MEDIA_DIR 读取)
+```
+
+#### Audio
+```
+GET    /api/audio/{content_id}/stream  → 音频流
 ```
 
 #### Credentials (平台凭证)
 ```
+GET    /api/credentials/options        → 凭证选项列表
 GET    /api/credentials                → list[PlatformCredential]
 POST   /api/credentials                → PlatformCredential (创建)
+GET    /api/credentials/{id}           → PlatformCredential
+PUT    /api/credentials/{id}           → PlatformCredential (更新)
 DELETE /api/credentials/{id}           → null
 POST   /api/credentials/{id}/check     → { valid } (校验凭证)
-POST   /api/credentials/sync-rsshub    → { synced } (同步 RSSHub)
-POST   /api/credentials/bilibili-qrcode → { qr_url, token } (B站扫码登录)
-POST   /api/credentials/bilibili-poll   → { status } (轮询扫码结果)
+POST   /api/credentials/{id}/sync-rsshub → { synced } (同步 RSSHub)
+```
+
+#### Bilibili Auth (B站认证)
+```
+POST   /api/bilibili-auth/qrcode/generate → { qr_url, token } (B站扫码登录)
+GET    /api/bilibili-auth/qrcode/poll     → { status } (轮询扫码结果)
 ```
 
 #### Finance (金融数据)
 ```
-GET    /api/finance/data               → PaginatedResponse[FinanceDataPoint]
-GET    /api/finance/chart-data/{source_id} → { labels, datasets } (图表数据)
+GET    /api/finance/presets             → 预设金融指标
+GET    /api/finance/sources             → 金融数据源列表
+GET    /api/finance/summary             → 金融数据概要
+GET    /api/finance/timeseries/{source_id} → 时间序列数据
+```
+
+#### Export (全量导入导出)
+```
+GET    /api/export/export/full         → 全量导出
+POST   /api/export/import/full         → 全量导入
 ```
 
 ---
 
 ## 7. 任务调度详细设计
 
-### 7.1 APScheduler 配置
+### 7.1 Procrastinate periodic 配置
+
+所有定时任务由 Procrastinate worker 的 periodic 功能驱动，定义在 `app/tasks/scheduled_tasks.py`:
 
 ```python
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.interval import IntervalTrigger
+# 主采集循环 - 每 1 分钟检查 next_collection_at <= now 的源
+@proc_app.periodic(cron="*/1 * * * *")
+@proc_app.task(queue="scheduled", queueing_lock="collection_loop")
+async def check_and_collect_sources(timestamp):
+    """查询到期的源，defer 采集任务到 worker 并发执行"""
 
-scheduler = AsyncIOScheduler()
+# 日报 - 每天 22:00
+@proc_app.periodic(cron="0 22 * * *")
+@proc_app.task(queue="scheduled", queueing_lock="daily_report")
+async def trigger_daily_report(timestamp): ...
 
-# 主采集循环 - 每 5 分钟检查需要采集的源
-scheduler.add_job(
-    check_and_collect_sources,
-    IntervalTrigger(minutes=5),
-    id="main_collection_loop",
-)
+# 周报 - 每周一 09:00
+@proc_app.periodic(cron="0 9 * * 1")
+@proc_app.task(queue="scheduled", queueing_lock="weekly_report")
+async def trigger_weekly_report(timestamp): ...
 
-# 日报生成 - 每天 22:00
-scheduler.add_job(
-    generate_daily_report,
-    CronTrigger(hour=22, minute=0),
-    id="daily_report",
-)
+# 周期性分析 - 每天 04:00 (分析源的更新模式)
+@proc_app.periodic(cron="0 4 * * *")
+@proc_app.task(queue="scheduled", queueing_lock="analyze_periodicity")
+async def analyze_source_periodicity(timestamp): ...
 
-# 内容清理 - 每天 03:00 (按 retention_days 清理过期内容)
-scheduler.add_job(
-    cleanup_expired_content,
-    CronTrigger(hour=3, minute=0),
-    id="cleanup_expired_content",
-)
-
-# 记录清理 - 每天 03:30 (执行记录 + 采集记录)
-scheduler.add_job(
-    cleanup_records,
-    CronTrigger(hour=3, minute=30),
-    id="cleanup_records",
-)
+# 清理调度器 - 每小时检查，按 system_settings 配置的时间动态执行
+@proc_app.periodic(cron="0 * * * *")
+@proc_app.task(queue="scheduled", queueing_lock="cleanup_scheduler")
+async def cleanup_scheduler(timestamp): ...
 ```
 
-### 7.2 智能调度算法
+### 7.2 智能调度系统
 
-```python
-def calculate_next_collect_time(source: SourceConfig) -> datetime:
-    """根据源的更新频率和失败次数计算下次采集时间"""
-    base_interval = source.schedule_interval  # 默认 3600 秒
-    
-    # 退避策略: 连续失败时指数退避
-    if source.consecutive_failures > 0:
-        backoff = min(base_interval * (2 ** source.consecutive_failures), 7200)
-        return datetime.utcnow() + timedelta(seconds=backoff)
-    
-    # 活跃度调整: 最近 24h 有更新的源缩短间隔
-    if source.has_recent_updates:
-        return datetime.utcnow() + timedelta(seconds=base_interval * 0.5)
-    
-    return datetime.utcnow() + timedelta(seconds=base_interval)
-```
+调度服务位于 `app/services/scheduling/`，支持三种调度模式:
+
+| 模式 | 字段 | 说明 |
+|------|------|------|
+| `auto` | `schedule_mode='auto'` | 系统基于周期性分析和采集历史自动计算间隔 |
+| `fixed` | `schedule_mode='fixed'` | 使用 `schedule_interval_override` 固定间隔 |
+| `manual` | `schedule_mode='manual'` | 仅手动触发，不自动采集 |
+
+核心组件:
+- **SchedulingService**: 计算 `next_collection_at`，判断是否应采集
+- **SchedulingConfig**: 调度配置参数（最小/最大间隔、退避因子等）
+- **周期性分析** (`periodicity.py`): 分析源的更新模式，优化间隔
+- **热点检测** (`hotspot.py`): 检测突发更新，临时缩短采集间隔
+
+`next_collection_at` 是预计算字段，由 `SchedulingService.update_next_collection_time()` 在每次采集后更新。主循环查询 `next_collection_at <= now` 的源进行采集。
 
 ---
 
@@ -734,61 +865,78 @@ def calculate_next_collect_time(source: SourceConfig) -> datetime:
 version: "3.8"
 
 services:
+  postgres:
+    image: postgres:17-alpine
+    command: postgres -c timezone=UTC
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init/init-databases.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+
   rsshub:
     image: diygod/rsshub:latest
     environment:
-      - PUPPETEER_WS_ENDPOINT=ws://browserless:3000
+      PUPPETEER_WS_ENDPOINT: ws://browserless:3000
     depends_on:
       - browserless
-    restart: unless-stopped
 
   browserless:
     image: browserless/chrome:latest
     environment:
-      - MAX_CONCURRENT_SESSIONS=5
-      - CONNECTION_TIMEOUT=60000
-    restart: unless-stopped
+      MAX_CONCURRENT_SESSIONS: 3
 
   allin-one:
     build:
       context: .
-      dockerfile: docker/Dockerfile
+      dockerfile: Dockerfile
     ports:
       - "8000:8000"
     volumes:
       - ./data:/app/data
-      - ./data/reports:/app/reports
     environment:
-      - DATABASE_URL=postgresql://allinone:allinone@postgres:5432/allinone
-      - RSSHUB_URL=http://rsshub:1200
-      - BROWSERLESS_URL=http://browserless:3000
-      - API_KEY=                           # API 认证密钥（空=禁用认证）
-      - CORS_ORIGINS=*                     # CORS 允许的来源
-    env_file:
-      - .env
+      DATABASE_URL: postgresql://allinone:allinone@postgres:5432/allinone
+      RSSHUB_URL: http://rsshub:1200
+      BROWSERLESS_URL: http://browserless:3000
     depends_on:
-      - rsshub
-      - browserless
-    restart: unless-stopped
+      postgres:
+        condition: service_healthy
 
-  allin-worker:
+  allin-worker-pipeline:
     build:
       context: .
-      dockerfile: docker/Dockerfile
-    command: ["huey_consumer", "app.tasks.huey_instance.huey", "-w", "4", "-k", "thread"]
+      dockerfile: Dockerfile
+    command: ["python", "-m", "procrastinate", "--app=app.tasks.procrastinate_app.proc_app", "worker", "--concurrency=4", "--queues=pipeline"]
     volumes:
       - ./data:/app/data
-      - ./data/reports:/app/reports
     environment:
-      - DATABASE_URL=postgresql://allinone:allinone@postgres:5432/allinone
-      - RSSHUB_URL=http://rsshub:1200
-      - BROWSERLESS_URL=http://browserless:3000
-    env_file:
-      - .env
+      DATABASE_URL: postgresql://allinone:allinone@postgres:5432/allinone
+      RSSHUB_URL: http://rsshub:1200
+      BROWSERLESS_URL: http://browserless:3000
     depends_on:
-      - rsshub
-      - browserless
-    restart: unless-stopped
+      postgres:
+        condition: service_healthy
+
+  allin-worker-scheduled:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "procrastinate", "--app=app.tasks.procrastinate_app.proc_app", "worker", "--concurrency=2", "--queues=scheduled"]
+    volumes:
+      - ./data:/app/data
+    environment:
+      DATABASE_URL: postgresql://allinone:allinone@postgres:5432/allinone
+      RSSHUB_URL: http://rsshub:1200
+      BROWSERLESS_URL: http://browserless:3000
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
 ```
 
 ### 8.2 多阶段 Dockerfile
@@ -796,23 +944,26 @@ services:
 ```dockerfile
 # Stage 1: Frontend Build
 FROM node:22-alpine AS frontend-builder
-WORKDIR /build
+WORKDIR /app/frontend
 COPY frontend/package*.json ./
 RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
-# Stage 2: Backend Runtime
-FROM allin-base:latest
+# Stage 2: Docker CLI (for RSSHub container management)
+FROM docker:cli AS docker-cli
+
+# Stage 3: Backend Runtime
+FROM python:3.11-slim
 WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/ ./
-COPY --from=frontend-builder /build/dist ./static
-COPY docker/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+COPY --from=frontend-builder /app/frontend/dist ./static
+RUN mkdir -p data/db data/media data/reports data/logs
 EXPOSE 8000
-ENTRYPOINT ["/entrypoint.sh"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 ```
 
@@ -849,8 +1000,8 @@ EOF
 | 文件 | 写入者 | 级别 | 用途 |
 |------|--------|------|------|
 | `data/logs/backend.log` | FastAPI 进程 | WARNING+ | API 服务的警告与异常 |
-| `data/logs/worker.log` | Huey Worker 进程 | WARNING+ | 任务执行的警告与异常 |
-| `data/logs/error.log` | 两个进程共写 | ERROR+ | 所有严重错误汇总 |
+| `data/logs/worker.log` | Procrastinate Worker 进程 | WARNING+ | 任务执行的警告与异常 |
+| `data/logs/error.log` | 所有进程共写 | ERROR+ | 所有严重错误汇总 |
 
 日志格式: `时间 级别 [模块名] 消息`，含完整 traceback。控制台同时输出 INFO+ 级别。
 
@@ -870,12 +1021,12 @@ async def health_check():
 
 ### 9.3 数据备份
 
-SQLite 数据库通过 `.backup` API 实现在线备份:
+PostgreSQL 数据库通过 `pg_dump` 实现备份:
 
-```python
-async def backup_database():
-    """每日自动备份数据库"""
-    src = sqlite3.connect("data/db/allin.db")
-    dst = sqlite3.connect(f"data/db/backup_{date.today()}.db")
-    src.backup(dst)
+```bash
+# 手动备份
+docker compose exec postgres pg_dump -U allinone allinone > data/backups/backup_$(date +%Y%m%d).sql
+
+# 恢复
+docker compose exec -T postgres psql -U allinone allinone < data/backups/backup_20260221.sql
 ```

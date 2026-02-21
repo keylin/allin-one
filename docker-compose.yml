@@ -102,8 +102,15 @@ services:
         condition: service_started
     networks:
       - allin-network
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: "2"
+        reservations:
+          memory: 512m
     healthcheck:
-      test: [ "CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health')" ]
+      test: [ "CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\"" ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -116,6 +123,13 @@ services:
       dockerfile: Dockerfile
     container_name: allin-worker-pipeline
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: "2"
+        reservations:
+          memory: 256m
     command: [ "python", "-m", "procrastinate", "--app=app.tasks.procrastinate_app.proc_app", "worker", "--concurrency=4", "--queues=pipeline" ]
     volumes:
       - ./data:/app/data
@@ -143,6 +157,13 @@ services:
       dockerfile: Dockerfile
     container_name: allin-worker-scheduled
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: "1"
+        reservations:
+          memory: 256m
     command: [ "python", "-m", "procrastinate", "--app=app.tasks.procrastinate_app.proc_app", "worker", "--concurrency=2", "--queues=scheduled" ]
     volumes:
       - ./data:/app/data

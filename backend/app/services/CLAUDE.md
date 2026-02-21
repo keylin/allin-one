@@ -9,28 +9,48 @@ services/
 │   ├── orchestrator.py  # 为 ContentItem 创建 PipelineExecution
 │   └── executor.py      # 执行步骤，管理状态转换
 ├── collectors/          # 数据采集器（每种 SourceType 一个）
+│   ├── base.py          # BaseCollector 接口
 │   ├── rss.py           # RSSHubCollector + RSSStdCollector
 │   ├── web_scraper.py   # ScraperCollector (L1/L2/L3)
-│   ├── bilibili.py      # B站账号 API（不是视频采集器）
-│   └── youtube.py       # （保留，未使用 — YouTube 走 RSSHub）
+│   ├── akshare.py       # AkShareCollector (金融数据)
+│   ├── podcast.py       # PodcastCollector (Apple Podcasts)
+│   ├── bilibili.py      # BilibiliCollector (B站账号 API)
+│   ├── generic_account.py # GenericAccountCollector
+│   ├── file_upload.py   # FileUploadCollector
+│   └── utils.py         # 采集器工具函数
+├── scheduling/          # 智能调度服务
+│   ├── calculator.py    # SchedulingService (间隔计算)
+│   ├── config.py        # SchedulingConfig (调度参数)
+│   ├── helpers.py       # 辅助函数
+│   ├── periodicity.py   # 周期性分析
+│   └── hotspot.py       # 热点检测
 ├── analyzers/           # LLM 分析
 │   └── llm_analyzer.py  # 使用 OpenAI 兼容 SDK 的 LLMAnalyzer
-└── publishers/          # 消息推送
-    ├── email.py
-    └── dingtalk.py
+├── publishers/          # 消息推送
+│   ├── email.py
+│   └── dingtalk.py
+├── chat_service.py      # 内容 AI 对话服务
+├── enrichment.py        # 内容富化 (enrich_content 步骤实现)
+├── media_detection.py   # 媒体检测
+├── rsshub_sync.py       # RSSHub 同步服务
+├── scheduling_service.py # 向后兼容入口 → scheduling/
+└── source_cleanup.py    # 数据源清理
 ```
 
 ## 两条独立流程：采集 vs 处理
 
 ### 流程 1：采集（调度器 → 采集器 → ContentItem）
 ```
-Procrastinate periodic (每5分钟) → check_and_collect_sources()
-  → 遍历活跃数据源:
+Procrastinate periodic (每1分钟) → check_and_collect_sources()
+  → 查询 next_collection_at <= now 的活跃数据源
+  → 对每个到期的源 defer collect_single_source 到 scheduled 队列
+  → collect_single_source(source_id):
     → 按 source_type 获取对应的 Collector
-    → collector.collect(source) → list[RawContentItem]
+    → collector.collect(source) → list[ContentItem]
     → 通过 (source_id, external_id) 唯一约束去重
     → 创建 ContentItem 行 (status=pending)
     → 创建 CollectionRecord
+    → SchedulingService.update_next_collection_time(source) 更新下次采集时间
 ```
 
 ### 流程 2：处理（编排器 → 执行器 → 步骤）
@@ -38,9 +58,10 @@ Procrastinate periodic (每5分钟) → check_and_collect_sources()
 对每条新 ContentItem:
   → orchestrator.trigger_for_content(content) → PipelineExecution
     → 读取 source.pipeline_template_id → PipelineTemplate
-    → 从 template.steps_config 创建 PipelineStep 行
-  → orchestrator.start_execution(execution_id)
-    → 通过 Procrastinate 入队第一个步骤
+    → 从 template.steps_config 创建 PipelineStep 行（步骤完全来自模板，不再自动注入）
+    → 无模板时直接标记 content.status = READY
+  → orchestrator.async_start_execution(execution_id)
+    → 通过 Procrastinate defer 入队第一个步骤到 pipeline 队列
   → execute_pipeline_step(execution_id, step_index)
     → STEP_HANDLERS[step_type](context) → output_data
     → executor.advance_pipeline() → 下一步或完成
@@ -58,7 +79,7 @@ class BaseCollector(ABC):
         """从数据源抓取新条目。去重在 DB 层处理。"""
 ```
 
-SourceType → Collector 映射见 `app/tasks/scheduled_tasks.py` 中的 COLLECTOR_MAP。
+SourceType → Collector 映射见 `app/tasks/collection_tasks.py` 中的 COLLECTOR_MAP。
 
 没有 BilibiliVideoCollector 或 YouTubeVideoCollector。B站/YouTube 视频通过 RSSHub 发现，由流水线的 `localize_media` 步骤处理。
 
@@ -113,12 +134,13 @@ def _handle_xxx(context: dict) -> dict:
 ## 内置流水线模板
 
 内置模板定义见 `app/services/pipeline/registry.py` 中的 BUILTIN_TEMPLATES。
+模板包含所有步骤（含 extract_content、localize_media），Orchestrator 不再自动注入预处理步骤。
 
 ## 三层内容模型
 
 ContentItem 有三个内容字段，逐步填充:
 1. `raw_data` (JSON) — 采集时由 Collector 设置
-2. `processed_content` (Text) — 由 enrich/translate/transcribe 步骤设置
+2. `processed_content` (Text) — 由 extract_content/enrich/translate/transcribe 步骤设置
 3. `analysis_result` (JSON) — 由 analyze_content 步骤设置
 
 ## LLM 分析器模式
@@ -126,10 +148,13 @@ ContentItem 有三个内容字段，逐步填充:
 ```python
 class LLMAnalyzer:
     def __init__(self):
+        # LLM 配置从 system_settings 表读取（非环境变量）
+        config = get_llm_config()
         self.client = AsyncOpenAI(
-            api_key=settings.LLM_API_KEY,
-            base_url=settings.LLM_BASE_URL
+            api_key=config.api_key,
+            base_url=config.base_url
         )
+        self.model = config.model
 
     async def analyze(self, content: str, prompt: PromptTemplate) -> dict:
         # 确定响应格式
@@ -137,7 +162,7 @@ class LLMAnalyzer:
         response_format = {"type": "json_object"} if output_format == "json" else None
 
         response = await self.client.chat.completions.create(
-            model=settings.LLM_MODEL,
+            model=self.model,
             messages=[
                 {"role": "system", "content": prompt.system_prompt},
                 {"role": "user", "content": prompt.user_prompt.format(content=content)}

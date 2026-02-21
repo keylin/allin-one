@@ -75,7 +75,7 @@ class RSSCollector(BaseCollector):
                         ))
                 new_items.append(item)
             except IntegrityError:
-                pass  # SAVEPOINT 已自动回滚，MediaItem 也一起回滚
+                logger.debug(f"Duplicate entry skipped: {url or external_id}")
 
         if new_items:
             db.commit()

@@ -76,13 +76,19 @@ const res = await api.get('/content', {
 
 | 路径              | 视图                  | 说明             |
 |-------------------|----------------------|------------------|
+| /                 | → /feed              | 重定向到信息流     |
+| /login            | LoginView.vue        | API Key 认证     |
 | /dashboard        | DashboardView.vue    | 统计概览、告警    |
 | /feed             | FeedView.vue         | 卡片式信息流      |
+| /favorites        | FavoritesView.vue    | 收藏内容视图      |
 | /sources          | SourcesView.vue      | 数据源 CRUD      |
 | /content          | ContentView.vue      | 内容表格管理      |
 | /pipelines        | PipelinesView.vue    | 流水线（执行记录+模板+提示词） |
-| /video-download   | VideoView.vue        | 视频下载/播放     |
+| /media            | media-view.vue       | 媒体管理（视频/音频） |
+| /finance          | FinanceView.vue      | 金融数据展示      |
 | /settings         | SettingsView.vue     | 系统设置          |
+
+旧路由兼容: `/video-download` → `/media`, `/videos` → `/media`, `/processing` → `/pipelines`
 
 ## URL 状态持久化
 
@@ -144,6 +150,18 @@ const { success, error, warning, info } = useToast()
 success('保存成功')
 error('操作失败', { duration: 5000 })
 ```
+
+### 其他 Composables
+
+| Composable | 说明 |
+|------------|------|
+| `useAutoRead` | 自动标记内容已读 |
+| `useContentChat` | 内容 AI 对话 |
+| `useDebounce` | 防抖 |
+| `useIntersectionObserver` | 交叉观察器（懒加载等） |
+| `useModelOptions` | LLM 模型选项 |
+| `usePullToRefresh` | 下拉刷新 |
+| `useSwipe` | 滑动手势 |
 
 ## Pinia Store 模式
 

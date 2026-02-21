@@ -18,20 +18,36 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _source_to_response(source: SourceConfig, db: Session) -> dict:
-    """将 ORM 对象转为响应 dict，解析 pipeline_template_name 和 content_count"""
+def _source_to_response(source: SourceConfig, content_counts: dict, template_names: dict) -> dict:
+    """将 ORM 对象转为响应 dict（使用预加载的批量数据避免 N+1）"""
     data = SourceResponse.model_validate(source).model_dump()
     data["category"] = get_source_category(source.source_type).value
-    if source.pipeline_template_id:
-        tpl = db.get(PipelineTemplate, source.pipeline_template_id)
-        data["pipeline_template_name"] = tpl.name if tpl else None
-    data["content_count"] = db.query(func.count(ContentItem.id)).filter(
-        ContentItem.source_id == source.id
-    ).scalar()
-
-    # next_collection_at 已由系统计算并存储在数据库，直接使用
-    # 由 SchedulingService.update_next_collection_time() 维护
+    data["pipeline_template_name"] = template_names.get(source.pipeline_template_id) if source.pipeline_template_id else None
+    data["content_count"] = content_counts.get(source.id, 0)
     return data
+
+
+def _batch_load_source_extras(sources: list[SourceConfig], db: Session) -> tuple[dict, dict]:
+    """批量预加载 content_count 和 template_name，避免 N+1 查询"""
+    source_ids = [s.id for s in sources]
+
+    # 一次查询所有 content count
+    content_counts = dict(
+        db.query(ContentItem.source_id, func.count(ContentItem.id))
+        .filter(ContentItem.source_id.in_(source_ids))
+        .group_by(ContentItem.source_id)
+        .all()
+    ) if source_ids else {}
+
+    # 一次查询所有 template name
+    template_ids = {s.pipeline_template_id for s in sources if s.pipeline_template_id}
+    template_names = dict(
+        db.query(PipelineTemplate.id, PipelineTemplate.name)
+        .filter(PipelineTemplate.id.in_(template_ids))
+        .all()
+    ) if template_ids else {}
+
+    return content_counts, template_names
 
 
 def _validate_source_type(source_type: str) -> str | None:
@@ -95,9 +111,10 @@ async def list_sources(
     total = query.count()
     sources = query.offset((page - 1) * page_size).limit(page_size).all()
 
+    content_counts, template_names = _batch_load_source_extras(sources, db)
     return {
         "code": 0,
-        "data": [_source_to_response(s, db) for s in sources],
+        "data": [_source_to_response(s, content_counts, template_names) for s in sources],
         "total": total,
         "page": page,
         "page_size": page_size,
@@ -153,7 +170,8 @@ async def create_source(body: SourceCreate, db: Session = Depends(get_db)):
     db.refresh(source)
 
     logger.info(f"Source created: {source.id} ({source.name}, type={source.source_type})")
-    return {"code": 0, "data": _source_to_response(source, db), "message": "ok"}
+    content_counts, template_names = _batch_load_source_extras([source], db)
+    return {"code": 0, "data": _source_to_response(source, content_counts, template_names), "message": "ok"}
 
 
 @router.get("/options")
@@ -237,7 +255,8 @@ async def get_source(source_id: str, db: Session = Depends(get_db)):
     source = db.get(SourceConfig, source_id)
     if not source:
         return error_response(404, "Source not found")
-    return {"code": 0, "data": _source_to_response(source, db), "message": "ok"}
+    content_counts, template_names = _batch_load_source_extras([source], db)
+    return {"code": 0, "data": _source_to_response(source, content_counts, template_names), "message": "ok"}
 
 
 @router.put("/{source_id}")
@@ -297,7 +316,8 @@ async def update_source(source_id: str, body: SourceUpdate, db: Session = Depend
     db.refresh(source)
 
     logger.info(f"Source updated: {source_id} (fields={list(update_data.keys())})")
-    return {"code": 0, "data": _source_to_response(source, db), "message": "ok"}
+    content_counts, template_names = _batch_load_source_extras([source], db)
+    return {"code": 0, "data": _source_to_response(source, content_counts, template_names), "message": "ok"}
 
 
 @router.post("/batch-collect")
