@@ -3,6 +3,7 @@
 import logging
 import re
 from datetime import timedelta
+from typing import Optional
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
