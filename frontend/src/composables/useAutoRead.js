@@ -228,8 +228,5 @@ export function useAutoRead({ items, leftPanelRef, loadStats, contentStats }) {
     pendingReadIds,
     markAsRead,
     handleScrollBottom,
-    observe,
-    unobserve,
-    disconnect,
   }
 }

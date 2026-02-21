@@ -4,10 +4,6 @@ export function listTemplates() {
   return api.get('/pipeline-templates')
 }
 
-export function getTemplate(id) {
-  return api.get(`/pipeline-templates/${id}`)
-}
-
 export function getStepDefinitions() {
   return api.get('/pipeline-templates/step-definitions')
 }

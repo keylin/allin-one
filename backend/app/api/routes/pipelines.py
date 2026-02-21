@@ -4,7 +4,7 @@ import json
 import logging
 import time
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 

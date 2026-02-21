@@ -16,10 +16,6 @@ export function getSourceHealth() {
   return api.get('/dashboard/source-health')
 }
 
-export function getRecentContent(limit = 8) {
-  return api.get('/dashboard/recent-content', { params: { limit } })
-}
-
 export function getDailyStats(date) {
   return api.get('/dashboard/daily-stats', { params: { date } })
 }
@@ -30,8 +26,4 @@ export function getContentStatusDistribution() {
 
 export function getStorageStats() {
   return api.get('/dashboard/storage-stats')
-}
-
-export function getTodaySummary() {
-  return api.get('/dashboard/today-summary')
 }

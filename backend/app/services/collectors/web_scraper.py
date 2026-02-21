@@ -3,7 +3,7 @@
 import json
 import hashlib
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 
 import httpx
 from bs4 import BeautifulSoup

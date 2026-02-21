@@ -190,7 +190,6 @@ class ContentItem(Base):
     analysis_result = Column(Text)       # 最终内容 (LLM 分析结果 JSON)
 
     status = Column(String, default=ContentStatus.PENDING.value)
-    language = Column(String)
 
     published_at = Column(DateTime, nullable=True)   # 发布时间
     collected_at = Column(DateTime, default=_utcnow)  # 采集时间

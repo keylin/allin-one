@@ -4,10 +4,6 @@ export function listPromptTemplates(params = {}) {
   return api.get('/prompt-templates', { params })
 }
 
-export function getPromptTemplate(id) {
-  return api.get(`/prompt-templates/${id}`)
-}
-
 export function createPromptTemplate(data) {
   return api.post('/prompt-templates', data)
 }
