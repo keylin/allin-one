@@ -37,6 +37,10 @@ crawl4ai>=0.5.0
 # Finance Data
 akshare>=1.14.0
 
+# Ebook Parsing
+ebooklib>=0.18
+mobi>=0.3.3
+
 # Utilities
 python-multipart>=0.0.6
 python-dotenv>=1.0.0
