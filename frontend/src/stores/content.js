@@ -4,7 +4,6 @@ import {
   listContent as apiList,
   getContent as apiGet,
   toggleFavorite as apiFavorite,
-  updateNote as apiNote,
   batchDeleteContent as apiBatchDelete,
   deleteAllContent as apiDeleteAll,
 } from '@/api/content'
@@ -42,10 +41,6 @@ export const useContentStore = defineStore('content', () => {
     return res
   }
 
-  async function updateNote(id, note) {
-    return await apiNote(id, note)
-  }
-
   async function batchDelete(ids) {
     const res = await apiBatchDelete(ids)
     // 不自动刷新，由调用方决定如何刷新以保持筛选状态
@@ -58,5 +53,5 @@ export const useContentStore = defineStore('content', () => {
     return res
   }
 
-  return { items, total, loading, currentPage, pageSize, fetchContent, toggleFavorite, updateNote, batchDelete, deleteAll }
+  return { items, total, loading, currentPage, pageSize, fetchContent, toggleFavorite, batchDelete, deleteAll }
 })

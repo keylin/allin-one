@@ -20,10 +20,6 @@ export function cancelAllPipelines() {
   return api.post('/pipelines/cancel-all')
 }
 
-export function manualPipeline(data) {
-  return api.post('/pipelines/manual', data)
-}
-
 export function testStep(data) {
   return api.post('/pipelines/test-step', data)
 }

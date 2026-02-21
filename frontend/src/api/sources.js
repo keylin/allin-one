@@ -4,10 +4,6 @@ export function listSources(params = {}) {
   return api.get('/sources', { params })
 }
 
-export function getSource(id) {
-  return api.get(`/sources/${id}`)
-}
-
 export function createSource(data) {
   return api.post('/sources', data)
 }

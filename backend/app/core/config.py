@@ -23,7 +23,6 @@ class Settings(BaseSettings):
 
     # Application
     APP_PORT: int = 8000
-    WORKER_CONCURRENCY: int = 4
     LOG_LEVEL: str = "INFO"
 
     # File Storage

@@ -7,7 +7,7 @@ collect() 返回空列表，避免触发 Pipeline。
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 
 import pandas as pd
 from sqlalchemy.exc import IntegrityError

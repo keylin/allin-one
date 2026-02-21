@@ -4,10 +4,6 @@ export function listMedia(params = {}) {
   return api.get('/media/list', { params })
 }
 
-export function saveMediaProgress(contentId, position) {
-  return api.put(`/media/${contentId}/progress`, { position })
-}
-
 export function deleteMedia(contentId) {
   return api.delete(`/media/${contentId}`)
 }
