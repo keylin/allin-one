@@ -241,6 +241,8 @@ class CollectionRecord(Base):
     __table_args__ = (
         Index("ix_colrec_started_at", "started_at"),
         Index("ix_colrec_status", "status"),
+        Index("ix_colrec_source_started", "source_id", "started_at"),
+        Index("ix_colrec_source_status_started", "source_id", "status", "started_at"),
     )
 
 
