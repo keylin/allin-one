@@ -2,6 +2,7 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { listEbooks, uploadEbook, deleteEbook } from '@/api/ebook'
+import { formatTimeShort } from '@/utils/time'
 import EbookReader from '@/components/ebook-reader.vue'
 
 const router = useRouter()
@@ -14,11 +15,14 @@ const searchQuery = ref('')
 const sortBy = ref('updated_at')
 const showUploadArea = ref(false)
 const uploading = ref(false)
+const uploadProgress = ref(0)
 const uploadError = ref('')
 const selectedBookId = ref(null)
 const readerVisible = ref(false)
+const contextMenuBook = ref(null)
 
 let searchTimer = null
+let longPressTimer = null
 
 // Fetch books
 async function fetchBooks() {
@@ -58,9 +62,12 @@ async function handleDrop(event) {
 
 async function doUpload(file) {
   uploading.value = true
+  uploadProgress.value = 0
   uploadError.value = ''
   try {
-    const res = await uploadEbook(file)
+    const res = await uploadEbook(file, (e) => {
+      if (e.total) uploadProgress.value = Math.round((e.loaded / e.total) * 100)
+    })
     if (res.code === 0) {
       showUploadArea.value = false
       fetchBooks()
@@ -71,12 +78,13 @@ async function doUpload(file) {
     uploadError.value = e.response?.data?.message || '上传失败'
   } finally {
     uploading.value = false
+    uploadProgress.value = 0
   }
 }
 
 // Delete
 async function handleDelete(contentId, event) {
-  event.stopPropagation()
+  event?.stopPropagation?.()
   if (!confirm('确定删除这本书吗？')) return
   try {
     await deleteEbook(contentId)
@@ -86,8 +94,37 @@ async function handleDelete(contentId, event) {
   }
 }
 
+// Long press for mobile context menu
+function onPointerDown(book, event) {
+  // Only for touch (primary pointer on mobile)
+  if (event.pointerType !== 'touch') return
+  longPressTimer = setTimeout(() => {
+    contextMenuBook.value = book
+    longPressTimer = null
+  }, 500)
+}
+
+function onPointerUp() {
+  if (longPressTimer) {
+    clearTimeout(longPressTimer)
+    longPressTimer = null
+  }
+}
+
+function onPointerCancel() {
+  if (longPressTimer) {
+    clearTimeout(longPressTimer)
+    longPressTimer = null
+  }
+}
+
+function closeContextMenu() {
+  contextMenuBook.value = null
+}
+
 // Open reader
-function openBook(book) {
+function openBook(book, fromMenu = false) {
+  if (!fromMenu && contextMenuBook.value) return // Don't open if context menu is showing
   selectedBookId.value = book.content_id
   readerVisible.value = true
 }
@@ -114,14 +151,7 @@ function formatProgress(p) {
 
 function formatTime(iso) {
   if (!iso) return ''
-  const d = new Date(iso)
-  const now = new Date()
-  const diff = now - d
-  if (diff < 60000) return '刚刚'
-  if (diff < 3600000) return `${Math.floor(diff / 60000)}分钟前`
-  if (diff < 86400000) return `${Math.floor(diff / 3600000)}小时前`
-  if (diff < 604800000) return `${Math.floor(diff / 86400000)}天前`
-  return d.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
+  return formatTimeShort(iso)
 }
 </script>
 
@@ -209,8 +239,12 @@ function formatTime(iso) {
               </svg>
             </div>
             <p class="text-sm text-slate-600 font-medium mb-1">
-              {{ uploading ? '上传中...' : '拖拽文件到这里，或点击选择' }}
+              {{ uploading ? `上传中... ${uploadProgress}%` : '拖拽文件到这里，或点击选择' }}
             </p>
+            <!-- Upload progress bar -->
+            <div v-if="uploading" class="w-48 mx-auto h-1.5 bg-slate-200 rounded-full overflow-hidden mb-2">
+              <div class="h-full bg-indigo-500 rounded-full transition-all duration-300" :style="{ width: uploadProgress + '%' }" />
+            </div>
             <p class="text-xs text-slate-400 mb-3">支持 EPUB、MOBI 格式</p>
             <label v-if="!uploading" class="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-indigo-600 bg-indigo-50 rounded-lg hover:bg-indigo-100 cursor-pointer transition-colors">
               <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -255,8 +289,12 @@ function formatTime(iso) {
           <div
             v-for="book in books"
             :key="book.content_id"
-            class="group relative bg-white rounded-xl border border-slate-200/60 overflow-hidden cursor-pointer transition-all duration-200 hover:border-indigo-300 hover:shadow-md"
+            class="group relative bg-white rounded-xl border border-slate-200/60 overflow-hidden cursor-pointer transition-all duration-200 hover:border-indigo-300 hover:shadow-md select-none"
             @click="openBook(book)"
+            @pointerdown="onPointerDown(book, $event)"
+            @pointerup="onPointerUp"
+            @pointercancel="onPointerCancel"
+            @contextmenu.prevent="contextMenuBook = book"
           >
             <!-- Cover -->
             <div class="aspect-[2/3] bg-gradient-to-br from-slate-100 to-slate-200 relative overflow-hidden">
@@ -324,6 +362,54 @@ function formatTime(iso) {
         </div>
       </div>
     </div>
+
+    <!-- Mobile context menu -->
+    <Teleport to="body">
+      <Transition
+        enter-active-class="transition-opacity duration-150"
+        enter-from-class="opacity-0"
+        enter-to-class="opacity-100"
+        leave-active-class="transition-opacity duration-100"
+        leave-from-class="opacity-100"
+        leave-to-class="opacity-0"
+      >
+        <div v-if="contextMenuBook" class="fixed inset-0 z-50 flex items-end sm:items-center justify-center" @click.self="closeContextMenu">
+          <div class="absolute inset-0 bg-black/30" @click="closeContextMenu" />
+          <div class="relative z-10 bg-white rounded-t-2xl sm:rounded-2xl w-full sm:w-80 shadow-2xl overflow-hidden pb-safe">
+            <div class="px-4 py-3 border-b border-slate-100">
+              <p class="text-sm font-medium text-slate-800 truncate">{{ contextMenuBook.title }}</p>
+              <p class="text-xs text-slate-400 truncate">{{ contextMenuBook.author || '未知作者' }}</p>
+            </div>
+            <div class="py-1">
+              <button
+                @click="openBook(contextMenuBook, true); closeContextMenu()"
+                class="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 active:bg-slate-100 flex items-center gap-3"
+              >
+                <svg class="w-4 h-4 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" /><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
+                </svg>
+                打开阅读
+              </button>
+              <button
+                @click="handleDelete(contextMenuBook.content_id, $event); closeContextMenu()"
+                class="w-full text-left px-4 py-3 text-sm text-rose-600 hover:bg-rose-50 active:bg-rose-100 flex items-center gap-3"
+              >
+                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                </svg>
+                删除书籍
+              </button>
+            </div>
+            <button
+              @click="closeContextMenu"
+              class="w-full py-3 text-sm text-slate-500 font-medium border-t border-slate-100 hover:bg-slate-50 active:bg-slate-100"
+            >
+              取消
+            </button>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
 
     <!-- Reader overlay -->
     <EbookReader

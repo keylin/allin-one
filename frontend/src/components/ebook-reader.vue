@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useScrollLock } from '@/composables/useScrollLock'
 import {
   getEbookDetail,
-  getEbookFileUrl,
+  fetchEbookBlob,
   getReadingProgress,
   updateReadingProgress,
 } from '@/api/ebook'
@@ -45,9 +45,24 @@ const flatToc = computed(() => {
 const progress = ref(0)
 const chapterTitle = ref('')
 
-// Settings
-const fontSize = ref(100)
-const theme = ref('light')
+// Settings (persisted to localStorage)
+const PREFS_KEY = 'ebook_reader_prefs'
+function loadPrefs() {
+  try {
+    const raw = localStorage.getItem(PREFS_KEY)
+    if (raw) return JSON.parse(raw)
+  } catch { /* ignore */ }
+  return {}
+}
+function savePrefs() {
+  localStorage.setItem(PREFS_KEY, JSON.stringify({
+    fontSize: fontSize.value,
+    theme: theme.value,
+  }))
+}
+const savedPrefs = loadPrefs()
+const fontSize = ref(savedPrefs.fontSize || 100)
+const theme = ref(savedPrefs.theme || 'light')
 
 // Refs
 const readerEl = ref(null)
@@ -118,14 +133,8 @@ async function init() {
       if (detail.data.toc?.length) tocItems.value = detail.data.toc
     }
 
-    // Fetch ebook binary with auth
-    const url = getEbookFileUrl(props.contentId)
-    const apiKey = localStorage.getItem('api_key')
-    const resp = await fetch(url, {
-      headers: apiKey ? { 'X-API-Key': apiKey } : {},
-    })
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-    const blob = await resp.blob()
+    // Fetch ebook binary (auth handled by axios interceptor)
+    const blob = await fetchEbookBlob(props.contentId)
 
     // Create foliate-view and render
     await nextTick()
@@ -161,7 +170,12 @@ async function init() {
     loading.value = false
   } catch (e) {
     console.error('Reader init error:', e)
-    errorMsg.value = '无法加载电子书'
+    const status = e.response?.status
+    if (status === 404) errorMsg.value = '电子书文件不存在'
+    else if (status === 403) errorMsg.value = '无权访问该电子书'
+    else if (status === 413) errorMsg.value = '文件过大，无法加载'
+    else if (e.code === 'ECONNABORTED') errorMsg.value = '加载超时，请重试'
+    else errorMsg.value = '无法加载电子书'
     loading.value = false
   }
 }
@@ -221,6 +235,8 @@ function injectCSS(doc) {
 
 function addClickHandler(doc) {
   doc.addEventListener('click', (e) => {
+    // Skip if a swipe gesture was just handled
+    if (swipeHandled) { swipeHandled = false; return }
     const w = doc.defaultView?.innerWidth || window.innerWidth
     const x = e.clientX
     if (x < w * 0.25) prev()
@@ -228,6 +244,8 @@ function addClickHandler(doc) {
     else toggleToolbar()
   })
 }
+
+let swipeHandled = false
 
 function addTouchHandler(doc) {
   let sx = 0
@@ -237,6 +255,7 @@ function addTouchHandler(doc) {
     (e) => {
       sx = e.changedTouches[0].clientX
       sy = e.changedTouches[0].clientY
+      swipeHandled = false
     },
     { passive: true },
   )
@@ -245,7 +264,10 @@ function addTouchHandler(doc) {
     (e) => {
       const dx = e.changedTouches[0].clientX - sx
       const dy = e.changedTouches[0].clientY - sy
-      if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+      // Use 8% of screen width as threshold (min 50px) for swipe detection
+      const threshold = Math.max(50, window.innerWidth * 0.08)
+      if (Math.abs(dx) > threshold && Math.abs(dx) > Math.abs(dy) * 1.5) {
+        swipeHandled = true
         dx > 0 ? prev() : next()
       }
     },
@@ -347,11 +369,13 @@ function applyThemeToAll() {
 function changeTheme(t) {
   theme.value = t
   applyThemeToAll()
+  savePrefs()
 }
 
 function adjustFont(delta) {
   fontSize.value = Math.max(70, Math.min(160, fontSize.value + delta))
   applyThemeToAll()
+  savePrefs()
 }
 
 // --- Progress slider ---
@@ -531,7 +555,7 @@ function cleanup() {
               step="0.001"
               :value="progress"
               @input="onSlider"
-              class="w-full h-1 mb-1 appearance-none rounded-full cursor-pointer opacity-60 hover:opacity-100 transition-opacity [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-indigo-500 [&::-webkit-slider-thumb]:shadow [&::-moz-range-thumb]:w-3 [&::-moz-range-thumb]:h-3 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-indigo-500 [&::-moz-range-thumb]:border-0"
+              class="w-full h-1.5 mb-1 appearance-none rounded-full cursor-pointer opacity-70 hover:opacity-100 transition-opacity [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-5 [&::-webkit-slider-thumb]:h-5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-indigo-500 [&::-webkit-slider-thumb]:shadow-md [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-white [&::-moz-range-thumb]:w-5 [&::-moz-range-thumb]:h-5 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:bg-indigo-500 [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-white"
               :style="{
                 background: `linear-gradient(to right, rgb(99 102 241) ${progress * 100}%, ${theme === 'dark' ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.1)'} ${progress * 100}%)`,
               }"

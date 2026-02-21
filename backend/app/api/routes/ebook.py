@@ -6,6 +6,7 @@ import logging
 import mimetypes
 import os
 import shutil
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -25,11 +26,26 @@ from app.schemas.ebook import (
     AnnotationCreate, AnnotationUpdate,
     BookmarkCreate,
 )
+from app.services.ebook_parser import parse_ebook, EbookMetadata
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 SUPPORTED_EXTENSIONS = {".epub", ".mobi", ".azw", ".azw3"}
+MAX_EBOOK_SIZE = 200 * 1024 * 1024  # 200 MB
+
+
+def _safe_media_path(rel_or_abs: str) -> Path:
+    """验证路径在 MEDIA_DIR 范围内，防止路径遍历攻击。"""
+    media_root = Path(settings.MEDIA_DIR).resolve()
+    # 兼容已有的绝对路径和新的相对路径
+    p = Path(rel_or_abs)
+    if not p.is_absolute():
+        p = media_root / p
+    real = p.resolve()
+    if not str(real).startswith(str(media_root) + os.sep) and real != media_root:
+        raise HTTPException(status_code=403, detail="非法路径")
+    return real
 
 
 # ─── Upload ──────────────────────────────────────────────────────────────────
@@ -40,43 +56,56 @@ async def upload_ebook(
     db: Session = Depends(get_db),
 ):
     """上传电子书文件，解析元数据，创建 ContentItem + MediaItem"""
-    import uuid
-    from app.services.ebook_parser import parse_ebook
-
     filename = file.filename or "unnamed"
     ext = Path(filename).suffix.lower()
     if ext not in SUPPORTED_EXTENSIONS:
         return error_response(400, f"不支持的文件格式: {ext}，支持: {', '.join(SUPPORTED_EXTENSIONS)}")
 
-    # 生成 content_id 并保存文件
+    # 生成 content_id 并保存文件（流式写入 + 大小限制）
     content_id = uuid.uuid4().hex
     media_dir = Path(settings.MEDIA_DIR) / content_id
     media_dir.mkdir(parents=True, exist_ok=True)
 
     book_filename = f"book{ext}"
     book_path = media_dir / book_filename
-    file_content = await file.read()
-    book_path.write_bytes(file_content)
-    file_size = len(file_content)
+
+    file_size = 0
+    file_hash = hashlib.sha256()
+    try:
+        with open(book_path, "wb") as f:
+            while chunk := await file.read(65536):
+                file_size += len(chunk)
+                if file_size > MAX_EBOOK_SIZE:
+                    f.close()
+                    shutil.rmtree(media_dir, ignore_errors=True)
+                    return error_response(413, f"文件过大，最大支持 {MAX_EBOOK_SIZE // 1024 // 1024} MB")
+                file_hash.update(chunk)
+                f.write(chunk)
+    except Exception:
+        shutil.rmtree(media_dir, ignore_errors=True)
+        raise
+
+    if file_size == 0:
+        shutil.rmtree(media_dir, ignore_errors=True)
+        return error_response(400, "文件为空")
 
     # 解析元数据 (foliate-js 前端原生支持 EPUB/MOBI，无需转换)
     try:
         metadata = parse_ebook(str(book_path))
     except Exception as e:
         logger.warning(f"Ebook metadata parsing failed: {e}")
-        from app.services.ebook_parser import EbookMetadata
         metadata = EbookMetadata(title=Path(filename).stem)
 
-    # 保存封面
-    cover_path = None
+    # 保存封面（存相对路径）
+    cover_rel = None
     if metadata.cover_data:
         cover_ext = metadata.cover_ext or "jpg"
         cover_file = media_dir / f"cover.{cover_ext}"
         cover_file.write_bytes(metadata.cover_data)
-        cover_path = str(cover_file)
+        cover_rel = f"{content_id}/cover.{cover_ext}"
 
-    # 创建 ContentItem
-    external_id = hashlib.md5(f"{filename}:{file_size}".encode()).hexdigest()
+    # 创建 ContentItem（使用文件内容 hash 去重）
+    external_id = file_hash.hexdigest()[:32]
     raw_data = json.dumps({
         "format": ext.lstrip("."),
         "filename": filename,
@@ -104,8 +133,8 @@ async def upload_ebook(
         "file_size": file_size,
         "original_filename": filename,
     }
-    if cover_path:
-        media_metadata["cover_path"] = cover_path
+    if cover_rel:
+        media_metadata["cover_path"] = cover_rel
     if metadata.language:
         media_metadata["language"] = metadata.language
 
@@ -124,7 +153,11 @@ async def upload_ebook(
     progress = ReadingProgress(content_id=content_id)
     db.add(progress)
 
-    db.commit()
+    try:
+        db.commit()
+    except Exception:
+        shutil.rmtree(media_dir, ignore_errors=True)
+        raise
 
     logger.info(f"Ebook uploaded: {metadata.title} ({ext}) content_id={content_id}")
 
@@ -135,7 +168,7 @@ async def upload_ebook(
             "title": metadata.title,
             "author": metadata.author,
             "format": ext.lstrip("."),
-            "cover_url": f"/api/ebook/{content_id}/cover" if cover_path else None,
+            "cover_url": f"/api/ebook/{content_id}/cover" if cover_rel else None,
         },
         "message": "上传成功",
     }
@@ -190,7 +223,13 @@ async def list_ebooks(
             except (json.JSONDecodeError, TypeError):
                 pass
 
-        has_cover = bool(meta.get("cover_path")) and os.path.isfile(meta.get("cover_path", ""))
+        cover_path_val = meta.get("cover_path")
+        has_cover = False
+        if cover_path_val:
+            try:
+                has_cover = _safe_media_path(cover_path_val).is_file()
+            except Exception:
+                pass
 
         data.append({
             "content_id": content.id,
@@ -249,7 +288,13 @@ async def get_ebook_detail(content_id: str, db: Session = Depends(get_db)):
         except (json.JSONDecodeError, TypeError):
             pass
 
-    has_cover = bool(meta.get("cover_path")) and os.path.isfile(meta.get("cover_path", ""))
+    cover_path_val = meta.get("cover_path")
+    has_cover = False
+    if cover_path_val:
+        try:
+            has_cover = _safe_media_path(cover_path_val).is_file()
+        except Exception:
+            pass
 
     return {
         "code": 0,
@@ -312,7 +357,11 @@ async def get_ebook_file(content_id: str, db: Session = Depends(get_db)):
         MediaItem.status == "downloaded",
     ).first()
 
-    if not media or not media.local_path or not os.path.isfile(media.local_path):
+    if not media or not media.local_path:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="电子书文件未找到")
+
+    safe_path = _safe_media_path(media.local_path)
+    if not safe_path.is_file():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="电子书文件未找到")
 
     mime_map = {
@@ -321,13 +370,21 @@ async def get_ebook_file(content_id: str, db: Session = Depends(get_db)):
         ".azw": "application/x-mobipocket-ebook",
         ".azw3": "application/x-mobipocket-ebook",
     }
-    ext = Path(media.local_path).suffix.lower()
+    ext = safe_path.suffix.lower()
     mime_type = mime_map.get(ext, "application/octet-stream")
 
+    # ETag for conditional requests (avoid re-downloading unchanged files)
+    mtime = int(safe_path.stat().st_mtime)
+    etag = hashlib.md5(f"{content_id}:{mtime}".encode()).hexdigest()
+
     return FileResponse(
-        media.local_path,
+        str(safe_path),
         media_type=mime_type,
-        filename=Path(media.local_path).name,
+        filename=safe_path.name,
+        headers={
+            "ETag": f'"{etag}"',
+            "Cache-Control": "private, max-age=3600",
+        },
     )
 
 
@@ -342,10 +399,16 @@ async def get_ebook_cover(content_id: str, db: Session = Depends(get_db)):
     if media and media.metadata_json:
         try:
             meta = json.loads(media.metadata_json)
-            cover_path = meta.get("cover_path")
-            if cover_path and os.path.isfile(cover_path):
-                mime, _ = mimetypes.guess_type(cover_path)
-                return FileResponse(cover_path, media_type=mime or "image/jpeg")
+            cover_path_val = meta.get("cover_path")
+            if cover_path_val:
+                safe_cover = _safe_media_path(cover_path_val)
+                if safe_cover.is_file():
+                    mime, _ = mimetypes.guess_type(str(safe_cover))
+                    return FileResponse(
+                        str(safe_cover),
+                        media_type=mime or "image/jpeg",
+                        headers={"Cache-Control": "public, max-age=86400"},
+                    )
         except (json.JSONDecodeError, TypeError):
             pass
 

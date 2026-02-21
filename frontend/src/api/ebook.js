@@ -1,11 +1,12 @@
 import api from './index'
 
-export function uploadEbook(file) {
+export function uploadEbook(file, onProgress) {
   const formData = new FormData()
   formData.append('file', file)
   return api.post('/ebook/upload', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
     timeout: 120000,
+    onUploadProgress: onProgress || undefined,
   })
 }
 
@@ -22,8 +23,14 @@ export function deleteEbook(contentId) {
 }
 
 export function getEbookFileUrl(contentId) {
-  // Returns the URL for direct fetch (with auth header handled separately)
   return `/api/ebook/${contentId}/file`
+}
+
+export function fetchEbookBlob(contentId) {
+  return api.get(`/ebook/${contentId}/file`, {
+    responseType: 'blob',
+    timeout: 120000,
+  })
 }
 
 export function getReadingProgress(contentId) {
