@@ -174,7 +174,7 @@ async function init() {
     if (status === 404) errorMsg.value = '电子书文件不存在'
     else if (status === 403) errorMsg.value = '无权访问该电子书'
     else if (status === 413) errorMsg.value = '文件过大，无法加载'
-    else if (e.code === 'ECONNABORTED') errorMsg.value = '加载超时，请重试'
+    else if (e.code === 'ECONNABORTED' || e.message?.includes('timeout')) errorMsg.value = '加载超时，请重试'
     else errorMsg.value = '无法加载电子书'
     loading.value = false
   }

@@ -4,7 +4,6 @@ import hashlib
 import json
 import logging
 import mimetypes
-import os
 import shutil
 import uuid
 from pathlib import Path
@@ -43,7 +42,9 @@ def _safe_media_path(rel_or_abs: str) -> Path:
     if not p.is_absolute():
         p = media_root / p
     real = p.resolve()
-    if not str(real).startswith(str(media_root) + os.sep) and real != media_root:
+    try:
+        real.relative_to(media_root)
+    except ValueError:
         raise HTTPException(status_code=403, detail="非法路径")
     return real
 
