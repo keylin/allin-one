@@ -241,34 +241,3 @@ def parse_ebook(file_path: str) -> EbookMetadata:
         raise ValueError(f"不支持的电子书格式: {ext}")
 
 
-def convert_mobi_to_epub(mobi_path: str, epub_output_path: str) -> bool:
-    """将 MOBI 转换为 EPUB，返回是否成功。
-
-    使用 mobi 库解包 MOBI 文件。如果解包结果包含 EPUB，直接复制；
-    否则返回 False 表示无法转换。
-    """
-    import mobi
-    import shutil as _shutil
-
-    tempdir = None
-    try:
-        tempdir, extracted_path = mobi.extract(mobi_path)
-
-        if extracted_path and extracted_path.endswith(".epub"):
-            _shutil.copy2(extracted_path, epub_output_path)
-            return True
-
-        # 查找解包目录中的 epub 文件
-        for epub_file in Path(tempdir).rglob("*.epub"):
-            _shutil.copy2(str(epub_file), epub_output_path)
-            return True
-
-        logger.warning(f"MOBI extract did not produce EPUB for {mobi_path}")
-        return False
-
-    except Exception as e:
-        logger.warning(f"MOBI→EPUB conversion failed: {e}")
-        return False
-    finally:
-        if tempdir and os.path.isdir(tempdir):
-            shutil.rmtree(tempdir, ignore_errors=True)

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, nextTick, toRef } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useScrollLock } from '@/composables/useScrollLock'
 import {
   getEbookDetail,
@@ -7,7 +7,9 @@ import {
   getReadingProgress,
   updateReadingProgress,
 } from '@/api/ebook'
-import ePub from 'epubjs'
+
+// 注册 foliate-view 自定义元素
+import 'foliate-js/view.js'
 
 const props = defineProps({
   contentId: { type: String, required: true },
@@ -40,11 +42,8 @@ const flatToc = computed(() => {
 })
 
 // Reading position
-const currentCfi = ref('')
 const progress = ref(0)
-const locationsReady = ref(false)
 const chapterTitle = ref('')
-const pageInfo = ref('')
 
 // Settings
 const fontSize = ref(100)
@@ -52,15 +51,19 @@ const theme = ref('light')
 
 // Refs
 const readerEl = ref(null)
+let view = null
 let book = null
-let rendition = null
 let saveTimer = null
+const loadedDocs = []
+
+// Section index → chapter title map (pre-computed on open)
+const chapterMap = []
 
 // --- Theme config ---
-const themeStyles = {
-  light: { body: { color: '#374151', background: '#ffffff' } },
-  warm: { body: { color: '#5b4636', background: '#f8f1e3' } },
-  dark: { body: { color: '#d1d5db', background: '#1a1a2e' } },
+const themeCSS = {
+  light: 'body { color: #374151; background: #ffffff; }',
+  warm: 'body { color: #5b4636; background: #f8f1e3; }',
+  dark: 'body { color: #d1d5db; background: #1a1a2e; }',
 }
 
 const containerBg = computed(
@@ -108,65 +111,52 @@ async function init() {
   errorMsg.value = ''
 
   try {
-    // Book detail (title + TOC)
+    // Book detail (title + server-parsed TOC)
     const detail = await getEbookDetail(props.contentId)
     if (detail.code === 0 && detail.data) {
       bookTitle.value = detail.data.title || '未知书名'
       if (detail.data.toc?.length) tocItems.value = detail.data.toc
     }
 
-    // Fetch EPUB binary with auth
+    // Fetch ebook binary with auth
     const url = getEbookFileUrl(props.contentId)
     const apiKey = localStorage.getItem('api_key')
     const resp = await fetch(url, {
       headers: apiKey ? { 'X-API-Key': apiKey } : {},
     })
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-    const buf = await resp.arrayBuffer()
+    const blob = await resp.blob()
 
-    // epub.js
-    book = ePub(buf)
-    await book.ready
+    // Create foliate-view and render
+    await nextTick()
+    view = document.createElement('foliate-view')
+    view.setAttribute('flow', 'paginated')
+    view.setAttribute('animated', '')
+    readerEl.value.appendChild(view)
 
-    // Fallback TOC
-    if (!tocItems.value.length && book.navigation?.toc?.length) {
-      tocItems.value = book.navigation.toc.map(mapToc)
+    book = await view.open(blob)
+
+    // Extract TOC from book if server didn't provide it
+    if (!tocItems.value.length && book.toc?.length) {
+      tocItems.value = book.toc.map(mapToc)
     }
 
-    // Render
-    await nextTick()
-    rendition = book.renderTo(readerEl.value, {
-      width: '100%',
-      height: '100%',
-      flow: 'paginated',
-      spread: 'none',
-      snap: true,
-    })
+    // Build section → chapter map for quick lookups
+    buildChapterMap()
 
-    // Themes
-    Object.entries(themeStyles).forEach(([n, s]) => rendition.themes.register(n, s))
-    applySettings()
+    // Listen for events
+    view.addEventListener('relocate', onRelocate)
+    view.addEventListener('load', onSectionLoad)
 
     // Restore position
-    let savedCfi = null
     try {
       const prog = await getReadingProgress(props.contentId)
-      if (prog?.data?.cfi) savedCfi = prog.data.cfi
+      if (prog?.data?.progress > 0) {
+        await view.goToFraction(prog.data.progress)
+      }
     } catch {
       /* first read */
     }
-    await rendition.display(savedCfi || undefined)
-
-    // Generate locations (async, for progress %)
-    book.locations.generate(1024).then(() => {
-      locationsReady.value = true
-      if (rendition?.location) updateDisplay(rendition.location)
-    })
-
-    // Events
-    rendition.on('relocated', onRelocated)
-    rendition.on('click', onContentClick)
-    rendition.hooks.content.register(addTouchHandlers)
 
     loading.value = false
   } catch (e) {
@@ -184,8 +174,62 @@ function mapToc(item) {
   }
 }
 
-function addTouchHandlers(contents) {
-  const doc = contents.document
+function buildChapterMap() {
+  if (!book?.toc) return
+  function walk(items) {
+    for (const item of items) {
+      try {
+        const resolved = book.resolveHref(item.href)
+        const idx = typeof resolved === 'number' ? resolved : resolved?.index
+        if (idx != null) {
+          chapterMap[idx] = item.label?.trim() || ''
+        }
+      } catch {
+        /* skip unresolvable hrefs */
+      }
+      if (item.subitems?.length) walk(item.subitems)
+    }
+  }
+  walk(book.toc)
+}
+
+function getChapterTitle(index) {
+  for (let i = index; i >= 0; i--) {
+    if (chapterMap[i]) return chapterMap[i]
+  }
+  return ''
+}
+
+// --- Section load: inject theme CSS + interaction handlers ---
+function onSectionLoad(e) {
+  const { doc } = e.detail
+  loadedDocs.push(doc)
+  injectCSS(doc)
+  addClickHandler(doc)
+  addTouchHandler(doc)
+}
+
+function injectCSS(doc) {
+  let style = doc.getElementById('reader-theme')
+  if (!style) {
+    style = doc.createElement('style')
+    style.id = 'reader-theme'
+    doc.head.appendChild(style)
+  }
+  style.textContent = `${themeCSS[theme.value]} body { font-size: ${fontSize.value}% !important; }`
+}
+
+function addClickHandler(doc) {
+  doc.addEventListener('click', (e) => {
+    const w = doc.defaultView?.innerWidth || window.innerWidth
+    const x = e.clientX
+    if (x < w * 0.25) prev()
+    else if (x > w * 0.75) next()
+    else toggleToolbar()
+  })
+}
+
+function addTouchHandler(doc) {
   let sx = 0
   let sy = 0
   doc.addEventListener(
@@ -202,45 +246,30 @@ function addTouchHandlers(contents) {
       const dx = e.changedTouches[0].clientX - sx
       const dy = e.changedTouches[0].clientY - sy
       if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy) * 1.5) {
-        dx > 0 ? rendition.prev() : rendition.next()
+        dx > 0 ? prev() : next()
       }
     },
     { passive: true },
   )
 }
 
-// --- Relocated ---
-function onRelocated(loc) {
-  if (!loc?.start) return
-  currentCfi.value = loc.start.cfi
-  updateDisplay(loc)
+// --- Relocate ---
+function onRelocate(e) {
+  const { index, fraction } = e.detail
+
+  // Calculate overall progress using section byte sizes
+  if (book?.sections) {
+    const sizes = book.sections.map((s) => s.size || 1)
+    const total = sizes.reduce((a, b) => a + b, 0)
+    const read =
+      sizes.slice(0, index).reduce((a, b) => a + b, 0) + fraction * (sizes[index] || 0)
+    progress.value = total > 0 ? read / total : 0
+  }
+
+  // Chapter title
+  chapterTitle.value = getChapterTitle(index)
+
   scheduleSave()
-}
-
-function updateDisplay(loc) {
-  if (!loc?.start) return
-  if (locationsReady.value && book.locations?.length()) {
-    progress.value = book.locations.percentageFromCfi(loc.start.cfi) || 0
-  }
-  chapterTitle.value = findChapter(loc.start.href) || ''
-  if (loc.start.displayed) {
-    pageInfo.value = `${loc.start.displayed.page} / ${loc.start.displayed.total}`
-  }
-}
-
-function findChapter(href) {
-  const clean = href?.split('#')[0]
-  function walk(items) {
-    for (const it of items) {
-      if (it.href?.split('#')[0] === clean) return it.title
-      if (it.children?.length) {
-        const r = walk(it.children)
-        if (r) return r
-      }
-    }
-    return null
-  }
-  return walk(tocItems.value)
 }
 
 // --- Progress persistence ---
@@ -250,9 +279,9 @@ function scheduleSave() {
 }
 
 function saveNow() {
-  if (!currentCfi.value) return
+  if (progress.value <= 0) return
   updateReadingProgress(props.contentId, {
-    cfi: currentCfi.value,
+    cfi: null,
     progress: progress.value,
     section_title: chapterTitle.value || null,
   }).catch(() => {})
@@ -264,10 +293,10 @@ function onVisChange() {
 
 // --- Navigation ---
 function prev() {
-  rendition?.prev()
+  view?.prev()
 }
 function next() {
-  rendition?.next()
+  view?.next()
 }
 
 function onKeydown(e) {
@@ -287,14 +316,6 @@ function onKeydown(e) {
   if (e.key === 'ArrowRight') next()
 }
 
-function onContentClick(e) {
-  const w = window.innerWidth
-  const x = e.clientX ?? e.pageX ?? w / 2
-  if (x < w * 0.25) prev()
-  else if (x > w * 0.75) next()
-  else toggleToolbar()
-}
-
 function toggleToolbar() {
   toolbarVisible.value = !toolbarVisible.value
   if (!toolbarVisible.value) {
@@ -305,36 +326,38 @@ function toggleToolbar() {
 
 // --- TOC navigation ---
 function goToHref(href) {
-  if (!href) return
-  rendition?.display(href)
+  if (!href || !book) return
+  const target = book.resolveHref(href)
+  if (target != null) view?.goTo(target)
   tocVisible.value = false
   toolbarVisible.value = false
 }
 
 // --- Settings ---
-function applySettings() {
-  if (!rendition) return
-  rendition.themes.select(theme.value)
-  rendition.themes.fontSize(`${fontSize.value}%`)
+function applyThemeToAll() {
+  for (const doc of loadedDocs) {
+    try {
+      injectCSS(doc)
+    } catch {
+      /* doc may be detached */
+    }
+  }
 }
 
 function changeTheme(t) {
   theme.value = t
-  applySettings()
+  applyThemeToAll()
 }
 
 function adjustFont(delta) {
   fontSize.value = Math.max(70, Math.min(160, fontSize.value + delta))
-  applySettings()
+  applyThemeToAll()
 }
 
 // --- Progress slider ---
 function onSlider(e) {
-  const pct = parseFloat(e.target.value)
-  if (locationsReady.value && book.locations?.length()) {
-    const cfi = book.locations.cfiFromPercentage(pct)
-    rendition?.display(cfi)
-  }
+  const frac = parseFloat(e.target.value)
+  view?.goToFraction(frac)
 }
 
 // --- Close ---
@@ -345,14 +368,14 @@ function handleClose() {
 }
 
 function cleanup() {
-  if (rendition) {
-    rendition.destroy()
-    rendition = null
+  if (view) {
+    view.close?.()
+    view.remove()
+    view = null
   }
-  if (book) {
-    book.destroy()
-    book = null
-  }
+  book = null
+  loadedDocs.length = 0
+  chapterMap.length = 0
 }
 </script>
 
@@ -497,12 +520,11 @@ function cleanup() {
             <div class="flex items-center justify-between text-xs mb-2" :class="subCls">
               <span class="truncate max-w-[65%]">{{ chapterTitle || '—' }}</span>
               <span class="tabular-nums shrink-0">
-                {{ locationsReady ? Math.round(progress * 100) + '%' : pageInfo || '—' }}
+                {{ Math.round(progress * 100) }}%
               </span>
             </div>
             <!-- Progress slider -->
             <input
-              v-if="locationsReady"
               type="range"
               min="0"
               max="1"

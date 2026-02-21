@@ -39,7 +39,6 @@ akshare>=1.14.0
 
 # Ebook Parsing
 ebooklib>=0.18
-mobi>=0.3.3
 
 # Utilities
 python-multipart>=0.0.6

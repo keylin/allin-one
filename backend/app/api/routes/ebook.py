@@ -59,16 +59,7 @@ async def upload_ebook(
     book_path.write_bytes(file_content)
     file_size = len(file_content)
 
-    # MOBI→EPUB 转换 (epub.js 前端只能渲染 EPUB)
-    epub_path = str(book_path)
-    if ext in (".mobi", ".azw", ".azw3"):
-        from app.services.ebook_parser import convert_mobi_to_epub
-        converted_epub = media_dir / "book.epub"
-        if convert_mobi_to_epub(str(book_path), str(converted_epub)):
-            epub_path = str(converted_epub)
-            logger.info(f"MOBI converted to EPUB: {converted_epub}")
-
-    # 解析元数据
+    # 解析元数据 (foliate-js 前端原生支持 EPUB/MOBI，无需转换)
     try:
         metadata = parse_ebook(str(book_path))
     except Exception as e:
@@ -118,16 +109,12 @@ async def upload_ebook(
     if metadata.language:
         media_metadata["language"] = metadata.language
 
-    # epub_path: 用于前端渲染的文件 (MOBI 转换后是 epub，原生 EPUB 就是自身)
-    if epub_path != str(book_path):
-        media_metadata["epub_path"] = epub_path
-
     media_item = MediaItem(
         content_id=content_id,
         media_type="ebook",
         original_url=f"file://{filename}",
-        local_path=epub_path,  # 指向可渲染的 EPUB 文件
-        filename=Path(epub_path).name,
+        local_path=str(book_path),
+        filename=book_filename,
         status="downloaded",
         metadata_json=json.dumps(media_metadata, ensure_ascii=False),
     )
