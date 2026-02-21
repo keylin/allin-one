@@ -103,8 +103,10 @@ source_configs 1───∞ content_items 1───∞ pipeline_executions 1�
 
 prompt_templates (独立, 被 step_config 引用)
 system_settings  (独立配置表)
-platform_credentials (平台凭证)
-finance_data_points (金融数据)
+
+platform_credentials 1─ ─ ─ ─∞ source_configs  (credential_id FK)
+
+source_configs 1───∞ finance_data_points  (source_id FK)
 ```
 
 **核心解耦关系**: `source_configs.pipeline_template_id → pipeline_templates.id`
@@ -332,6 +334,61 @@ CREATE TABLE system_settings (
     description     TEXT,                       -- 说明
     updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+```
+
+#### platform_credentials (平台凭证)
+
+集中管理 Cookie/Token 等平台认证信息，多个数据源可引用同一凭证。
+
+```sql
+CREATE TABLE platform_credentials (
+    id              TEXT PRIMARY KEY,           -- UUID
+    platform        TEXT NOT NULL,              -- 平台标识: bilibili/twitter/...
+    credential_type TEXT DEFAULT 'cookie',      -- cookie/oauth_token/api_key
+    credential_data TEXT NOT NULL,              -- 凭证内容 (加密存储)
+    display_name    TEXT NOT NULL,              -- 显示名称
+    status          TEXT DEFAULT 'active',      -- active/expired/error
+    expires_at      DATETIME,                   -- 过期时间
+    extra_info      TEXT,                       -- JSON: 附加信息 (uid, username 等)
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX ix_credential_platform ON platform_credentials(platform);
+```
+
+#### finance_data_points (金融数据点)
+
+专用列式存储金融数值数据，替代 ContentItem 的 raw_data JSON 存储。按数据类型使用不同列：宏观用 value，股票用 OHLCV，基金用 NAV。
+
+```sql
+CREATE TABLE finance_data_points (
+    id              TEXT PRIMARY KEY,           -- UUID
+    source_id       TEXT NOT NULL,              -- 外键 -> source_configs
+    category        TEXT NOT NULL DEFAULT 'unknown', -- 数据分类: macro/stock/fund
+    date_key        TEXT NOT NULL,              -- 原始日期格式: "2024-01-15", "2024-01", "2024Q3"
+    published_at    DATETIME,                   -- 解析后标准时间 (用于排序和范围查询)
+    -- 宏观指标
+    value           FLOAT,                      -- 单值指标 (CPI, GDP 等)
+    -- OHLCV (股票/ETF)
+    open            FLOAT,
+    high            FLOAT,
+    low             FLOAT,
+    close           FLOAT,
+    volume          FLOAT,
+    -- 基金净值
+    unit_nav        FLOAT,                      -- 单位净值
+    cumulative_nav  FLOAT,                      -- 累计净值
+    -- 分析
+    alert_json      TEXT,                       -- 告警信息 (JSON)
+    analysis_result TEXT,                       -- LLM 分析结果
+    collected_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (source_id) REFERENCES source_configs(id)
+);
+
+CREATE UNIQUE INDEX uq_finance_source_date ON finance_data_points(source_id, date_key);
+CREATE INDEX ix_finance_source_date ON finance_data_points(source_id, date_key);
 ```
 
 ---
