@@ -34,12 +34,10 @@ def _media_file_url(content_id: str, local_path: Optional[str]) -> Optional[str]
     if not local_path:
         return None
     try:
-        real_media = os.path.realpath(settings.MEDIA_DIR)
-        real_file = os.path.realpath(local_path)
-        if not real_file.startswith(real_media + os.sep) and real_file != real_media:
-            return None
-        rel = os.path.relpath(real_file, real_media)  # e.g. "{content_id}/file.mp4"
-        parts = rel.split(os.sep)
+        media_root = Path(settings.MEDIA_DIR).resolve()
+        file_path = Path(local_path).resolve()
+        rel = file_path.relative_to(media_root)  # raises ValueError if outside
+        parts = rel.parts
         file_part = "/".join(parts[1:]) if len(parts) > 1 else parts[0]
         return f"/api/media/{content_id}/{file_part}"
     except (ValueError, TypeError):
@@ -264,13 +262,14 @@ async def serve_thumbnail(content_id: str, db: Session = Depends(get_db)):
 @router.get("/{content_id}/{file_path:path}")
 async def serve_media_file(content_id: str, file_path: str):
     """从 MEDIA_DIR/{content_id}/ 读取媒体文件（路径遍历保护）"""
-    full_path = os.path.join(settings.MEDIA_DIR, content_id, file_path)
-    real_path = os.path.realpath(full_path)
-    real_media_dir = os.path.realpath(settings.MEDIA_DIR)
-    if not real_path.startswith(real_media_dir + os.sep):
+    media_root = Path(settings.MEDIA_DIR).resolve()
+    real_path = (media_root / content_id / file_path).resolve()
+    try:
+        real_path.relative_to(media_root)
+    except ValueError:
         raise HTTPException(status_code=403, detail="Access denied")
-    if not os.path.isfile(real_path):
+    if not real_path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
 
-    mime_type, _ = mimetypes.guess_type(real_path)
-    return FileResponse(real_path, media_type=mime_type or "application/octet-stream")
+    mime_type, _ = mimetypes.guess_type(str(real_path))
+    return FileResponse(str(real_path), media_type=mime_type or "application/octet-stream")

@@ -238,6 +238,11 @@ class CollectionRecord(Base):
     # Relationships
     source = relationship("SourceConfig", back_populates="collection_records")
 
+    __table_args__ = (
+        Index("ix_colrec_started_at", "started_at"),
+        Index("ix_colrec_status", "status"),
+    )
+
 
 class MediaItem(Base):
     """内容关联的媒体项 — ContentItem 一对多 MediaItem"""

@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 import sqlalchemy
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func, cast, Date, literal_column
+from sqlalchemy import func, cast, Date, Integer as SAInteger, literal_column, case
 
 from app.core.database import get_db
 from app.core.time import utcnow
@@ -161,57 +161,54 @@ async def get_daily_stats(
     except ValueError:
         return {"code": -1, "data": None, "message": "日期格式错误，需要 YYYY-MM-DD"}
 
-    # 筛选当天的采集记录（使用时区边界）
-    records = (
-        db.query(CollectionRecord)
-        .filter(
-            CollectionRecord.started_at >= day_start,
-            CollectionRecord.started_at < day_end
+    # SQL 聚合统计（避免加载全部记录到内存）
+    day_filter = [
+        CollectionRecord.started_at >= day_start,
+        CollectionRecord.started_at < day_end,
+    ]
+    agg = db.query(
+        func.count(CollectionRecord.id).label("total"),
+        func.sum(case((CollectionRecord.status == "completed", 1), else_=0)).label("success"),
+        func.sum(case((CollectionRecord.status == "failed", 1), else_=0)).label("failed"),
+        func.coalesce(func.sum(CollectionRecord.items_found), 0).label("items_found"),
+        func.coalesce(func.sum(CollectionRecord.items_new), 0).label("items_new"),
+    ).filter(*day_filter).one()
+
+    collection_total = agg.total
+    collection_success = agg.success
+    collection_failed = agg.failed
+    items_found = agg.items_found
+    items_new = agg.items_new
+    success_rate = round(collection_success / collection_total * 100, 1) if collection_total > 0 else 0
+
+    # 按数据源分组 Top 10（SQL 聚合）
+    top_source_rows = (
+        db.query(
+            CollectionRecord.source_id,
+            func.coalesce(func.sum(CollectionRecord.items_new), 0).label("items_new"),
+            func.count(CollectionRecord.id).label("collection_count"),
         )
+        .filter(*day_filter)
+        .group_by(CollectionRecord.source_id)
+        .order_by(func.coalesce(func.sum(CollectionRecord.items_new), 0).desc())
+        .limit(10)
         .all()
     )
 
-    # 聚合统计
-    collection_total = len(records)
-    collection_success = sum(1 for r in records if r.status == "completed")
-    collection_failed = sum(1 for r in records if r.status == "failed")
-    items_found = sum(r.items_found or 0 for r in records)
-    items_new = sum(r.items_new or 0 for r in records)
-    success_rate = round(collection_success / collection_total * 100, 1) if collection_total > 0 else 0
-
-    # 按数据源分组统计
-    source_stats = {}
-    for r in records:
-        if r.source_id not in source_stats:
-            source_stats[r.source_id] = {
-                "source_id": r.source_id,
-                "items_new": 0,
-                "collection_count": 0
-            }
-        source_stats[r.source_id]["items_new"] += r.items_new or 0
-        source_stats[r.source_id]["collection_count"] += 1
-
-    # 取 Top 10 数据源（按 items_new 降序）
-    top_source_ids = sorted(
-        source_stats.values(),
-        key=lambda x: x["items_new"],
-        reverse=True
-    )[:10]
-
     # 批量查询数据源名称
-    source_ids = [s["source_id"] for s in top_source_ids]
+    source_ids = [r.source_id for r in top_source_rows]
     sources = db.query(SourceConfig.id, SourceConfig.name).filter(SourceConfig.id.in_(source_ids)).all()
     source_name_map = {s.id: s.name for s in sources}
 
-    # 填充数据源名称
-    top_sources = []
-    for s in top_source_ids:
-        top_sources.append({
-            "source_id": s["source_id"],
-            "source_name": source_name_map.get(s["source_id"], "未知数据源"),
-            "items_new": s["items_new"],
-            "collection_count": s["collection_count"]
-        })
+    top_sources = [
+        {
+            "source_id": r.source_id,
+            "source_name": source_name_map.get(r.source_id, "未知数据源"),
+            "items_new": r.items_new,
+            "collection_count": r.collection_count,
+        }
+        for r in top_source_rows
+    ]
 
     return {
         "code": 0,
@@ -333,6 +330,7 @@ async def get_storage_stats(db: Session = Depends(get_db)):
     audio_bytes = 0
     other_bytes = 0
 
+    from app.core.constants import VIDEO_EXTENSIONS, IMAGE_EXTENSIONS, AUDIO_EXTENSIONS
     if os.path.exists(media_dir):
         for root, dirs, files in os.walk(media_dir):
             for f in files:
@@ -340,11 +338,11 @@ async def get_storage_stats(db: Session = Depends(get_db)):
                 try:
                     size = os.path.getsize(path)
                     ext = os.path.splitext(f)[1].lower()
-                    if ext in ('.mp4', '.mkv', '.webm', '.avi', '.mov', '.flv'):
+                    if ext in VIDEO_EXTENSIONS:
                         video_bytes += size
-                    elif ext in ('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'):
+                    elif ext in IMAGE_EXTENSIONS:
                         image_bytes += size
-                    elif ext in ('.mp3', '.wav', '.aac', '.flac', '.m4a', '.ogg'):
+                    elif ext in AUDIO_EXTENSIONS:
                         audio_bytes += size
                     else:
                         other_bytes += size
@@ -385,19 +383,20 @@ async def get_today_summary(db: Session = Depends(get_db)):
     # 今日边界
     today_start, today_end = get_local_day_boundaries()
 
-    # 1. 今日采集统计
-    today_records = (
-        db.query(CollectionRecord)
-        .filter(
-            CollectionRecord.started_at >= today_start,
-            CollectionRecord.started_at < today_end
-        )
-        .all()
-    )
-    collection_total = len(today_records)
-    collection_success = sum(1 for r in today_records if r.status == "completed")
+    # 1. 今日采集统计（SQL 聚合，避免加载全部记录）
+    today_agg = db.query(
+        func.count(CollectionRecord.id).label("total"),
+        func.sum(case((CollectionRecord.status == "completed", 1), else_=0)).label("success"),
+        func.coalesce(func.sum(CollectionRecord.items_new), 0).label("items_new"),
+    ).filter(
+        CollectionRecord.started_at >= today_start,
+        CollectionRecord.started_at < today_end,
+    ).one()
+
+    collection_total = today_agg.total
+    collection_success = today_agg.success
     collection_success_rate = round(collection_success / collection_total * 100, 1) if collection_total > 0 else 0
-    items_new_today = sum(r.items_new or 0 for r in today_records)
+    items_new_today = today_agg.items_new
 
     # 2. 内容状态分布
     status_counts = dict(

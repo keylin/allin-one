@@ -42,8 +42,8 @@ async def lifespan(app: FastAPI):
     await proc_app.open_async()
     try:
         await proc_app.schema_manager.apply_schema_async()
-    except Exception:
-        logger.debug("Procrastinate schema already exists, skipping")
+    except Exception as e:
+        logger.debug(f"Procrastinate schema apply skipped: {e}")
 
     logger.info("Allin-One started")
     yield
@@ -95,7 +95,39 @@ async def general_exception_handler(request: Request, exc: Exception):
 # Health check (必须在 Static mount 之前注册)
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "version": "1.0.0"}
+    """综合健康检查 — DB / RSSHub / Browserless"""
+    import httpx
+    from sqlalchemy import text
+    from app.core.database import SessionLocal
+
+    checks = {}
+
+    # Database
+    try:
+        with SessionLocal() as db:
+            db.execute(text("SELECT 1"))
+        checks["database"] = "ok"
+    except Exception as e:
+        checks["database"] = f"error: {e}"
+
+    # RSSHub
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(f"{settings.RSSHUB_URL}/")
+            checks["rsshub"] = "ok" if resp.status_code < 500 else f"status {resp.status_code}"
+    except Exception as e:
+        checks["rsshub"] = f"unreachable: {type(e).__name__}"
+
+    # Browserless
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(f"{settings.BROWSERLESS_URL}/pressure")
+            checks["browserless"] = "ok" if resp.status_code < 500 else f"status {resp.status_code}"
+    except Exception as e:
+        checks["browserless"] = f"unreachable: {type(e).__name__}"
+
+    all_ok = all(v == "ok" for v in checks.values())
+    return {"status": "ok" if all_ok else "degraded", "checks": checks}
 
 # API Routes
 app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"])

@@ -311,7 +311,8 @@ def should_run_cleanup(current_time: str, target_time: str) -> bool:
 
         # 允许±30分钟误差（因为调度器每小时运行一次）
         return abs(current_minutes - target_minutes) <= 30
-    except:
+    except Exception:
+        logger.warning(f"Failed to parse cleanup time: current='{current_time}', target='{target_time}'")
         return False
 
 
