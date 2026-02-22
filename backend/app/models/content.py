@@ -80,6 +80,7 @@ class MediaType(str, Enum):
     IMAGE = "image"
     VIDEO = "video"
     AUDIO = "audio"
+    EBOOK = "ebook"
 
 
 class ContentStatus(str, Enum):

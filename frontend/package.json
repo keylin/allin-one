@@ -17,6 +17,7 @@
     "lucide-vue-next": "^0.563.0",
     "markdown-it": "^14.1.1",
     "pinia": "^2.1.0",
+    "foliate-js": "^1.0.1",
     "qrcode": "^1.5.4",
     "vue": "^3.4.0",
     "vue-echarts": "^7.0.0",

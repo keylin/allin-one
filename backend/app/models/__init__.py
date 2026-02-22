@@ -6,3 +6,4 @@ from app.models.finance import FinanceDataPoint  # noqa: F401
 from app.models.pipeline import PipelineTemplate, PipelineExecution, PipelineStep  # noqa: F401
 from app.models.prompt_template import PromptTemplate  # noqa: F401
 from app.models.system_setting import SystemSetting  # noqa: F401
+from app.models.ebook import ReadingProgress, BookAnnotation, BookBookmark  # noqa: F401
