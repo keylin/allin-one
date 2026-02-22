@@ -1,158 +1,119 @@
 # Allin-One
 
-个人信息聚合与智能分析平台。从 RSS / Bilibili / YouTube / 网页等渠道自动采集内容，通过 LLM 分析后结构化呈现。
+**个人信息聚合与智能分析平台** — 你的私人「信息操作系统」。
 
-## 功能特性
+从海量信息源中自动采集、智能分析、结构化呈现，用最少的时间获取最高密度的信息价值。
 
-- **多源采集** — 支持 RSS、B站、YouTube、网页抓取、文件上传、AkShare 等 8 种数据源，统一通过 RSSHub 网关聚合
-- **三级抓取** — L1 HTTP → L2 Browserless (无头浏览器) → L3 browser-use (AI 驱动)，按需自动升级
-- **流水线引擎** — 数据源与处理流水线解耦，可编排多步骤分析链（摘要、翻译、分类、评分等）
-- **LLM 分析** — 接入 OpenAI 兼容接口，支持自定义 Prompt 模板进行智能分析
-- **多渠道推送** — Webhook、钉钉、邮件，分析结果实时推送
-- **视频处理** — 支持视频下载（yt-dlp）与在线播放（ArtPlayer）
-- **响应式 UI** — 卡片式信息流、仪表盘、内容管理，适配移动端
+---
 
-## 技术栈
+## 谁需要 Allin-One？
 
-| 层级 | 技术 |
+如果你是技术从业者、信息重度消费者或内容创作者，每天在 RSS、B站、YouTube、技术博客、新闻网站之间来回切换，花大量时间阅读、筛选、整理信息——Allin-One 就是为你打造的。
+
+**一个平台聚合所有信息源，AI 帮你读、帮你分析、帮你整理。**
+
+---
+
+## 核心能力
+
+### 多源聚合，一处阅读
+
+支持 RSS、B站、YouTube、播客、网页、金融数据等 10 种数据源类型。无论信息散落在哪些平台，统一订阅、统一浏览。支持 OPML 批量导入已有的 RSS 订阅，迁移零成本。
+
+### AI 智能分析
+
+每条采集内容自动经过 AI 分析，生成结构化摘要、关键观点、情感倾向、实体识别等。不用逐篇细读，扫一眼分析结果就能决定是否深入。支持自定义提示词模板，按你的需求定制分析角度。
+
+### 视频与播客处理
+
+B站、YouTube 视频自动下载到本地，支持内嵌播放器直接观看。播客内容同样纳入采集体系，音视频不再是信息盲区。
+
+### 灵活的流水线编排
+
+采集和处理完全解耦。你可以为不同类型的内容配置不同的处理流程：英文博客自动翻译再分析，视频自动下载再提取字幕，金融数据自动生成趋势报告。所有步骤可自由组合。
+
+### 智能调度，省心运行
+
+系统自动分析每个数据源的更新规律，智能调整采集频率。活跃源勤查，冷门源少查，失败时自动退避重试。你也可以手动设定固定频率或按需触发。
+
+### 内容对话
+
+对任意一条内容发起 AI 对话，追问细节、请求延伸分析或换个角度解读。信息消费不再是单向的。
+
+### 收藏与媒体管理
+
+一键收藏值得深入的内容。收藏可自动触发媒体下载，确保重要视频离线可用。独立的媒体管理页面统一浏览所有下载的视频和音频。
+
+### 多渠道推送
+
+分析结果支持通过 Webhook、钉钉、邮件等渠道实时推送，重要信息不遗漏。
+
+### 数据完全自主
+
+单机 Docker 一键部署，数据全部存储在你自己的服务器上。支持全量数据导入导出，你的数据永远属于你。
+
+---
+
+## 产品全景
+
+| 模块 | 能力 |
 |------|------|
-| 后端 | Python 3.11+, FastAPI, SQLAlchemy 2.0, Pydantic v2 |
-| 前端 | Vue 3.4, Vite 5, TailwindCSS 3.4, Pinia, Axios |
-| 数据库 | SQLite (WAL 模式) |
-| 任务队列 | Huey (SQLite 后端) |
-| 定时调度 | APScheduler |
-| 外部服务 | RSSHub, Browserless, OpenAI 兼容 API |
-| 部署 | Docker Compose |
+| **信息流** | 卡片式浏览、AI 分析摘要、原文阅读、收藏、数据源筛选 |
+| **数据源管理** | 多类型数据源配置、OPML 导入导出、批量操作、一键采集 |
+| **内容库** | 表格视图、多维筛选排序、批量 AI 分析、去重管理 |
+| **流水线** | 模板配置、步骤编排、执行监控、失败重试 |
+| **媒体管理** | 视频/音频下载、在线播放、封面展示 |
+| **收藏** | 收藏内容专属视图、收藏触发下载 |
+| **金融数据** | 宏观经济指标采集与可视化展示 |
+| **仪表盘** | 系统概览、采集统计、异常告警、调度日志 |
+| **系统设置** | 大模型配置、数据保留策略、凭证管理、通知配置 |
+
+---
 
 ## 快速开始
 
-### Docker 部署（推荐）
+### 环境准备
+
+- 一台 Linux 服务器 / NAS / 个人 VPS（推荐 2 核 4G 以上）
+- Docker 与 Docker Compose
+- 一个 OpenAI 兼容的大模型 API Key
+
+### 一键部署
 
 ```bash
-# 克隆项目
 git clone <repo-url> && cd allin-one
 
 # 配置环境变量
 cp backend/.env.example backend/.env
-# 编辑 .env 填入 LLM API Key 等配置
+# 编辑 .env，填入大模型 API Key 等配置
 
-# 一键启动
+# 启动
 docker compose up -d --build
 ```
 
-启动后访问 `http://localhost:8000`。
+启动后访问 `http://your-server-ip:8000` 即可使用。
 
-### 本地开发
-
-```bash
-# 后端
-cd backend
-pip install -r requirements.txt
-alembic upgrade head
-uvicorn app.main:app --reload --port 8000
-
-# 前端（另一个终端）
-cd frontend
-npm install
-npm run dev
-
-# 任务 Worker（另一个终端）
-cd backend
-huey_consumer app.tasks.huey_instance.huey
-```
-
-或使用一键开发脚本（**推荐，已默认支持局域网访问**）：
-
-```bash
-./local-dev.sh
-```
-
-启动后可通过以下地址访问：
-- **本机**: `http://localhost:3000`
-- **局域网设备**（手机/平板）: `http://<你的局域网IP>:3000`
-
-脚本会自动检测并显示局域网访问地址。
-
-## 项目结构
-
-```
-allin-one/
-├── backend/
-│   ├── app/
-│   │   ├── main.py              # FastAPI 入口
-│   │   ├── core/                # 配置与数据库
-│   │   ├── models/              # SQLAlchemy 模型
-│   │   ├── schemas/             # Pydantic Schema
-│   │   ├── api/routes/          # API 路由
-│   │   ├── services/
-│   │   │   ├── collectors/      # 数据采集器 (RSS, B站, 网页...)
-│   │   │   ├── pipeline/        # 流水线引擎 (编排/执行/注册)
-│   │   │   ├── analyzers/       # LLM 分析器
-│   │   │   └── publishers/      # 推送渠道 (Webhook, 钉钉, 邮件)
-│   │   └── tasks/               # Huey 异步任务 + APScheduler
-│   ├── alembic/                 # 数据库迁移
-│   └── requirements.txt
-├── frontend/
-│   └── src/
-│       ├── views/               # 8 个页面视图
-│       ├── components/          # 可复用组件
-│       ├── stores/              # Pinia 状态管理
-│       ├── composables/         # 组合函数
-│       └── api/                 # Axios 封装
-├── docs/                        # 设计文档
-├── docker-compose.yml           # 生产部署配置
-└── Dockerfile                   # 多阶段构建
-```
-
-## 核心架构
-
-```
-数据源 (Source)          流水线 (Pipeline)           输出
-┌──────────┐           ┌──────────────────┐       ┌──────────┐
-│ RSS      │──┐        │ fetch_content    │       │ 结构化存储│
-│ B站      │  │ 采集   │ llm_analyze      │  推送 │ Webhook  │
-│ YouTube  │──┼──────→ │ extract_summary  │─────→ │ 钉钉     │
-│ 网页抓取  │  │        │ translate        │       │ 邮件     │
-│ 文件上传  │──┘        │ ...              │       │ 仪表盘   │
-└──────────┘           └──────────────────┘       └──────────┘
-     ↑                        ↑
-     │                        │
-  Collector              Pipeline Engine
-  负责「从哪来」          负责「怎么处理」
-```
-
-- **数据源与流水线解耦**：通过 `pipeline_template_id` 外键绑定，灵活组合
-- **抓取与处理分离**：Collector 产出 ContentItem，Pipeline 负责后续处理
-- **步骤可编排**：Pipeline 步骤通过 Registry 注册，支持自定义扩展
-
-## 页面概览
-
-| 页面 | 路径 | 功能 |
-|------|------|------|
-| 仪表盘 | `/dashboard` | 统计概览、采集趋势、告警 |
-| 信息流 | `/feed` | 卡片式浏览、筛选、排序 |
-| 数据源 | `/sources` | 数据源 CRUD、OPML 导入导出 |
-| 内容库 | `/content` | 表格检索、批量操作 |
-| 提示词模板 | `/prompt-templates` | LLM Prompt 配置管理 |
-| 流水线 | `/pipelines` | 执行历史、状态监控 |
-| 视频 | `/video-download` | 视频下载与播放 |
-| 设置 | `/settings` | 系统配置、代理设置 |
+---
 
 ## 文档
 
-- [产品方案 PRD](docs/product_spec.md)
-- [系统架构与 API 规范](docs/system_design.md)
-- [业务术语与枚举定义](docs/business_glossary.md)
-- [调度器与流水线设计](docs/design_scheduler_pipeline.md)
+- [产品方案 PRD](docs/product_spec.md) — 完整的功能设计与规划
+- [系统架构设计](docs/system_design.md) — 技术架构与 API 规范
+- [业务术语表](docs/business_glossary.md) — 核心概念与枚举定义
 
-## 关键设计决策
+---
 
-| 决策 | 原因 |
-|------|------|
-| SQLite 而非 PostgreSQL | 个人项目，单机部署，WAL 模式性能足够 |
-| Huey 而非 Celery | 无需 Redis，SQLite 后端更轻量 |
-| 前后端同容器 | Vite 构建产物由 FastAPI 静态服务，简化部署 |
-| RSSHub 统一网关 | B站/YouTube 等均走 RSSHub，避免维护多种采集协议 |
+## 版本路线
+
+**v1.0** — 核心采集与分析：RSS 采集、流水线引擎、AI 分析、信息流阅读、Docker 部署 ✅
+
+**v1.1** — 视频与媒体：B站/YouTube 视频下载、字幕提取、内嵌播放器、凭证管理、金融数据 ✅
+
+**v1.2** — 智能调度与增强：智能调度系统、内容对话、收藏页、播客支持、数据导入导出 ✅
+
+**v2.0** — 高级功能（规划中）：AI 浏览器操控、多语言翻译、知识图谱、邮件/钉钉推送
+
+---
 
 ## License
 
