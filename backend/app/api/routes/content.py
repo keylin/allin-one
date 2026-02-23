@@ -276,6 +276,34 @@ async def list_content(
         for mi in all_media:
             media_items_map[mi.content_id].append(mi)
 
+    # 批量查询重复项计数和来源 (折叠指示器)
+    dup_count_map: dict[str, int] = {}
+    dup_sources_map: dict[str, list] = {}
+    if item_ids:
+        dup_rows = (
+            db.query(ContentItem.duplicate_of_id, func.count(ContentItem.id))
+            .filter(ContentItem.duplicate_of_id.in_(item_ids))
+            .group_by(ContentItem.duplicate_of_id)
+            .all()
+        )
+        dup_count_map = {row[0]: row[1] for row in dup_rows}
+
+        if dup_count_map:
+            dup_source_rows = (
+                db.query(
+                    ContentItem.duplicate_of_id,
+                    SourceConfig.id,
+                    SourceConfig.name,
+                )
+                .join(SourceConfig, ContentItem.source_id == SourceConfig.id)
+                .filter(ContentItem.duplicate_of_id.in_(list(dup_count_map.keys())))
+                .all()
+            )
+            for dup_of_id, sid, sname in dup_source_rows:
+                lst = dup_sources_map.setdefault(dup_of_id, [])
+                if not any(s["source_id"] == sid for s in lst):
+                    lst.append({"source_id": sid, "source_name": sname})
+
     # 组装响应
     result_list = []
     for item in items:
@@ -297,6 +325,9 @@ async def list_content(
                 data["audio_duration"] = raw.get("itunes", {}).get("duration")
             except (json.JSONDecodeError, TypeError):
                 pass
+        # 重复折叠信息
+        data["duplicate_count"] = dup_count_map.get(item.id, 0)
+        data["duplicate_sources"] = dup_sources_map.get(item.id, [])
         result_list.append(data)
 
     return {
@@ -763,6 +794,54 @@ async def get_content(content_id: str, db: Session = Depends(get_db)):
     data["source_name"] = source.name if source else None
     data["media_items"] = _build_media_summaries(media_items)
     data["reading_time_min"] = _estimate_reading_time(item)
+
+    # 重复来源列表（双向：原件看重复项，重复项看原件+兄弟）
+    related_items = []
+    if item.duplicate_of_id:
+        # 当前是重复项 → 查原件 + 其他兄弟
+        original = db.get(ContentItem, item.duplicate_of_id)
+        if original:
+            orig_source = db.get(SourceConfig, original.source_id)
+            related_items.append({
+                "id": original.id,
+                "title": original.title,
+                "url": original.url,
+                "source_name": orig_source.name if orig_source else None,
+                "collected_at": original.collected_at.isoformat() if original.collected_at else None,
+                "is_original": True,
+            })
+        siblings = db.query(ContentItem).filter(
+            ContentItem.duplicate_of_id == item.duplicate_of_id,
+            ContentItem.id != content_id,
+        ).all()
+        for sib in siblings:
+            sib_source = source_map if hasattr(source_map, 'get') else {}
+            s = db.get(SourceConfig, sib.source_id)
+            related_items.append({
+                "id": sib.id,
+                "title": sib.title,
+                "url": sib.url,
+                "source_name": s.name if s else None,
+                "collected_at": sib.collected_at.isoformat() if sib.collected_at else None,
+                "is_original": False,
+            })
+    else:
+        # 当前是原件 → 查所有重复项
+        duplicates = db.query(ContentItem).filter(
+            ContentItem.duplicate_of_id == content_id,
+        ).all()
+        for dup in duplicates:
+            dup_source = db.get(SourceConfig, dup.source_id)
+            related_items.append({
+                "id": dup.id,
+                "title": dup.title,
+                "url": dup.url,
+                "source_name": dup_source.name if dup_source else None,
+                "collected_at": dup.collected_at.isoformat() if dup.collected_at else None,
+                "is_original": False,
+            })
+    data["duplicates"] = related_items
+
     return {"code": 0, "data": data, "message": "ok"}
 
 
