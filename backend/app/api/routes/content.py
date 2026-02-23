@@ -146,6 +146,7 @@ async def list_content(
     date_from: str | None = Query(None, description="起始日期 YYYY-MM-DD"),
     date_to: str | None = Query(None, description="结束日期 YYYY-MM-DD"),
     tag: str | None = Query(None, description="按标签筛选"),
+    hide_duplicates: bool = Query(True, description="隐藏相似重复内容 (默认 true)"),
     sort_by: str | None = Query(None, description="排序字段: collected_at / published_at / updated_at / title"),
     sort_order: str | None = Query(None, description="排序方向: desc / asc"),
     cursor_id: str | None = Query(None, description="游标: 上一页最后一条的 ID，用于游标分页"),
@@ -212,6 +213,9 @@ async def list_content(
         query = query.filter(
             cast(ContentItem.analysis_result, JSONB)["tags"].astext.contains(tag)
         )
+
+    if hide_duplicates:
+        query = query.filter(ContentItem.duplicate_of_id.is_(None))
 
     # 排序: 白名单校验，非法值 fallback collected_at desc
     col = SORT_COLUMNS.get(sort_by, ContentItem.collected_at)
@@ -521,6 +525,13 @@ async def content_stats(db: Session = Depends(get_db)):
         .scalar()
     )
 
+    # 重复内容统计
+    duplicate_count = (
+        db.query(func.count(ContentItem.id))
+        .filter(ContentItem.duplicate_of_id.isnot(None))
+        .scalar()
+    )
+
     return {
         "code": 0,
         "data": {
@@ -534,6 +545,7 @@ async def content_stats(db: Session = Depends(get_db)):
             "unread": unread_count,
             "read": read_count,
             "favorited": favorited_count,
+            "duplicate": duplicate_count,
         },
         "message": "ok",
     }
