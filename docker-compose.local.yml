@@ -39,6 +39,10 @@ services:
       CACHE_TYPE: memory
       CACHE_EXPIRE: 900
       PUPPETEER_WS_ENDPOINT: ws://browserless:3000
+      # 代理配置（解决 GFW DNS 污染，使用 RSSHub 原生代理变量）
+      PROXY_PROTOCOL: http
+      PROXY_HOST: 192.168.31.117
+      PROXY_PORT: "1082"
     depends_on:
       browserless:
         condition: service_healthy
