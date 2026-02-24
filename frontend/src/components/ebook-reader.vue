@@ -1,6 +1,7 @@
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useScrollLock } from '@/composables/useScrollLock'
+import { useSwipe } from '@/composables/useSwipe'
 import {
   getEbookDetail,
   fetchEbookBlob,
@@ -58,18 +59,26 @@ function savePrefs() {
   localStorage.setItem(PREFS_KEY, JSON.stringify({
     fontSize: fontSize.value,
     theme: theme.value,
+    fontFamily: fontFamily.value,
+    flowMode: flowMode.value,
   }))
 }
 const savedPrefs = loadPrefs()
 const fontSize = ref(savedPrefs.fontSize || 100)
 const theme = ref(savedPrefs.theme || 'light')
+const fontFamily = ref(savedPrefs.fontFamily || 'default')
+const isMobile = navigator.maxTouchPoints > 1
+const flowMode = ref(savedPrefs.flowMode ?? (isMobile ? 'scrolled' : 'paginated'))
 
 // Refs
 const readerEl = ref(null)
+const tocPanelEl = ref(null)
 let view = null
 let book = null
 let saveTimer = null
-const loadedDocs = []
+let toolbarTimer = null
+let isAnimating = false
+let keyThrottle = false
 
 // Section index → chapter title map (pre-computed on open)
 const chapterMap = []
@@ -116,6 +125,7 @@ onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', onVisChange)
   window.removeEventListener('beforeunload', saveNow)
   clearTimeout(saveTimer)
+  clearTimeout(toolbarTimer)
   saveNow()
   cleanup()
 })
@@ -135,18 +145,25 @@ async function init() {
 
     // Fetch ebook binary (auth handled by axios interceptor)
     const blob = await fetchEbookBlob(props.contentId)
+    // foliate-js 的 isCBZ/isFBZ 会调用 name.endsWith()，Blob 没有 name 属性会抛错
+    // 必须包成 File 并带上正确的文件名
+    const fmt = detail?.data?.format || 'epub'
+    const ebookFile = new File([blob], `book.${fmt}`, { type: blob.type || 'application/epub+zip' })
 
     // Create foliate-view and render
+    // foliate-view 自定义元素默认 display:inline，必须显式设置尺寸，否则 paginator 渲染区域为 0x0
     await nextTick()
     view = document.createElement('foliate-view')
-    view.setAttribute('flow', 'paginated')
-    view.setAttribute('animated', '')
+    view.style.cssText = 'display:block;width:100%;height:100%;'
+    view.setAttribute('flow', flowMode.value)
     readerEl.value.appendChild(view)
 
-    book = await view.open(blob)
+    await view.open(ebookFile)
+    book = view.book  // view.open() 无返回值，从元素属性取
+    applyStyles()
 
     // Extract TOC from book if server didn't provide it
-    if (!tocItems.value.length && book.toc?.length) {
+    if (!tocItems.value.length && book?.toc?.length) {
       tocItems.value = book.toc.map(mapToc)
     }
 
@@ -157,14 +174,21 @@ async function init() {
     view.addEventListener('relocate', onRelocate)
     view.addEventListener('load', onSectionLoad)
 
-    // Restore position
+    // Restore position OR navigate to start
+    // view.open() 只加载书籍但不渲染任何页面，必须调用 goTo 才会显示内容
+    let navigated = false
     try {
       const prog = await getReadingProgress(props.contentId)
       if (prog?.data?.progress > 0) {
         await view.goToFraction(prog.data.progress)
+        navigated = true
       }
     } catch {
-      /* first read */
+      /* ignore progress errors */
+    }
+    if (!navigated) {
+      // 没有保存进度，或进度恢复失败，跳到书籍开头
+      await view.init({ showTextStart: false })
     }
 
     loading.value = false
@@ -175,7 +199,7 @@ async function init() {
     else if (status === 403) errorMsg.value = '无权访问该电子书'
     else if (status === 413) errorMsg.value = '文件过大，无法加载'
     else if (e.code === 'ECONNABORTED' || e.message?.includes('timeout')) errorMsg.value = '加载超时，请重试'
-    else errorMsg.value = '无法加载电子书'
+    else errorMsg.value = `无法加载电子书：${e?.message || e}`
     loading.value = false
   }
 }
@@ -214,83 +238,161 @@ function getChapterTitle(index) {
   return ''
 }
 
-// --- Section load: inject theme CSS + interaction handlers ---
+// --- Styles helpers ---
+const fontFamilyCSS = {
+  default: '',
+  kaiti: '"STKaiti","华文楷体","楷体","KaiTi",Georgia,serif',
+  songti: '"STSong","华文宋体","宋体","SimSun",Georgia,serif',
+  heiti: '"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC",sans-serif',
+}
+
+function getStyles() {
+  const ff = fontFamilyCSS[fontFamily.value]
+  const fontRule = ff ? `body, p, div, span { font-family: ${ff} !important; }` : ''
+  return `${themeCSS[theme.value]} body { font-size: ${fontSize.value}% !important; } ${fontRule}`
+}
+
+function applyStyles() {
+  view?.renderer?.setStyles?.(getStyles())
+}
+
+// --- Section load: attach interaction handlers ---
 function onSectionLoad(e) {
-  const { doc } = e.detail
-  loadedDocs.push(doc)
-  injectCSS(doc)
-  addClickHandler(doc)
-  addTouchHandler(doc)
+  addTouchHandler(e.detail.doc)
 }
 
-function injectCSS(doc) {
-  let style = doc.getElementById('reader-theme')
-  if (!style) {
-    style = doc.createElement('style')
-    style.id = 'reader-theme'
-    doc.head.appendChild(style)
+// --- Page turn animation ---
+// ctx.drawImage() does NOT accept HTMLIFrameElement (not a valid CanvasImageSource),
+// so we use a solid background-color overlay that slides away to reveal the new page.
+function createOverlay() {
+  const overlay = document.createElement('div')
+  overlay.style.cssText = `position:absolute;inset:0;z-index:10;pointer-events:none;background:${containerBg.value};`
+  // Subtle shadow at the leading edge for depth
+  const shadow = document.createElement('div')
+  shadow.style.cssText = 'position:absolute;inset:0;background:linear-gradient(to right,rgba(0,0,0,0.06) 0%,transparent 8%);pointer-events:none;'
+  overlay.appendChild(shadow)
+  return overlay
+}
+
+function runOverlayAnimation(overlay, direction, onEnd) {
+  overlay.style.transform = 'translateX(0)'
+  let ended = false
+  function finish() {
+    if (ended) return
+    ended = true
+    overlay.remove()
+    onEnd()
   }
-  style.textContent = `${themeCSS[theme.value]} body { font-size: ${fontSize.value}% !important; }`
+  overlay.addEventListener('transitionend', finish, { once: true })
+  setTimeout(finish, 500)
+  requestAnimationFrame(() => {
+    overlay.style.transition = 'transform 380ms cubic-bezier(0.25,0.46,0.45,0.94)'
+    overlay.style.transform = direction === 'next' ? 'translateX(-100%)' : 'translateX(100%)'
+  })
 }
 
-function addClickHandler(doc) {
+async function animatePageTurn(direction) {
+  if (isAnimating) return
+  isAnimating = true
+  const overlay = createOverlay()
+  readerEl.value.appendChild(overlay)
+  try {
+    if (direction === 'next') await view?.next()
+    else await view?.prev()
+  } catch { /* ignore */ }
+  runOverlayAnimation(overlay, direction, () => { isAnimating = false })
+}
+
+function addTouchHandler(doc) {
+  let sx = 0, sy = 0
+  let overlay = null
+  let swipeHandled = false
+  let mouseDownX = 0, mouseDownY = 0
+
+  doc.addEventListener('mousedown', (e) => {
+    mouseDownX = e.clientX
+    mouseDownY = e.clientY
+  })
+
+  // Click handler shares the swipeHandled flag via closure
   doc.addEventListener('click', (e) => {
-    // Skip if a swipe gesture was just handled
     if (swipeHandled) { swipeHandled = false; return }
+    if (settingsVisible.value) { settingsVisible.value = false; return }
+    if (Math.abs(e.clientX - mouseDownX) > 5 || Math.abs(e.clientY - mouseDownY) > 5) return
     const w = doc.defaultView?.innerWidth || window.innerWidth
     const x = e.clientX
     if (x < w * 0.25) prev()
     else if (x > w * 0.75) next()
     else toggleToolbar()
   })
-}
 
-let swipeHandled = false
+  doc.addEventListener('touchstart', (e) => {
+    sx = e.changedTouches[0].clientX
+    sy = e.changedTouches[0].clientY
+    swipeHandled = false
+    overlay = null
+  }, { passive: true })
 
-function addTouchHandler(doc) {
-  let sx = 0
-  let sy = 0
-  doc.addEventListener(
-    'touchstart',
-    (e) => {
-      sx = e.changedTouches[0].clientX
-      sy = e.changedTouches[0].clientY
-      swipeHandled = false
-    },
-    { passive: true },
-  )
-  doc.addEventListener(
-    'touchend',
-    (e) => {
-      const dx = e.changedTouches[0].clientX - sx
-      const dy = e.changedTouches[0].clientY - sy
-      // Use 8% of screen width as threshold (min 50px) for swipe detection
-      const threshold = Math.max(50, window.innerWidth * 0.08)
-      if (Math.abs(dx) > threshold && Math.abs(dx) > Math.abs(dy) * 1.5) {
-        swipeHandled = true
-        dx > 0 ? prev() : next()
+  doc.addEventListener('touchmove', (e) => {
+    if (flowMode.value !== 'paginated') return
+    const dx = e.changedTouches[0].clientX - sx
+    const dy = e.changedTouches[0].clientY - sy
+    if (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy) && !isAnimating) {
+      if (!overlay) {
+        overlay = createOverlay()
+        overlay.style.transform = 'translateX(0)'
+        readerEl.value.appendChild(overlay)
       }
-    },
-    { passive: true },
-  )
+      overlay.style.transform = `translateX(${dx}px)`
+    }
+  }, { passive: true })
+
+  doc.addEventListener('touchend', async (e) => {
+    const dx = e.changedTouches[0].clientX - sx
+    const dy = e.changedTouches[0].clientY - sy
+    const threshold = Math.max(40, window.innerWidth * 0.15)
+    const isHorizontalSwipe = Math.abs(dx) > threshold && Math.abs(dx) > Math.abs(dy) * 1.5
+
+    if (overlay) {
+      const ol = overlay
+      overlay = null
+      if (isHorizontalSwipe) {
+        swipeHandled = true
+        isAnimating = true
+        const direction = dx < 0 ? 'next' : 'prev'
+        try {
+          if (direction === 'next') await view?.next()
+          else await view?.prev()
+        } catch { /* ignore */ }
+        runOverlayAnimation(ol, direction, () => { isAnimating = false })
+      } else {
+        // Snap back to original position
+        let removed = false
+        ol.addEventListener('transitionend', () => { if (!removed) { removed = true; ol.remove() } }, { once: true })
+        setTimeout(() => { if (!removed) { removed = true; ol.remove() } }, 300)
+        ol.style.transition = 'transform 200ms ease-out'
+        ol.style.transform = 'translateX(0)'
+      }
+    } else if (isHorizontalSwipe && !isAnimating) {
+      swipeHandled = true
+      if (flowMode.value === 'paginated') {
+        dx < 0 ? animatePageTurn('next') : animatePageTurn('prev')
+      } else {
+        // 滚动模式：横划直接跳章节，无动画
+        try {
+          if (dx < 0) await view?.next()
+          else await view?.prev()
+        } catch { /* ignore */ }
+      }
+    }
+  }, { passive: true })
 }
 
 // --- Relocate ---
 function onRelocate(e) {
-  const { index, fraction } = e.detail
-
-  // Calculate overall progress using section byte sizes
-  if (book?.sections) {
-    const sizes = book.sections.map((s) => s.size || 1)
-    const total = sizes.reduce((a, b) => a + b, 0)
-    const read =
-      sizes.slice(0, index).reduce((a, b) => a + b, 0) + fraction * (sizes[index] || 0)
-    progress.value = total > 0 ? read / total : 0
-  }
-
-  // Chapter title
-  chapterTitle.value = getChapterTitle(index)
-
+  const { fraction, section, tocItem } = e.detail
+  progress.value = fraction ?? 0
+  chapterTitle.value = tocItem?.label?.trim() || getChapterTitle(section?.current ?? 0)
   scheduleSave()
 }
 
@@ -315,10 +417,10 @@ function onVisChange() {
 
 // --- Navigation ---
 function prev() {
-  view?.prev()
+  animatePageTurn('prev')
 }
 function next() {
-  view?.next()
+  animatePageTurn('next')
 }
 
 function onKeydown(e) {
@@ -334,13 +436,60 @@ function onKeydown(e) {
     handleClose()
     return
   }
-  if (e.key === 'ArrowLeft') prev()
-  if (e.key === 'ArrowRight') next()
+  // Prevent browser scroll for navigation keys
+  if (['ArrowLeft', 'ArrowRight', ' ', 'PageUp', 'PageDown'].includes(e.key)) {
+    e.preventDefault()
+  }
+  if (keyThrottle) return
+  if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+    keyThrottle = true
+    doKeyNav('prev')
+  } else if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') {
+    keyThrottle = true
+    doKeyNav('next')
+  } else if (!e.metaKey && !e.ctrlKey && !e.altKey) {
+    if (e.key === 'h' || e.key === 'k') {
+      keyThrottle = true
+      doKeyNav('prev')
+    } else if (e.key === 'j' || e.key === 'l') {
+      keyThrottle = true
+      doKeyNav('next')
+    }
+  }
+}
+
+// Keyboard navigation: bypasses overlay animation, locks only for the duration
+// of view.next/prev (typically < 50ms within a section), so rapid key presses
+// are processed as fast as the reader can handle without dropping any.
+async function doKeyNav(direction) {
+  if (!view || loading.value) { keyThrottle = false; return }
+  // Safety reset in case view.next/prev hangs (e.g. broken epub)
+  const safety = setTimeout(() => { keyThrottle = false }, 5000)
+  try {
+    if (direction === 'next') await view.next()
+    else await view.prev()
+  } catch { /* ignore */ }
+  clearTimeout(safety)
+  keyThrottle = false
+}
+
+function startAutoHide() {
+  clearTimeout(toolbarTimer)
+  if (!tocVisible.value && !settingsVisible.value) {
+    toolbarTimer = setTimeout(() => { toolbarVisible.value = false }, 4000)
+  }
+}
+
+function stopAutoHide() {
+  clearTimeout(toolbarTimer)
 }
 
 function toggleToolbar() {
   toolbarVisible.value = !toolbarVisible.value
-  if (!toolbarVisible.value) {
+  if (toolbarVisible.value) {
+    startAutoHide()
+  } else {
+    stopAutoHide()
     tocVisible.value = false
     settingsVisible.value = false
   }
@@ -356,25 +505,27 @@ function goToHref(href) {
 }
 
 // --- Settings ---
-function applyThemeToAll() {
-  for (const doc of loadedDocs) {
-    try {
-      injectCSS(doc)
-    } catch {
-      /* doc may be detached */
-    }
-  }
-}
-
 function changeTheme(t) {
   theme.value = t
-  applyThemeToAll()
+  applyStyles()
   savePrefs()
 }
 
 function adjustFont(delta) {
   fontSize.value = Math.max(70, Math.min(160, fontSize.value + delta))
-  applyThemeToAll()
+  applyStyles()
+  savePrefs()
+}
+
+function changeFont(f) {
+  fontFamily.value = f
+  applyStyles()
+  savePrefs()
+}
+
+function changeFlowMode(mode) {
+  flowMode.value = mode
+  view?.renderer?.setAttribute('flow', mode)
   savePrefs()
 }
 
@@ -398,16 +549,31 @@ function cleanup() {
     view = null
   }
   book = null
-  loadedDocs.length = 0
   chapterMap.length = 0
 }
+
+// --- Auto-hide watchers ---
+watch(tocVisible, (val) => {
+  if (val) stopAutoHide()
+  else if (toolbarVisible.value) startAutoHide()
+})
+watch(settingsVisible, (val) => {
+  if (val) stopAutoHide()
+  else if (toolbarVisible.value) startAutoHide()
+})
+
+// --- TOC swipe to close ---
+useSwipe(tocPanelEl, {
+  threshold: 60,
+  onSwipeLeft: () => { tocVisible.value = false },
+})
 </script>
 
 <template>
   <Teleport to="body">
     <div class="fixed inset-0 z-[60]" :style="{ background: containerBg }">
       <!-- Reader target (always present) -->
-      <div ref="readerEl" class="absolute inset-0" />
+      <div ref="readerEl" class="absolute inset-0" style="touch-action: manipulation;" />
 
       <!-- Loading -->
       <div v-if="loading" class="absolute inset-0 flex items-center justify-center z-10">
@@ -590,6 +756,7 @@ function cleanup() {
         >
           <div
             v-if="tocVisible"
+            ref="tocPanelEl"
             class="absolute inset-y-0 left-0 w-72 max-w-[80vw] z-30 flex flex-col border-r backdrop-blur-xl"
             :class="toolbarCls"
             :style="{ background: containerBg }"
@@ -641,9 +808,13 @@ function cleanup() {
         >
           <div
             v-if="settingsVisible"
-            class="absolute top-[52px] right-3 w-56 z-30 rounded-xl border shadow-xl p-4 space-y-4"
+            class="absolute w-56 z-30 rounded-xl border shadow-xl p-4 space-y-4"
             :class="toolbarCls"
-            :style="{ background: containerBg }"
+            :style="{
+              top: 'calc(max(10px, env(safe-area-inset-top, 0px)) + 46px)',
+              right: '12px',
+              background: containerBg,
+            }"
           >
             <!-- Font size -->
             <div>
@@ -669,6 +840,46 @@ function cleanup() {
               </div>
             </div>
 
+            <!-- Font family -->
+            <div>
+              <label class="text-[11px] font-medium mb-2 block tracking-wide uppercase" :class="subCls">
+                字体
+              </label>
+              <div class="flex gap-1.5">
+                <button
+                  @click="changeFont('default')"
+                  class="flex-1 h-9 rounded-lg border-2 text-xs transition-colors"
+                  :class="[toolbarCls, fontFamily === 'default' ? 'border-indigo-500' : 'border-slate-200']"
+                >
+                  默认
+                </button>
+                <button
+                  @click="changeFont('kaiti')"
+                  class="flex-1 h-9 rounded-lg border-2 text-xs transition-colors"
+                  :class="[toolbarCls, fontFamily === 'kaiti' ? 'border-indigo-500' : 'border-slate-200']"
+                  style="font-family: STKaiti,'华文楷体','楷体',KaiTi,Georgia,serif"
+                >
+                  楷
+                </button>
+                <button
+                  @click="changeFont('songti')"
+                  class="flex-1 h-9 rounded-lg border-2 text-xs transition-colors"
+                  :class="[toolbarCls, fontFamily === 'songti' ? 'border-indigo-500' : 'border-slate-200']"
+                  style="font-family: STSong,'华文宋体','宋体',SimSun,Georgia,serif"
+                >
+                  宋
+                </button>
+                <button
+                  @click="changeFont('heiti')"
+                  class="flex-1 h-9 rounded-lg border-2 text-xs transition-colors"
+                  :class="[toolbarCls, fontFamily === 'heiti' ? 'border-indigo-500' : 'border-slate-200']"
+                  style="font-family: 'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif"
+                >
+                  黑
+                </button>
+              </div>
+            </div>
+
             <!-- Theme -->
             <div>
               <label class="text-[11px] font-medium mb-2 block tracking-wide uppercase" :class="subCls">
@@ -690,6 +901,29 @@ function cleanup() {
                   class="flex-1 h-9 rounded-lg border-2 transition-colors bg-[#1a1a2e]"
                   :class="theme === 'dark' ? 'border-indigo-500' : 'border-gray-600'"
                 />
+              </div>
+            </div>
+
+            <!-- Flow mode -->
+            <div>
+              <label class="text-[11px] font-medium mb-2 block tracking-wide uppercase" :class="subCls">
+                阅读模式
+              </label>
+              <div class="flex gap-1.5">
+                <button
+                  @click="changeFlowMode('scrolled')"
+                  class="flex-1 h-9 rounded-lg border-2 text-xs transition-colors"
+                  :class="[toolbarCls, flowMode === 'scrolled' ? 'border-indigo-500' : 'border-slate-200']"
+                >
+                  滚动
+                </button>
+                <button
+                  @click="changeFlowMode('paginated')"
+                  class="flex-1 h-9 rounded-lg border-2 text-xs transition-colors"
+                  :class="[toolbarCls, flowMode === 'paginated' ? 'border-indigo-500' : 'border-slate-200']"
+                >
+                  翻页
+                </button>
               </div>
             </div>
           </div>
