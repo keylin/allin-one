@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import { getContent, analyzeContent, toggleFavorite } from '@/api/content'
+import JsonTreeViewer from '@/components/json-tree-viewer.vue'
 import MarkdownIt from 'markdown-it'
 import DOMPurify from 'dompurify'
 import { formatTimeFull } from '@/utils/time'
@@ -9,7 +10,7 @@ const props = defineProps({
   contentId: { type: String, default: null },
 })
 
-const emit = defineEmits(['favorite', 'analyzed'])
+const emit = defineEmits(['favorite', 'analyzed', 'navigate'])
 
 const content = ref(null)
 const loading = ref(false)
@@ -147,6 +148,36 @@ const renderedRawContent = computed(() => {
 
 const hasRawContent = computed(() => renderedRawContent.value.length > 0)
 
+// Dedup info
+const hasDedupInfo = computed(() => {
+  if (!content.value) return false
+  return content.value.duplicates && content.value.duplicates.length > 0
+})
+
+const isDuplicate = computed(() => !!content.value?.duplicate_of_id)
+
+const originalItem = computed(() => {
+  if (!isDuplicate.value || !content.value?.duplicates) return null
+  return content.value.duplicates.find(d => d.is_original)
+})
+
+function formatTitleHash(hash) {
+  if (hash == null) return null
+  // Convert signed 64-bit int to unsigned hex
+  const unsigned = hash < 0 ? BigInt(hash) + BigInt('18446744073709551616') : BigInt(hash)
+  return '0x' + unsigned.toString(16).padStart(16, '0')
+}
+
+function hammingBadgeClass(distance) {
+  if (distance === 0) return 'bg-emerald-100 text-emerald-700'
+  if (distance <= 2) return 'bg-orange-100 text-orange-700'
+  return 'bg-yellow-100 text-yellow-700'
+}
+
+function navigateToDuplicate(id) {
+  emit('navigate', id)
+}
+
 
 async function handleAnalyze() {
   if (!props.contentId || analyzing.value) return
@@ -196,6 +227,57 @@ defineExpose({ content })
           <span v-if="content.created_at" title="采集时间" class="text-slate-400/80">采集于 {{ formatTime(content.created_at) }}</span>
         </div>
 
+        <!-- SimHash fingerprint (subtle) -->
+        <div v-if="content.title_hash != null" class="mt-1.5">
+          <span class="font-mono text-xs text-slate-400">SimHash {{ formatTitleHash(content.title_hash) }}</span>
+        </div>
+      </div>
+
+      <!-- Dedup info block -->
+      <div v-if="hasDedupInfo" class="bg-amber-50/60 border border-amber-200/60 rounded-xl p-4 space-y-3">
+        <!-- Status line -->
+        <div class="flex items-center gap-2 text-sm">
+          <svg class="w-4 h-4 text-amber-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 7.5V6.108c0-1.135.845-2.098 1.976-2.192.373-.03.748-.057 1.123-.08M15.75 18H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08M15.75 18.75v-1.875a3.375 3.375 0 00-3.375-3.375h-1.5a1.125 1.125 0 01-1.125-1.125v-1.5A3.375 3.375 0 006.375 7.5H6M15.75 18.75h-6a2.25 2.25 0 01-2.25-2.25V7.5m0 0H6.108c-1.135 0-2.098.845-2.192 1.976A48.507 48.507 0 003.84 11.25" />
+          </svg>
+          <span v-if="isDuplicate && originalItem" class="text-amber-800">
+            此内容与
+            <button class="font-medium underline underline-offset-2 hover:text-amber-900" @click="navigateToDuplicate(originalItem.id)">{{ originalItem.title }}</button>
+            相似
+            <span v-if="originalItem.hamming_distance != null" class="inline-flex items-center ml-1 px-1.5 py-0.5 rounded text-xs font-medium" :class="hammingBadgeClass(originalItem.hamming_distance)">
+              距离 {{ originalItem.hamming_distance }}
+            </span>
+          </span>
+          <span v-else class="text-amber-800">
+            有 {{ content.duplicates.length }} 条来自其他源的相似内容
+          </span>
+        </div>
+
+        <!-- Related items list -->
+        <div class="space-y-2">
+          <div
+            v-for="dup in content.duplicates"
+            :key="dup.id"
+            class="flex items-center justify-between gap-3 px-3 py-2 bg-white/70 rounded-lg text-sm"
+          >
+            <div class="min-w-0 flex-1">
+              <button
+                class="text-left text-slate-700 hover:text-indigo-600 font-medium truncate block max-w-full transition-colors"
+                :title="dup.title"
+                @click="navigateToDuplicate(dup.id)"
+              >
+                {{ dup.title }}
+              </button>
+              <span class="text-xs text-slate-400">{{ dup.source_name || '未知来源' }}</span>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <span v-if="dup.is_original" class="px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700">原件</span>
+              <span v-if="dup.hamming_distance != null" class="px-1.5 py-0.5 rounded text-xs font-medium" :class="hammingBadgeClass(dup.hamming_distance)">
+                {{ dup.hamming_distance === 0 ? '完全匹配' : `距离 ${dup.hamming_distance}` }}
+              </span>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- Tabs -->
@@ -246,12 +328,12 @@ defineExpose({ content })
 
       <!-- Tab Content: Analysis Data -->
       <div v-if="activeTab === 'analysis_data'" class="bg-slate-900 rounded-xl p-4 overflow-hidden">
-        <pre class="text-xs text-slate-200 font-mono whitespace-pre overflow-auto max-h-[70vh] custom-scrollbar">{{ typeof content.analysis_result === 'object' ? JSON.stringify(content.analysis_result, null, 2) : content.analysis_result }}</pre>
+        <JsonTreeViewer :data="content.analysis_result" :default-expand-depth="2" />
       </div>
 
       <!-- Tab Content: Raw Data -->
       <div v-if="activeTab === 'raw_data'" class="bg-slate-900 rounded-xl p-4 overflow-hidden">
-        <pre class="text-xs text-slate-200 font-mono whitespace-pre overflow-auto max-h-[70vh] custom-scrollbar">{{ typeof content.raw_data === 'object' ? JSON.stringify(content.raw_data, null, 2) : content.raw_data }}</pre>
+        <JsonTreeViewer :data="content.raw_data" :default-expand-depth="2" />
       </div>
 
 

@@ -44,4 +44,4 @@ LICENSE
 .gitlab-ci.yml
 
 # Local dev scripts
-local-dev.sh
+deploy-local.sh

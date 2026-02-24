@@ -971,7 +971,7 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 ```bash
 #!/bin/bash
-# deploy.sh - 一键部署到远程服务器
+# deploy-remote.sh - 一键部署到远程服务器
 REMOTE_HOST="user@your-server"
 REMOTE_DIR="/opt/allin-one"
 

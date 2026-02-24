@@ -3,12 +3,12 @@
 # Allin-One 本地一键开发部署脚本 (全容器化)
 #
 # 用法:
-#   ./local-dev.sh              # 构建并启动所有服务
-#   ./local-dev.sh start        # 启动 (不重新构建)
-#   ./local-dev.sh stop         # 停止所有服务
-#   ./local-dev.sh restart      # 重启所有服务
-#   ./local-dev.sh status       # 查看运行状态
-#   ./local-dev.sh logs [服务]  # 查看日志 (默认 backend)
+#   ./deploy-local.sh              # 构建并启动所有服务
+#   ./deploy-local.sh start        # 启动 (不重新构建)
+#   ./deploy-local.sh stop         # 停止所有服务
+#   ./deploy-local.sh restart      # 重启所有服务
+#   ./deploy-local.sh status       # 查看运行状态
+#   ./deploy-local.sh logs [服务]  # 查看日志 (默认 backend)
 # ============================================================
 set -e
 
@@ -254,14 +254,14 @@ case "${1:-}" in
         show_status
 
         echo "  提示:"
-        echo "    ./local-dev.sh stop       停止所有服务"
-        echo "    ./local-dev.sh restart    重启所有服务"
-        echo "    ./local-dev.sh rebuild    强制重新构建"
-        echo "    ./local-dev.sh status     查看状态"
-        echo "    ./local-dev.sh logs       查看后端日志"
-        echo "    ./local-dev.sh logs worker-pipeline   查看流水线 Worker 日志"
-        echo "    ./local-dev.sh logs worker-scheduled  查看调度 Worker 日志"
-        echo "    ./local-dev.sh logs frontend  查看前端日志"
+        echo "    ./deploy-local.sh stop       停止所有服务"
+        echo "    ./deploy-local.sh restart    重启所有服务"
+        echo "    ./deploy-local.sh rebuild    强制重新构建"
+        echo "    ./deploy-local.sh status     查看状态"
+        echo "    ./deploy-local.sh logs       查看后端日志"
+        echo "    ./deploy-local.sh logs worker-pipeline   查看流水线 Worker 日志"
+        echo "    ./deploy-local.sh logs worker-scheduled  查看调度 Worker 日志"
+        echo "    ./deploy-local.sh logs frontend  查看前端日志"
         echo ""
         ;;
 esac
