@@ -466,7 +466,8 @@ class MarkAllReadRequest(BaseModel):
 async def mark_all_read(body: MarkAllReadRequest, db: Session = Depends(get_db)):
     """将筛选条件下的所有未读内容标记为已读"""
     query = db.query(ContentItem).filter(
-        (ContentItem.view_count == 0) | (ContentItem.view_count.is_(None))
+        (ContentItem.view_count == 0) | (ContentItem.view_count.is_(None)),
+        ContentItem.duplicate_of_id.is_(None),
     )
 
     if body.source_id:
@@ -527,6 +528,7 @@ async def content_stats(db: Session = Depends(get_db)):
 
     status_rows = (
         db.query(ContentItem.status, func.count(ContentItem.id))
+        .filter(ContentItem.duplicate_of_id.is_(None))
         .group_by(ContentItem.status).all()
     )
     status_counts = {r[0]: r[1] for r in status_rows}
@@ -535,8 +537,9 @@ async def content_stats(db: Session = Depends(get_db)):
     today_count = (
         db.query(func.count(ContentItem.id))
         .filter(
+            ContentItem.duplicate_of_id.is_(None),
             ContentItem.collected_at >= today_start,
-            ContentItem.collected_at < today_end
+            ContentItem.collected_at < today_end,
         )
         .scalar()
     )
@@ -544,19 +547,28 @@ async def content_stats(db: Session = Depends(get_db)):
     # 已读/未读统计
     unread_count = (
         db.query(func.count(ContentItem.id))
-        .filter((ContentItem.view_count == 0) | (ContentItem.view_count.is_(None)))
+        .filter(
+            ContentItem.duplicate_of_id.is_(None),
+            (ContentItem.view_count == 0) | (ContentItem.view_count.is_(None)),
+        )
         .scalar()
     )
     read_count = (
         db.query(func.count(ContentItem.id))
-        .filter(ContentItem.view_count > 0)
+        .filter(
+            ContentItem.duplicate_of_id.is_(None),
+            ContentItem.view_count > 0,
+        )
         .scalar()
     )
 
     # 收藏统计
     favorited_count = (
         db.query(func.count(ContentItem.id))
-        .filter(ContentItem.is_favorited == True)
+        .filter(
+            ContentItem.duplicate_of_id.is_(None),
+            ContentItem.is_favorited == True,
+        )
         .scalar()
     )
 
