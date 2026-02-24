@@ -1,4 +1,9 @@
-version: '3.8'
+# 代理设置（httpx / OpenAI SDK / requests 自动识别）
+# 本地 Clash 监听在局域网 192.168.31.117:1082，远程容器通过宿主网络访问
+x-proxy-env: &proxy-env
+  HTTP_PROXY: http://192.168.31.117:1082
+  HTTPS_PROXY: http://192.168.31.117:1082
+  NO_PROXY: localhost,127.0.0.1,rsshub,browserless,postgres
 
 services:
   # PostgreSQL - 主数据库
@@ -37,6 +42,7 @@ services:
       CACHE_TYPE: memory
       CACHE_EXPIRE: 900
       PUPPETEER_WS_ENDPOINT: ws://browserless:3000
+      PROXY_URI: http://192.168.31.117:1082
     depends_on:
       - browserless
     networks:
@@ -86,13 +92,7 @@ services:
       RSSHUB_URL: http://rsshub:1200
       BROWSERLESS_URL: http://browserless:3000
       LOG_LEVEL: INFO
-      # 安全设置（强烈建议在生产环境配置）
-      # API_KEY: your-secret-key-here
-      # CORS_ORIGINS: https://your-domain.com
-      # 代理设置（httpx / OpenAI SDK 自动识别）
-      # HTTP_PROXY: http://host.docker.internal:7890
-      # HTTPS_PROXY: http://host.docker.internal:7890
-      # NO_PROXY: localhost,rsshub,browserless,postgres
+      <<: *proxy-env
     depends_on:
       postgres:
         condition: service_healthy
@@ -140,6 +140,7 @@ services:
       RSSHUB_URL: http://rsshub:1200
       BROWSERLESS_URL: http://browserless:3000
       LOG_LEVEL: INFO
+      <<: *proxy-env
     depends_on:
       postgres:
         condition: service_healthy
@@ -174,6 +175,7 @@ services:
       RSSHUB_URL: http://rsshub:1200
       BROWSERLESS_URL: http://browserless:3000
       LOG_LEVEL: INFO
+      <<: *proxy-env
     depends_on:
       postgres:
         condition: service_healthy

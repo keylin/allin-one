@@ -148,5 +148,17 @@ app.include_router(credentials.router, prefix="/api/credentials", tags=["credent
 app.include_router(bilibili_auth.router, prefix="/api/credentials/bilibili", tags=["credentials"])
 
 # Static files (Vue frontend) — 必须最后注册，catch-all 会拦截未匹配路由
+# SPA fallback: 非文件路径回落到 index.html（支持 Vue Router history 模式）
+class SPAStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope):
+        from starlette.exceptions import HTTPException as StarletteHTTPException
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as ex:
+            if ex.status_code == 404:
+                return await super().get_response("index.html", scope)
+            raise
+
+
 if os.path.isdir("static"):
-    app.mount("/", StaticFiles(directory="static", html=True), name="static")
+    app.mount("/", SPAStaticFiles(directory="static", html=True), name="static")

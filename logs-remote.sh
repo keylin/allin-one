@@ -1,21 +1,21 @@
 #!/bin/bash
 # ============================================================
-# Allin-One 本地日志查看工具
+# Allin-One 远程服务器日志查看工具
 #
 # 用法:
-#   ./logs.sh                  # 交互式选择要查看的日志
-#   ./logs.sh app              # 主应用 Docker 日志 (实时跟踪)
-#   ./logs.sh worker           # 全部 Worker 日志
-#   ./logs.sh pipeline         # Pipeline Worker 日志
-#   ./logs.sh scheduled        # Scheduled Worker 日志
-#   ./logs.sh rsshub           # RSSHub Docker 日志
-#   ./logs.sh browserless      # Browserless Docker 日志
-#   ./logs.sh db               # PostgreSQL Docker 日志
-#   ./logs.sh all              # 所有容器日志 (混合输出)
-#   ./logs.sh file backend     # 后端文件日志 (data/logs/)
-#   ./logs.sh file worker      # Worker 文件日志
-#   ./logs.sh file error       # 错误文件日志
-#   ./logs.sh error            # 错误日志汇总 (容器 + 文件)
+#   ./logs-remote.sh                  # 交互式选择要查看的日志
+#   ./logs-remote.sh app              # 主应用 Docker 日志 (实时跟踪)
+#   ./logs-remote.sh worker           # 全部 Worker 日志
+#   ./logs-remote.sh pipeline         # Pipeline Worker 日志
+#   ./logs-remote.sh scheduled        # Scheduled Worker 日志
+#   ./logs-remote.sh rsshub           # RSSHub Docker 日志
+#   ./logs-remote.sh browserless      # Browserless Docker 日志
+#   ./logs-remote.sh db               # PostgreSQL Docker 日志
+#   ./logs-remote.sh all              # 所有容器日志 (混合输出)
+#   ./logs-remote.sh file backend     # 后端文件日志 (data/logs/)
+#   ./logs-remote.sh file worker      # Worker 文件日志
+#   ./logs-remote.sh file error       # 错误文件日志
+#   ./logs-remote.sh error            # 错误日志汇总 (容器 + 文件)
 #
 # 选项:
 #   -n, --lines NUM   显示最近 N 行 (默认 100)
@@ -26,9 +26,11 @@
 # ============================================================
 set -e
 
-ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
-DC="docker compose"
-LOG_DIR="$ROOT_DIR/data/logs"
+REMOTE_HOST="${DEPLOY_HOST:-allin@192.168.31.158}"
+REMOTE_DIR="${DEPLOY_DIR:-~/allin-one}"
+SSH="ssh -t -p ${SSH_PORT:-2222} ${REMOTE_HOST}"
+SSH_NT="ssh -T -p ${SSH_PORT:-2222} ${REMOTE_HOST}"
+REMOTE_LOG_DIR="${REMOTE_DIR}/data/logs"
 
 # 颜色
 RED='\033[0;31m'
@@ -85,10 +87,16 @@ docker_logs() {
     [ "$FOLLOW" = true ] && opts="$opts -f"
     [ -n "$SINCE" ] && opts="$opts --since $SINCE"
 
+    local remote_cmd="cd ${REMOTE_DIR} && docker compose logs $opts $services"
+
     if [ -n "$GREP_PATTERN" ]; then
-        $DC logs $opts $services 2>&1 | grep --color=always -i "$GREP_PATTERN"
+        remote_cmd="$remote_cmd 2>&1 | grep --color=always -i '$GREP_PATTERN'"
+    fi
+
+    if [ "$FOLLOW" = true ]; then
+        ${SSH} "$remote_cmd"
     else
-        $DC logs $opts $services
+        ${SSH_NT} "$remote_cmd"
     fi
 }
 
@@ -98,43 +106,58 @@ docker_logs_all() {
     [ "$FOLLOW" = true ] && opts="$opts -f"
     [ -n "$SINCE" ] && opts="$opts --since $SINCE"
 
+    local remote_cmd="cd ${REMOTE_DIR} && docker compose logs $opts"
+
     if [ -n "$GREP_PATTERN" ]; then
-        $DC logs $opts 2>&1 | grep --color=always -i "$GREP_PATTERN"
+        remote_cmd="$remote_cmd 2>&1 | grep --color=always -i '$GREP_PATTERN'"
+    fi
+
+    if [ "$FOLLOW" = true ]; then
+        ${SSH} "$remote_cmd"
     else
-        $DC logs $opts
+        ${SSH_NT} "$remote_cmd"
     fi
 }
 
 # ---- 文件日志 ----
 file_logs() {
     local name="${1:-backend}"
-    local file="$LOG_DIR/${name}.log"
+    local file="${REMOTE_LOG_DIR}/${name}.log"
 
-    if [ ! -f "$file" ]; then
-        echo -e "${RED}日志文件不存在: ${file}${NC}"
+    # 检查远程文件是否存在
+    if ! ${SSH_NT} "test -f ${file}" 2>/dev/null; then
+        echo -e "${RED}远程日志文件不存在: ${file}${NC}"
         echo -e "${DIM}可用的文件日志:${NC}"
-        ls "$LOG_DIR"/*.log 2>/dev/null | while read f; do
+        ${SSH_NT} "ls ${REMOTE_LOG_DIR}/*.log 2>/dev/null" | while read f; do
             echo "  $(basename "$f")"
         done
         return 1
     fi
 
-    echo -e "${CYAN}=== 文件日志: ${file} ===${NC}"
-    echo -e "${DIM}大小: $(du -h "$file" | cut -f1)  行数: $(wc -l < "$file")${NC}"
+    local meta
+    meta=$(${SSH_NT} "du -h '${file}' | cut -f1; wc -l < '${file}'")
+    local fsize
+    fsize=$(echo "$meta" | head -1)
+    local flines
+    flines=$(echo "$meta" | tail -1 | tr -d ' ')
+
+    echo -e "${CYAN}=== 远程文件日志: ${file} ===${NC}"
+    echo -e "${DIM}大小: ${fsize}  行数: ${flines}${NC}"
     echo ""
 
-    if [ "$FOLLOW" = true ]; then
-        if [ -n "$GREP_PATTERN" ]; then
-            tail -n "$LINES" -f "$file" | grep --color=always -i "$GREP_PATTERN"
-        else
-            tail -n "$LINES" -f "$file"
-        fi
+    local tail_cmd="tail -n $LINES"
+    [ "$FOLLOW" = true ] && tail_cmd="tail -n $LINES -f"
+
+    if [ -n "$GREP_PATTERN" ]; then
+        tail_cmd="$tail_cmd '${file}' | grep --color=always -i '$GREP_PATTERN'"
     else
-        if [ -n "$GREP_PATTERN" ]; then
-            tail -n "$LINES" "$file" | grep --color=always -i "$GREP_PATTERN"
-        else
-            tail -n "$LINES" "$file"
-        fi
+        tail_cmd="$tail_cmd '${file}'"
+    fi
+
+    if [ "$FOLLOW" = true ]; then
+        ${SSH} "$tail_cmd"
+    else
+        ${SSH_NT} "$tail_cmd"
     fi
 }
 
@@ -143,31 +166,35 @@ show_errors() {
     local opts="--tail 500"
     [ -n "$SINCE" ] && opts="$opts --since $SINCE"
 
-    echo -e "${RED}${BOLD}=== 错误日志汇总 ===${NC}"
+    echo -e "${RED}${BOLD}=== 错误日志汇总 (远程) ===${NC}"
     echo ""
 
     for svc in allin-one allin-worker-pipeline allin-worker-scheduled; do
         local count
-        count=$($DC logs $opts "$svc" 2>&1 | grep -ic "error\|exception\|traceback\|failed" || true)
-        if [ "$count" -gt 0 ]; then
+        count=$(${SSH_NT} "cd ${REMOTE_DIR} && docker compose logs $opts $svc 2>&1 | grep -ic 'error\|exception\|traceback\|failed'" || true)
+        count=$(echo "$count" | tr -d '[:space:]')
+        if [ -n "$count" ] && [ "$count" -gt 0 ] 2>/dev/null; then
             echo -e "${RED}── $svc ($count 条错误) ──${NC}"
-            $DC logs $opts "$svc" 2>&1 | grep --color=always -i "error\|exception\|traceback\|failed" | tail -n 20
+            ${SSH_NT} "cd ${REMOTE_DIR} && docker compose logs $opts $svc 2>&1 | grep --color=always -i 'error\|exception\|traceback\|failed' | tail -n 20"
             echo ""
         else
             echo -e "${GREEN}── $svc (无错误) ──${NC}"
         fi
     done
 
-    # 文件日志中的错误
-    for logfile in "$LOG_DIR"/*.log; do
-        [ -f "$logfile" ] || continue
+    # 远程文件日志中的错误
+    local logfiles
+    logfiles=$(${SSH_NT} "ls ${REMOTE_LOG_DIR}/*.log 2>/dev/null" || true)
+    for logfile in $logfiles; do
+        [ -z "$logfile" ] && continue
         local name
         name=$(basename "$logfile")
         local count
-        count=$(grep -ic "error\|exception\|traceback\|failed" "$logfile" || true)
-        if [ "$count" -gt 0 ]; then
+        count=$(${SSH_NT} "grep -ic 'error\|exception\|traceback\|failed' '${logfile}'" || true)
+        count=$(echo "$count" | tr -d '[:space:]')
+        if [ -n "$count" ] && [ "$count" -gt 0 ] 2>/dev/null; then
             echo -e "${RED}── 文件: $name ($count 条错误) ──${NC}"
-            grep --color=always -i "error\|exception\|traceback\|failed" "$logfile" | tail -n 10
+            ${SSH_NT} "grep --color=always -i 'error\|exception\|traceback\|failed' '${logfile}' | tail -n 10"
             echo ""
         fi
     done
@@ -176,7 +203,7 @@ show_errors() {
 # ---- 交互式菜单 ----
 show_menu() {
     echo ""
-    echo -e "  ${BOLD}Allin-One 日志查看工具 (本地)${NC}"
+    echo -e "  ${BOLD}Allin-One 日志查看工具 (远程 ${REMOTE_HOST})${NC}"
     echo -e "  ──────────────────────────────"
     echo ""
     echo -e "  ${CYAN}Docker 容器日志:${NC}"
@@ -245,7 +272,7 @@ case "$CMD" in
         ;;
     *)
         echo -e "${RED}未知命令: $CMD${NC}"
-        echo "用法: ./logs.sh [app|worker|pipeline|scheduled|rsshub|browserless|db|all|file|error]"
+        echo "用法: ./logs-remote.sh [app|worker|pipeline|scheduled|rsshub|browserless|db|all|file|error]"
         exit 1
         ;;
 esac
