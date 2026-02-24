@@ -433,6 +433,79 @@ async def get_today_summary(db: Session = Depends(get_db)):
     }
 
 
+@router.get("/dedup-stats")
+async def get_dedup_stats(db: Session = Depends(get_db)):
+    """获取内容去重统计"""
+    # 全局统计
+    total_items = db.query(func.count(ContentItem.id)).scalar()
+    duplicate_count = (
+        db.query(func.count(ContentItem.id))
+        .filter(ContentItem.duplicate_of_id.isnot(None))
+        .scalar()
+    )
+    originals_with_dups = (
+        db.query(func.count(func.distinct(ContentItem.duplicate_of_id)))
+        .filter(ContentItem.duplicate_of_id.isnot(None))
+        .scalar()
+    )
+    dedup_rate = round(duplicate_count / total_items * 100, 1) if total_items > 0 else 0
+
+    # 今日重复数
+    today_start, today_end = get_local_day_boundaries()
+    today_duplicates = (
+        db.query(func.count(ContentItem.id))
+        .filter(
+            ContentItem.duplicate_of_id.isnot(None),
+            ContentItem.collected_at >= today_start,
+            ContentItem.collected_at < today_end,
+        )
+        .scalar()
+    )
+
+    # 按源 Top 10
+    by_source_rows = (
+        db.query(
+            ContentItem.source_id,
+            func.count(ContentItem.id).label("total_count"),
+            func.sum(case((ContentItem.duplicate_of_id.isnot(None), 1), else_=0)).label("dup_count"),
+        )
+        .group_by(ContentItem.source_id)
+        .having(func.sum(case((ContentItem.duplicate_of_id.isnot(None), 1), else_=0)) > 0)
+        .order_by(func.sum(case((ContentItem.duplicate_of_id.isnot(None), 1), else_=0)).desc())
+        .limit(10)
+        .all()
+    )
+
+    # 批量查源名
+    source_ids = [r.source_id for r in by_source_rows]
+    sources = db.query(SourceConfig.id, SourceConfig.name).filter(SourceConfig.id.in_(source_ids)).all()
+    source_name_map = {s.id: s.name for s in sources}
+
+    by_source = [
+        {
+            "source_id": r.source_id,
+            "source_name": source_name_map.get(r.source_id, "未知数据源"),
+            "duplicate_count": r.dup_count,
+            "total_count": r.total_count,
+            "dedup_rate": round(r.dup_count / r.total_count * 100, 1) if r.total_count > 0 else 0,
+        }
+        for r in by_source_rows
+    ]
+
+    return {
+        "code": 0,
+        "data": {
+            "total_items": total_items,
+            "duplicate_count": duplicate_count,
+            "originals_with_dups": originals_with_dups,
+            "dedup_rate": dedup_rate,
+            "today_duplicates": today_duplicates,
+            "by_source": by_source,
+        },
+        "message": "ok",
+    }
+
+
 @router.get("/recent-activity")
 async def get_recent_activity(
     limit: int = Query(10, ge=1, le=50),

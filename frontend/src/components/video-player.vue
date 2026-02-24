@@ -11,6 +11,16 @@ const props = defineProps({
 
 const containerRef = ref(null)
 let art = null
+let saveInterval = null
+
+function saveCurrentProgress() {
+  if (art && props.contentId) {
+    const position = Math.floor(art.currentTime || 0)
+    if (position > 0) {
+      saveProgress(props.contentId, position).catch(() => {})
+    }
+  }
+}
 
 function init() {
   destroy()
@@ -37,22 +47,27 @@ function init() {
         art.currentTime = props.savedPosition
       })
     }
+    // 每 15 秒自动保存进度 + 切后台时保存
+    saveInterval = setInterval(saveCurrentProgress, 15000)
+    document.addEventListener('visibilitychange', onVisChange)
   } catch {
     // silently fail — container may not be ready
   }
 }
 
 function destroy() {
-  if (art && props.contentId) {
-    const position = Math.floor(art.currentTime || 0)
-    if (position > 0) {
-      saveProgress(props.contentId, position).catch(() => {})
-    }
-  }
+  clearInterval(saveInterval)
+  saveInterval = null
+  document.removeEventListener('visibilitychange', onVisChange)
+  saveCurrentProgress()
   if (art) {
     art.destroy()
     art = null
   }
+}
+
+function onVisChange() {
+  if (document.visibilityState === 'hidden') saveCurrentProgress()
 }
 
 onMounted(() => {

@@ -15,6 +15,7 @@ const routes = [
   { path: '/videos', redirect: '/media' },
   { path: '/video-download', redirect: '/media' },
   { path: '/ebook', component: () => import('@/views/EbookView.vue') },
+  { path: '/reading', component: () => import('@/views/ReadingView.vue') },
   { path: '/finance', component: () => import('@/views/FinanceView.vue') },
   { path: '/settings', component: () => import('@/views/SettingsView.vue') },
   { path: '/:pathMatch(.*)*', name: 'NotFound', component: () => import('@/views/NotFoundView.vue') },

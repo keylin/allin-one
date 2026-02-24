@@ -52,6 +52,7 @@ class ContentDetailResponse(ContentResponse):
     raw_data: Optional[str] = None
     processed_content: Optional[str] = None
     analysis_result: Optional[str] = None
+    title_hash: Optional[int] = None
 
 
 class ContentNoteUpdate(BaseModel):

@@ -27,3 +27,7 @@ export function getContentStatusDistribution() {
 export function getStorageStats() {
   return api.get('/dashboard/storage-stats')
 }
+
+export function getDedupStats() {
+  return api.get('/dashboard/dedup-stats')
+}

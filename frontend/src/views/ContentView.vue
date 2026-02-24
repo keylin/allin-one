@@ -18,6 +18,7 @@ const searchQuery = ref(route.query.q || '')
 const filterStatus = ref(route.query.status || '')
 const filterHasVideo = ref(route.query.has_video === '1')
 const filterSourceId = ref(route.query.source_id || '')
+const duplicatesOnly = ref(route.query.duplicates_only === '1')
 const sources = ref([])
 
 // Stats
@@ -28,8 +29,9 @@ const contentStats = ref({
   processing: 0,
   analyzed: 0,
   failed: 0,
-  read: 0,      // 新增
-  unread: 0     // 新增
+  read: 0,
+  unread: 0,
+  duplicate: 0,
 })
 
 // Date range
@@ -105,6 +107,7 @@ function syncQueryParams() {
   if (filterSourceId.value) query.source_id = filterSourceId.value
   if (dateRange.value) query.date_range = dateRange.value
   if (showFavoritesOnly.value) query.favorites = '1'
+  if (duplicatesOnly.value) query.duplicates_only = '1'
   if (readStatusFilter.value) query.read_status = readStatusFilter.value  // 三态筛选
   if (sortBy.value !== 'collected_at') query.sort_by = sortBy.value
   if (sortOrder.value !== 'desc') query.sort_order = sortOrder.value
@@ -139,6 +142,10 @@ function handleStatCardClick(statusFilter) {
   if (statusFilter === 'favorited') {
     showFavoritesOnly.value = !showFavoritesOnly.value
   }
+  // 处理重复筛选
+  else if (statusFilter === 'duplicate') {
+    duplicatesOnly.value = !duplicatesOnly.value
+  }
   // 处理已读/未读筛选（特殊值）
   else if (statusFilter === 'unread' || statusFilter === 'read') {
     readStatusFilter.value = readStatusFilter.value === statusFilter ? null : statusFilter
@@ -162,6 +169,7 @@ function fetchWithFilters() {
   if (filterHasVideo.value) params.has_video = true
   if (filterSourceId.value) params.source_id = filterSourceId.value
   if (showFavoritesOnly.value) params.is_favorited = true
+  if (duplicatesOnly.value) params.duplicates_only = true
 
   // 三态已读/未读筛选
   if (readStatusFilter.value === 'unread') params.is_unread = true
@@ -412,16 +420,18 @@ onUnmounted(() => {
             { label: '未读', value: contentStats.unread, filter: 'unread', icon: 'M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.64 0 8.577 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.64 0-8.577-3.007-9.963-7.178zM15 12a3 3 0 11-6 0 3 3 0 016 0z', color: 'text-blue-600 bg-blue-50', active: 'ring-blue-400' },
             { label: '已读', value: contentStats.read, filter: 'read', icon: 'M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z', color: 'text-slate-600 bg-slate-100', active: 'ring-slate-400' },
             { label: '收藏', value: contentStats.favorited || 0, filter: 'favorited', icon: 'M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.563.563 0 00-.586 0L6.982 20.54a.562.562 0 01-.84-.61l1.285-5.386a.562.562 0 00-.182-.557l-4.204-3.602a.563.563 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z', color: 'text-amber-500 bg-amber-50', active: 'ring-amber-400' },
+            { label: '重复', value: contentStats.duplicate || 0, filter: 'duplicate', icon: 'M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2', color: 'text-indigo-500 bg-indigo-50', active: 'ring-indigo-400' },
           ]"
           :key="card.label"
           class="flex items-center gap-2.5 px-3 py-2 rounded-lg border transition-all duration-200 shrink-0 min-w-0"
           :class="[
             // 判断卡片是否激活
             (
-              (card.filter !== null && card.filter !== 'unread' && card.filter !== 'read' && card.filter !== 'favorited' && filterStatus === card.filter) ||
+              (card.filter !== null && card.filter !== 'unread' && card.filter !== 'read' && card.filter !== 'favorited' && card.filter !== 'duplicate' && filterStatus === card.filter) ||
               (card.filter === 'unread' && readStatusFilter === 'unread') ||
               (card.filter === 'read' && readStatusFilter === 'read') ||
-              (card.filter === 'favorited' && showFavoritesOnly)
+              (card.filter === 'favorited' && showFavoritesOnly) ||
+              (card.filter === 'duplicate' && duplicatesOnly)
             )
               ? `border-transparent ring-2 ${card.active} ${card.color}`
               : 'border-slate-200 hover:border-slate-300 bg-white',
@@ -785,6 +795,7 @@ onUnmounted(() => {
         :content-id="selectedId"
         @favorite="handleFavorite"
         @analyzed="fetchWithFilters"
+        @navigate="id => selectedId = id"
       />
     </DetailDrawer>
 

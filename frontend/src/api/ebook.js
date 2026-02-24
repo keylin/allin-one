@@ -70,3 +70,26 @@ export function createBookmark(contentId, data) {
 export function deleteBookmark(contentId, bookmarkId) {
   return api.delete(`/ebook/${contentId}/bookmarks/${bookmarkId}`)
 }
+
+// Cross-book annotations
+export function listRecentAnnotations(limit = 10) {
+  return api.get('/ebook/annotations/recent', { params: { limit } })
+}
+
+// Metadata
+export function updateEbookMetadata(contentId, data) {
+  return api.put(`/ebook/${contentId}/metadata`, data)
+}
+
+export function searchBookMetadata(contentId, query = '') {
+  const params = query ? { query } : {}
+  return api.get(`/ebook/${contentId}/metadata/search`, { params })
+}
+
+export function applyBookMetadata(contentId, data) {
+  return api.post(`/ebook/${contentId}/metadata/apply`, data)
+}
+
+export function getEbookFilters() {
+  return api.get('/ebook/filters')
+}

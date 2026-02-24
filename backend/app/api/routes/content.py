@@ -25,6 +25,7 @@ from app.schemas import (
     ContentResponse, ContentDetailResponse, ContentNoteUpdate, ContentBatchDelete,
     MediaItemSummary, ContentSubmit, ContentSubmitResponse, error_response,
 )
+from app.services.dedup import hamming_distance
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -147,6 +148,7 @@ async def list_content(
     date_to: str | None = Query(None, description="结束日期 YYYY-MM-DD"),
     tag: str | None = Query(None, description="按标签筛选"),
     hide_duplicates: bool = Query(True, description="隐藏相似重复内容 (默认 true)"),
+    duplicates_only: bool = Query(False, description="仅显示重复内容"),
     sort_by: str | None = Query(None, description="排序字段: collected_at / published_at / updated_at / title"),
     sort_order: str | None = Query(None, description="排序方向: desc / asc"),
     cursor_id: str | None = Query(None, description="游标: 上一页最后一条的 ID，用于游标分页"),
@@ -214,7 +216,9 @@ async def list_content(
             cast(ContentItem.analysis_result, JSONB)["tags"].astext.contains(tag)
         )
 
-    if hide_duplicates:
+    if duplicates_only:
+        query = query.filter(ContentItem.duplicate_of_id.isnot(None))
+    elif hide_duplicates:
         query = query.filter(ContentItem.duplicate_of_id.is_(None))
 
     # 排序: 白名单校验，非法值 fallback collected_at desc
@@ -794,6 +798,7 @@ async def get_content(content_id: str, db: Session = Depends(get_db)):
     data["source_name"] = source.name if source else None
     data["media_items"] = _build_media_summaries(media_items)
     data["reading_time_min"] = _estimate_reading_time(item)
+    data["title_hash"] = item.title_hash
 
     # 重复来源列表（双向：原件看重复项，重复项看原件+兄弟）
     related_items = []
@@ -802,6 +807,7 @@ async def get_content(content_id: str, db: Session = Depends(get_db)):
         original = db.get(ContentItem, item.duplicate_of_id)
         if original:
             orig_source = db.get(SourceConfig, original.source_id)
+            dist = hamming_distance(item.title_hash, original.title_hash) if item.title_hash is not None and original.title_hash is not None else None
             related_items.append({
                 "id": original.id,
                 "title": original.title,
@@ -809,14 +815,16 @@ async def get_content(content_id: str, db: Session = Depends(get_db)):
                 "source_name": orig_source.name if orig_source else None,
                 "collected_at": original.collected_at.isoformat() if original.collected_at else None,
                 "is_original": True,
+                "title_hash": original.title_hash,
+                "hamming_distance": dist,
             })
         siblings = db.query(ContentItem).filter(
             ContentItem.duplicate_of_id == item.duplicate_of_id,
             ContentItem.id != content_id,
         ).all()
         for sib in siblings:
-            sib_source = source_map if hasattr(source_map, 'get') else {}
             s = db.get(SourceConfig, sib.source_id)
+            dist = hamming_distance(item.title_hash, sib.title_hash) if item.title_hash is not None and sib.title_hash is not None else None
             related_items.append({
                 "id": sib.id,
                 "title": sib.title,
@@ -824,6 +832,8 @@ async def get_content(content_id: str, db: Session = Depends(get_db)):
                 "source_name": s.name if s else None,
                 "collected_at": sib.collected_at.isoformat() if sib.collected_at else None,
                 "is_original": False,
+                "title_hash": sib.title_hash,
+                "hamming_distance": dist,
             })
     else:
         # 当前是原件 → 查所有重复项
@@ -832,6 +842,7 @@ async def get_content(content_id: str, db: Session = Depends(get_db)):
         ).all()
         for dup in duplicates:
             dup_source = db.get(SourceConfig, dup.source_id)
+            dist = hamming_distance(item.title_hash, dup.title_hash) if item.title_hash is not None and dup.title_hash is not None else None
             related_items.append({
                 "id": dup.id,
                 "title": dup.title,
@@ -839,6 +850,8 @@ async def get_content(content_id: str, db: Session = Depends(get_db)):
                 "source_name": dup_source.name if dup_source else None,
                 "collected_at": dup.collected_at.isoformat() if dup.collected_at else None,
                 "is_original": False,
+                "title_hash": dup.title_hash,
+                "hamming_distance": dist,
             })
     data["duplicates"] = related_items
 

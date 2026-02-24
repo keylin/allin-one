@@ -89,13 +89,15 @@ def parse_epub(file_path: str) -> EbookMetadata:
 
 def _extract_epub_cover(book) -> tuple[bytes | None, str | None]:
     """从 EPUB 中提取封面图"""
-    from ebooklib import epub
+    import ebooklib
 
-    # 方法 1: 通过 cover metadata
+    # 方法 1: 从 OPF meta[name="cover"] 找 cover item id
+    # ebooklib 将 <meta name="cover" content="..."/> 存在 "meta" key 下
     cover_id = None
-    cover_metas = book.get_metadata("OPF", "cover")
-    if cover_metas:
-        cover_id = cover_metas[0][1].get("content")
+    for _val, attrs in book.get_metadata("http://www.idpf.org/2007/opf", "meta"):
+        if attrs.get("name") == "cover":
+            cover_id = attrs.get("content")
+            break
 
     if cover_id:
         item = book.get_item_with_id(cover_id)
@@ -103,8 +105,8 @@ def _extract_epub_cover(book) -> tuple[bytes | None, str | None]:
             ext = _mime_to_ext(item.media_type)
             return item.get_content(), ext
 
-    # 方法 2: 查找 cover-image 类型的 item
-    for item in book.get_items_of_type(epub.EpubImage):
+    # 方法 2: 查找名称含 cover 的图片
+    for item in book.get_items_of_type(ebooklib.ITEM_IMAGE):
         item_id = getattr(item, "id", "") or ""
         item_name = getattr(item, "file_name", "") or ""
         if "cover" in item_id.lower() or "cover" in item_name.lower():
@@ -112,7 +114,7 @@ def _extract_epub_cover(book) -> tuple[bytes | None, str | None]:
             return item.get_content(), ext
 
     # 方法 3: 取第一张图片
-    images = list(book.get_items_of_type(epub.EpubImage))
+    images = list(book.get_items_of_type(ebooklib.ITEM_IMAGE))
     if images:
         ext = _mime_to_ext(images[0].media_type)
         return images[0].get_content(), ext

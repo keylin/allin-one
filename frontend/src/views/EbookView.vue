@@ -1,9 +1,10 @@
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { listEbooks, uploadEbook, deleteEbook } from '@/api/ebook'
+import { listEbooks, uploadEbook, deleteEbook, getEbookFilters } from '@/api/ebook'
 import { formatTimeShort } from '@/utils/time'
 import EbookReader from '@/components/ebook-reader.vue'
+import EbookMetadataModal from '@/components/ebook-metadata-modal.vue'
 
 const router = useRouter()
 
@@ -12,7 +13,7 @@ const loading = ref(false)
 const books = ref([])
 const totalCount = ref(0)
 const searchQuery = ref('')
-const sortBy = ref('updated_at')
+const sortBy = ref('created_at')
 const showUploadArea = ref(false)
 const uploading = ref(false)
 const uploadProgress = ref(0)
@@ -20,9 +21,21 @@ const uploadError = ref('')
 const selectedBookId = ref(null)
 const readerVisible = ref(false)
 const contextMenuBook = ref(null)
+const deleteConfirmId = ref(null)
+
+// Filter state
+const filterAuthor = ref('')
+const filterCategory = ref('')
+const filterAuthors = ref([])
+const filterCategories = ref([])
+
+// Metadata modal state
+const metadataBookId = ref(null)
+const metadataVisible = ref(false)
 
 let searchTimer = null
 let longPressTimer = null
+let deleteConfirmTimer = null
 
 // Fetch books
 async function fetchBooks() {
@@ -30,6 +43,8 @@ async function fetchBooks() {
   try {
     const params = { page: 1, page_size: 100, sort_by: sortBy.value, sort_order: 'desc' }
     if (searchQuery.value.trim()) params.search = searchQuery.value.trim()
+    if (filterAuthor.value) params.author = filterAuthor.value
+    if (filterCategory.value) params.category = filterCategory.value
     const res = await listEbooks(params)
     if (res.code === 0) {
       books.value = res.data
@@ -40,24 +55,136 @@ async function fetchBooks() {
   }
 }
 
+async function fetchFilters() {
+  try {
+    const res = await getEbookFilters()
+    if (res.code === 0) {
+      filterAuthors.value = res.data.authors || []
+      filterCategories.value = res.data.categories || []
+    }
+  } catch (e) {
+    // ignore
+  }
+}
+
+// Metadata modal
+function openMetadata(book, event) {
+  event?.stopPropagation?.()
+  metadataBookId.value = book.content_id
+  metadataVisible.value = true
+}
+
+function closeMetadata() {
+  metadataVisible.value = false
+  metadataBookId.value = null
+}
+
+function onMetadataUpdated() {
+  fetchBooks()
+  fetchFilters()
+}
+
 // Upload
 async function handleFileSelect(event) {
   const file = event.target.files?.[0]
   if (!file) return
+  // macOS 上解压的 epub 目录被 file input 当成 0 字节文件
+  if (file.size === 0) {
+    uploadError.value = '该文件无法通过文件选择器上传（可能是未打包的 epub 目录），请直接拖拽到此区域'
+    event.target.value = ''
+    return
+  }
   await doUpload(file)
   event.target.value = ''
 }
 
 async function handleDrop(event) {
   event.preventDefault()
+
+  // 优先用 DataTransferItem API，支持目录拖入（macOS 解压的 epub 目录）
+  const items = event.dataTransfer?.items
+  if (items?.length > 0) {
+    const entry = items[0].webkitGetAsEntry?.()
+    if (entry?.isDirectory && entry.name.toLowerCase().endsWith('.epub')) {
+      await packEpubDirectoryAndUpload(entry)
+      return
+    }
+  }
+
   const file = event.dataTransfer?.files?.[0]
   if (!file) return
+
+  // 0 字节 = macOS 未打包的 epub 目录被当作文件拖入
+  if (file.size === 0 && file.name.toLowerCase().endsWith('.epub')) {
+    uploadError.value = '检测到未打包的 epub 目录，拖拽时请直接将文件夹拖到此虚线框内'
+    return
+  }
+
   const ext = file.name.split('.').pop()?.toLowerCase()
   if (!['epub', 'mobi', 'azw', 'azw3'].includes(ext)) {
     uploadError.value = '不支持的格式，请上传 EPUB 或 MOBI 文件'
     return
   }
   await doUpload(file)
+}
+
+// 将解压的 epub 目录重新打包为标准 epub zip，再上传
+async function packEpubDirectoryAndUpload(dirEntry) {
+  uploading.value = true
+  uploadProgress.value = 0
+  uploadError.value = ''
+  try {
+    const { default: JSZip } = await import('jszip')
+    const zip = new JSZip()
+
+    // 递归读取目录所有文件
+    async function readDir(entry, basePath) {
+      if (entry.isFile) {
+        const file = await new Promise((res, rej) => entry.file(res, rej))
+        const buf = await file.arrayBuffer()
+        const opts = entry.name === 'mimetype' ? { compression: 'STORE' } : {}
+        zip.file(basePath, buf, opts)
+      } else {
+        const reader = entry.createReader()
+        const entries = await new Promise((res, rej) => {
+          const all = []
+          const read = () => reader.readEntries(batch => {
+            if (!batch.length) return res(all)
+            all.push(...batch)
+            read()
+          }, rej)
+          read()
+        })
+        for (const e of entries) {
+          await readDir(e, basePath ? `${basePath}/${e.name}` : e.name)
+        }
+      }
+    }
+
+    // mimetype 必须最先写入且不压缩（epub 规范要求）
+    const reader = dirEntry.createReader()
+    const topEntries = await new Promise((res, rej) => {
+      const all = []
+      const read = () => reader.readEntries(batch => {
+        if (!batch.length) return res(all)
+        all.push(...batch)
+        read()
+      }, rej)
+      read()
+    })
+    const mimetypeEntry = topEntries.find(e => e.name === 'mimetype')
+    if (mimetypeEntry) await readDir(mimetypeEntry, 'mimetype')
+    for (const e of topEntries) {
+      if (e.name !== 'mimetype') await readDir(e, e.name)
+    }
+
+    const blob = await zip.generateAsync({ type: 'blob', mimeType: 'application/epub+zip' })
+    const file = new File([blob], dirEntry.name, { type: 'application/epub+zip' })
+    await doUpload(file)
+  } catch (e) {
+    uploadError.value = '目录打包失败：' + (e.message || '未知错误')
+    uploading.value = false
+  }
 }
 
 async function doUpload(file) {
@@ -82,10 +209,21 @@ async function doUpload(file) {
   }
 }
 
-// Delete
-async function handleDelete(contentId, event) {
+// Delete — 两次点击确认（第一次进入确认态，3 秒后自动取消）
+function handleDeleteClick(contentId, event) {
   event?.stopPropagation?.()
-  if (!confirm('确定删除这本书吗？')) return
+  if (deleteConfirmId.value === contentId) {
+    doDelete(contentId)
+  } else {
+    deleteConfirmId.value = contentId
+    clearTimeout(deleteConfirmTimer)
+    deleteConfirmTimer = setTimeout(() => { deleteConfirmId.value = null }, 3000)
+  }
+}
+
+async function doDelete(contentId) {
+  deleteConfirmId.value = null
+  clearTimeout(deleteConfirmTimer)
   try {
     await deleteEbook(contentId)
     fetchBooks()
@@ -120,6 +258,7 @@ function onPointerCancel() {
 
 function closeContextMenu() {
   contextMenuBook.value = null
+  deleteConfirmId.value = null
 }
 
 // Open reader
@@ -142,11 +281,25 @@ watch(searchQuery, () => {
 })
 
 watch(sortBy, fetchBooks)
+watch(filterAuthor, fetchBooks)
+watch(filterCategory, fetchBooks)
 
-onMounted(fetchBooks)
+onMounted(() => {
+  fetchBooks()
+  fetchFilters()
+})
 
-function formatProgress(p) {
-  return Math.round((p || 0) * 100)
+// 整页拖拽：自动展开上传区并处理文件
+async function onPageDrop(event) {
+  showUploadArea.value = true
+  await handleDrop(event)
+}
+
+function formatFileSize(bytes) {
+  if (!bytes) return ''
+  if (bytes < 1024) return bytes + ' B'
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
 }
 
 function formatTime(iso) {
@@ -156,7 +309,12 @@ function formatTime(iso) {
 </script>
 
 <template>
-  <div class="flex flex-col h-full">
+  <div
+    class="flex flex-col h-full"
+    @drop="onPageDrop"
+    @dragover.prevent
+    @dragenter.prevent
+  >
     <!-- Header -->
     <div class="px-4 pt-3 pb-2.5 space-y-2 sticky top-0 bg-white/95 backdrop-blur-sm z-10 border-b border-slate-100 shrink-0">
       <!-- Row 1: Title + count + sort + upload button -->
@@ -168,7 +326,6 @@ function formatTime(iso) {
           v-model="sortBy"
           class="hidden md:block text-xs text-slate-600 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 outline-none cursor-pointer transition-all"
         >
-          <option value="updated_at">最近阅读</option>
           <option value="created_at">上传时间</option>
           <option value="title">书名</option>
         </select>
@@ -203,10 +360,36 @@ function formatTime(iso) {
           v-model="sortBy"
           class="md:hidden text-xs text-slate-600 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 outline-none cursor-pointer ml-auto"
         >
-          <option value="updated_at">最近阅读</option>
           <option value="created_at">上传时间</option>
           <option value="title">书名</option>
         </select>
+      </div>
+
+      <!-- Row 3: Filters -->
+      <div v-if="filterAuthors.length || filterCategories.length" class="flex items-center gap-2 pb-0.5">
+        <select
+          v-if="filterAuthors.length"
+          v-model="filterAuthor"
+          class="text-xs text-slate-600 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 outline-none cursor-pointer transition-all focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 max-w-[140px]"
+        >
+          <option value="">全部作者</option>
+          <option v-for="a in filterAuthors" :key="a" :value="a">{{ a }}</option>
+        </select>
+        <select
+          v-if="filterCategories.length"
+          v-model="filterCategory"
+          class="text-xs text-slate-600 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 outline-none cursor-pointer transition-all focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 max-w-[140px]"
+        >
+          <option value="">全部分类</option>
+          <option v-for="c in filterCategories" :key="c" :value="c">{{ c }}</option>
+        </select>
+        <button
+          v-if="filterAuthor || filterCategory"
+          @click="filterAuthor = ''; filterCategory = ''"
+          class="text-[11px] text-slate-400 hover:text-slate-600 transition-colors"
+        >
+          清除筛选
+        </button>
       </div>
     </div>
 
@@ -321,25 +504,37 @@ function formatTime(iso) {
                 </div>
               </div>
 
-              <!-- Delete button -->
-              <button
-                @click="handleDelete(book.content_id, $event)"
-                class="absolute top-2 right-2 w-6 h-6 flex items-center justify-center bg-black/60 hover:bg-rose-600 text-white rounded-lg opacity-0 group-hover:opacity-100 transition-all duration-200"
-              >
-                <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M18 6 6 18M6 6l12 12" />
-                </svg>
-              </button>
+              <!-- Action buttons -->
+              <div class="absolute top-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all duration-200">
+                <!-- Info button -->
+                <button
+                  @click="openMetadata(book, $event)"
+                  class="w-6 h-6 flex items-center justify-center bg-black/60 hover:bg-indigo-600 text-white rounded-lg transition-colors"
+                >
+                  <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" />
+                  </svg>
+                </button>
+                <!-- Delete button (二次确认) -->
+                <button
+                  @click="handleDeleteClick(book.content_id, $event)"
+                  class="px-1.5 h-6 flex items-center justify-center text-white rounded-lg transition-all duration-200"
+                  :class="deleteConfirmId === book.content_id
+                    ? 'bg-rose-600 !opacity-100'
+                    : 'bg-black/60 hover:bg-rose-600'"
+                >
+                  <span v-if="deleteConfirmId === book.content_id" class="text-[10px] font-medium">确认删除</span>
+                  <svg v-else class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M18 6 6 18M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
 
               <!-- Format badge -->
               <span class="absolute top-2 left-2 px-1.5 py-0.5 text-[10px] font-medium bg-black/60 text-white rounded uppercase">
                 {{ book.format }}
               </span>
 
-              <!-- Progress bar -->
-              <div v-if="book.progress > 0" class="absolute bottom-0 left-0 right-0 h-1 bg-black/20">
-                <div class="h-full bg-indigo-500 transition-all duration-300" :style="{ width: formatProgress(book.progress) + '%' }" />
-              </div>
             </div>
 
             <!-- Info -->
@@ -349,13 +544,20 @@ function formatTime(iso) {
               </h4>
               <div class="mt-1 flex items-center gap-1 text-[11px] text-slate-400">
                 <span class="truncate">{{ book.author || '未知作者' }}</span>
-                <template v-if="book.progress > 0">
+                <template v-if="book.file_size">
                   <span class="text-slate-200 shrink-0">·</span>
-                  <span class="shrink-0">{{ formatProgress(book.progress) }}%</span>
+                  <span class="shrink-0">{{ formatFileSize(book.file_size) }}</span>
                 </template>
               </div>
-              <div v-if="book.last_read_at" class="mt-0.5 text-[10px] text-slate-300">
-                {{ formatTime(book.last_read_at) }}
+              <div v-if="book.subjects?.length" class="mt-1.5 flex flex-wrap gap-1">
+                <span
+                  v-for="s in book.subjects.slice(0, 2)"
+                  :key="s"
+                  class="px-1.5 py-0.5 text-[10px] font-medium bg-indigo-50 text-indigo-600 rounded"
+                >{{ s }}</span>
+              </div>
+              <div v-if="book.created_at" class="mt-0.5 text-[10px] text-slate-300">
+                {{ formatTime(book.created_at) }}
               </div>
             </div>
           </div>
@@ -391,13 +593,25 @@ function formatTime(iso) {
                 打开阅读
               </button>
               <button
-                @click="handleDelete(contextMenuBook.content_id, $event); closeContextMenu()"
-                class="w-full text-left px-4 py-3 text-sm text-rose-600 hover:bg-rose-50 active:bg-rose-100 flex items-center gap-3"
+                @click="openMetadata(contextMenuBook); closeContextMenu()"
+                class="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 active:bg-slate-100 flex items-center gap-3"
+              >
+                <svg class="w-4 h-4 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" />
+                </svg>
+                编辑信息
+              </button>
+              <button
+                @click="deleteConfirmId === contextMenuBook.content_id
+                  ? (doDelete(contextMenuBook.content_id), closeContextMenu())
+                  : handleDeleteClick(contextMenuBook.content_id, $event)"
+                class="w-full text-left px-4 py-3 text-sm hover:bg-rose-50 active:bg-rose-100 flex items-center gap-3"
+                :class="deleteConfirmId === contextMenuBook.content_id ? 'text-rose-700 bg-rose-50 font-medium' : 'text-rose-600'"
               >
                 <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
                 </svg>
-                删除书籍
+                {{ deleteConfirmId === contextMenuBook.content_id ? '确认删除？' : '删除书籍' }}
               </button>
             </div>
             <button
@@ -416,6 +630,14 @@ function formatTime(iso) {
       v-if="readerVisible && selectedBookId"
       :content-id="selectedBookId"
       @close="closeReader"
+    />
+
+    <!-- Metadata modal -->
+    <EbookMetadataModal
+      :visible="metadataVisible"
+      :content-id="metadataBookId"
+      @close="closeMetadata"
+      @updated="onMetadataUpdated"
     />
   </div>
 </template>

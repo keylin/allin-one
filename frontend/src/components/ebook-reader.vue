@@ -35,6 +35,7 @@ const bookTitle = ref('')
 const toolbarVisible = ref(false)
 const tocVisible = ref(false)
 const settingsVisible = ref(false)
+const shortcutHelpVisible = ref(false)
 
 // --- Desktop detection (md breakpoint: 768px) ---
 const windowWidth = ref(window.innerWidth)
@@ -53,6 +54,15 @@ const annotationPopupPos = ref({ x: 0, y: 0 })
 const noteText = ref('')
 const annotationsSidebarVisible = ref(false)
 const annotationsTab = ref('highlights') // 'highlights' | 'bookmarks'
+
+// Bookmark feedback indicator
+const bookmarkFeedback = ref(null) // { added: boolean } or null
+let bookmarkFeedbackTimer = null
+function showBookmarkFeedback(added) {
+  clearTimeout(bookmarkFeedbackTimer)
+  bookmarkFeedback.value = { added }
+  bookmarkFeedbackTimer = setTimeout(() => { bookmarkFeedback.value = null }, 1200)
+}
 
 const HIGHLIGHT_COLORS = {
   yellow: '#facc15', green: '#4ade80', blue: '#60a5fa', pink: '#f472b6', purple: '#a78bfa',
@@ -85,12 +95,15 @@ function loadPrefs() {
   } catch { /* ignore */ }
   return {}
 }
-function savePrefs() {
+function savePrefs(extra) {
+  const current = loadPrefs()
   localStorage.setItem(PREFS_KEY, JSON.stringify({
+    ...current,
     fontSize: fontSize.value,
     theme: theme.value,
     fontFamily: fontFamily.value,
     flowMode: flowMode.value,
+    ...extra,
   }))
 }
 const savedPrefs = loadPrefs()
@@ -99,6 +112,19 @@ const theme = ref(savedPrefs.theme || 'light')
 const fontFamily = ref(savedPrefs.fontFamily || 'default')
 const isMobile = navigator.maxTouchPoints > 1
 const flowMode = ref(savedPrefs.flowMode ?? (isMobile ? 'scrolled' : 'paginated'))
+
+// --- Desktop panel push-content layout ---
+const readerLeft = computed(() =>
+  isDesktop.value && tocVisible.value ? '288px' : '0'
+)
+const readerRight = computed(() =>
+  isDesktop.value && annotationsSidebarVisible.value ? '288px' : '0'
+)
+// 桌面端面板顶部：工具栏可见时避开工具栏高度，隐藏时贴顶
+const panelTop = computed(() => {
+  if (!isDesktop.value) return '0'
+  return toolbarVisible.value ? 'calc(max(10px, env(safe-area-inset-top, 0px)) + 46px)' : '0'
+})
 
 // Grouped annotations for sidebar
 const groupedAnnotations = computed(() => {
@@ -170,12 +196,68 @@ const subCls = computed(
     })[theme.value],
 )
 
+const shortcutList = [
+  { key: '← / h', desc: '上一页' },
+  { key: '→ / l', desc: '下一页' },
+  { key: 'j / Space', desc: '下一页' },
+  { key: 'k / PageUp', desc: '上一页' },
+  { key: 't', desc: '目录' },
+  { key: 'n', desc: '标注与书签' },
+  { key: 's', desc: '设置' },
+  { key: 'b', desc: '添加/移除书签' },
+  { key: 'd', desc: '切换主题' },
+  { key: '+ / -', desc: '调整字号' },
+  { key: 'Esc', desc: '关闭/退出' },
+  { key: '?', desc: '快捷键帮助' },
+]
+
+const kbdCls = computed(() => ({
+  light: 'bg-gray-100 border-gray-300 text-gray-600',
+  warm:  'bg-[#ede4d3] border-[#d4c8b0] text-[#5b4636]',
+  dark:  'bg-gray-800 border-gray-600 text-gray-300',
+})[theme.value])
+
+// --- Panel visual hierarchy (side panels slightly darker than content area) ---
+const panelBg = computed(() => ({
+  light: '#f5f5f7',
+  warm:  '#f0e8d8',
+  dark:  '#141425',
+})[theme.value])
+
+const panelTextCls = computed(() => ({
+  light: 'text-slate-600',
+  warm:  'text-[#7b6b58]',
+  dark:  'text-gray-400',
+})[theme.value])
+
+const panelEdgeCls = computed(() => ({
+  light: 'bg-[#f5f5f7]/90 text-slate-400 border-slate-200/60',
+  warm:  'bg-[#f0e8d8]/90 text-[#9b8b78] border-[#e0d4c0]/60',
+  dark:  'bg-[#141425]/90 text-gray-500 border-gray-700/60',
+})[theme.value])
+
+const panelShadowLeft = computed(() =>
+  theme.value === 'dark'
+    ? 'inset -8px 0 16px -10px rgba(0,0,0,0.3)'
+    : 'inset -8px 0 16px -10px rgba(0,0,0,0.06)'
+)
+const panelShadowRight = computed(() =>
+  theme.value === 'dark'
+    ? 'inset 8px 0 16px -10px rgba(0,0,0,0.3)'
+    : 'inset 8px 0 16px -10px rgba(0,0,0,0.06)'
+)
+
 // --- Lifecycle ---
 onMounted(async () => {
   document.addEventListener('keydown', onKeydown)
   document.addEventListener('visibilitychange', onVisChange)
   window.addEventListener('beforeunload', saveNow)
   window.addEventListener('resize', onResize)
+  // Restore desktop panel states (toolbar hidden by default)
+  if (isDesktop.value) {
+    tocVisible.value = savedPrefs.desktopTocOpen ?? false
+    annotationsSidebarVisible.value = savedPrefs.desktopAnnotationsOpen ?? false
+  }
   await init()
 })
 
@@ -272,6 +354,8 @@ async function init() {
     }
 
     loading.value = false
+    // 桌面端初始显示工具栏后启动自动隐藏
+    if (toolbarVisible.value) startAutoHide()
   } catch (e) {
     console.error('Reader init error:', e)
     const status = e.response?.status
@@ -617,6 +701,7 @@ async function toggleBookmark() {
   const existing = currentPageBookmarked.value
   if (existing) {
     bookmarks.value = bookmarks.value.filter(b => b.id !== existing.id)
+    showBookmarkFeedback(false)
     try {
       await deleteBookmark(props.contentId, existing.id)
     } catch {
@@ -624,7 +709,7 @@ async function toggleBookmark() {
       bookmarks.value.push(existing)
     }
   } else {
-    const cfi = view?.lastLocation?.start?.cfi || ''
+    const cfi = view?.lastLocation?.cfi || ''
     const tempId = `temp-bm-${++tempIdCounter}`
     const optimistic = {
       id: tempId,
@@ -633,6 +718,7 @@ async function toggleBookmark() {
       section_title: chapterTitle.value || null,
     }
     bookmarks.value.push(optimistic)
+    showBookmarkFeedback(true)
     try {
       const res = await createBookmark(props.contentId, {
         cfi,
@@ -796,35 +882,32 @@ function next() {
 function onKeydown(e) {
   const tag = e.target?.tagName
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+
+  // Escape: 层级退出 — 先关闭最上层覆盖，无覆盖时退出阅读器
   if (e.key === 'Escape') {
-    if (annotationPopupVisible.value) {
-      annotationPopupVisible.value = false
-      activeAnnotation.value = null
-      return
-    }
-    if (selectionToolbarVisible.value) {
-      selectionToolbarVisible.value = false
-      return
-    }
-    if (annotationsSidebarVisible.value) {
-      annotationsSidebarVisible.value = false
-      return
-    }
-    if (tocVisible.value) {
-      tocVisible.value = false
-      return
-    }
-    if (settingsVisible.value) {
-      settingsVisible.value = false
-      return
-    }
-    handleClose()
+    if (shortcutHelpVisible.value) { shortcutHelpVisible.value = false }
+    else if (annotationPopupVisible.value) { annotationPopupVisible.value = false; activeAnnotation.value = null }
+    else if (selectionToolbarVisible.value) { selectionToolbarVisible.value = false }
+    else if (settingsVisible.value) { settingsVisible.value = false }
+    else if (tocVisible.value) { tocVisible.value = false }
+    else if (annotationsSidebarVisible.value) { annotationsSidebarVisible.value = false }
+    else if (toolbarVisible.value) { toolbarVisible.value = false }
+    else { handleClose() }
     return
   }
-  // Prevent browser scroll for navigation keys
+
+  // 快捷键帮助打开时，除 ? 外不响应（Escape 已在上方层级退出中处理）
+  if (shortcutHelpVisible.value) {
+    if (e.key === '?') shortcutHelpVisible.value = false
+    return
+  }
+
+  // 阻止浏览器默认滚动
   if (['ArrowLeft', 'ArrowRight', ' ', 'PageUp', 'PageDown'].includes(e.key)) {
     e.preventDefault()
   }
+
+  // 翻页（带节流）
   if (keyThrottle) return
   if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
     keyThrottle = true
@@ -833,12 +916,42 @@ function onKeydown(e) {
     keyThrottle = true
     doKeyNav('next')
   } else if (!e.metaKey && !e.ctrlKey && !e.altKey) {
+    // Vim 导航
     if (e.key === 'h' || e.key === 'k') {
       keyThrottle = true
       doKeyNav('prev')
     } else if (e.key === 'j' || e.key === 'l') {
       keyThrottle = true
       doKeyNav('next')
+    }
+    // 面板切换
+    else if (e.key === 't') {
+      dismissOverlays()
+      tocVisible.value = !tocVisible.value
+    } else if (e.key === 'n') {
+      dismissOverlays()
+      annotationsSidebarVisible.value = !annotationsSidebarVisible.value
+    } else if (e.key === 's') {
+      dismissOverlays()
+      settingsVisible.value = !settingsVisible.value
+    }
+    // 阅读操作
+    else if (e.key === 'b') {
+      toggleBookmark()
+    } else if (e.key === 'd') {
+      cycleTheme()
+    }
+    // 字号调整
+    else if (e.key === '=' || e.key === '+') {
+      e.preventDefault()
+      adjustFont(10)
+    } else if (e.key === '-') {
+      e.preventDefault()
+      adjustFont(-10)
+    }
+    // 帮助
+    else if (e.key === '?') {
+      shortcutHelpVisible.value = !shortcutHelpVisible.value
     }
   }
 }
@@ -857,12 +970,13 @@ async function doKeyNav(direction) {
   } catch { /* ignore */ }
   clearTimeout(safety)
   keyThrottle = false
+  // 章节切换后新 iframe 可能未获得焦点，主动聚焦以恢复键盘快捷键
+  refocusReader()
 }
 
 function startAutoHide() {
-  if (isDesktop.value) return // 桌面端常驻，不自动隐藏
   clearTimeout(toolbarTimer)
-  if (!tocVisible.value && !settingsVisible.value && !annotationsSidebarVisible.value) {
+  if (!settingsVisible.value) {
     toolbarTimer = setTimeout(() => { toolbarVisible.value = false }, 4000)
   }
 }
@@ -872,15 +986,17 @@ function stopAutoHide() {
 }
 
 function toggleToolbar() {
-  if (isDesktop.value) return // 桌面端工具栏常驻，不切换
   toolbarVisible.value = !toolbarVisible.value
   if (toolbarVisible.value) {
     startAutoHide()
   } else {
     stopAutoHide()
-    tocVisible.value = false
     settingsVisible.value = false
-    annotationsSidebarVisible.value = false
+    // 移动端隐藏工具栏时关闭侧栏，桌面端保留（侧栏固定展示）
+    if (!isDesktop.value) {
+      tocVisible.value = false
+      annotationsSidebarVisible.value = false
+    }
   }
 }
 
@@ -888,22 +1004,23 @@ function toggleToolbar() {
 function goToAnnotation(ann) {
   if (!ann?.cfi_range) return
   view?.showAnnotation?.({ value: ann.cfi_range })
-  annotationsSidebarVisible.value = false
+  if (!isDesktop.value) annotationsSidebarVisible.value = false
 }
 
 function goToBookmark(bm) {
   if (!bm?.cfi) return
   view?.goTo(bm.cfi)
-  annotationsSidebarVisible.value = false
+  if (!isDesktop.value) annotationsSidebarVisible.value = false
 }
 
 // --- TOC navigation ---
 function goToHref(href) {
   if (!href || !book) return
-  const target = book.resolveHref(href)
-  if (target != null) view?.goTo(target)
-  tocVisible.value = false
-  toolbarVisible.value = false
+  view?.goTo(href)
+  if (!isDesktop.value) {
+    tocVisible.value = false
+    toolbarVisible.value = false
+  }
 }
 
 // --- Settings ---
@@ -911,6 +1028,12 @@ function changeTheme(t) {
   theme.value = t
   applyStyles()
   savePrefs()
+}
+
+const THEME_ORDER = ['light', 'warm', 'dark']
+function cycleTheme() {
+  const idx = THEME_ORDER.indexOf(theme.value)
+  changeTheme(THEME_ORDER[(idx + 1) % THEME_ORDER.length])
 }
 
 function adjustFont(delta) {
@@ -964,7 +1087,9 @@ function cleanup() {
 }
 
 // --- Auto-hide watchers ---
+// 移动端：侧栏打开时暂停自动隐藏；桌面端：侧栏独立于工具栏，不影响自动隐藏
 watch(tocVisible, (val) => {
+  if (isDesktop.value) return
   if (val) stopAutoHide()
   else if (toolbarVisible.value) startAutoHide()
 })
@@ -972,10 +1097,19 @@ watch(settingsVisible, (val) => {
   if (val) stopAutoHide()
   else if (toolbarVisible.value) startAutoHide()
 })
-
 watch(annotationsSidebarVisible, (val) => {
+  if (isDesktop.value) return
   if (val) stopAutoHide()
   else if (toolbarVisible.value) startAutoHide()
+})
+
+// --- Persist desktop panel states ---
+watch([tocVisible, annotationsSidebarVisible], () => {
+  if (!isDesktop.value) return
+  savePrefs({
+    desktopTocOpen: tocVisible.value,
+    desktopAnnotationsOpen: annotationsSidebarVisible.value,
+  })
 })
 
 // --- TOC swipe to close ---
@@ -995,7 +1129,11 @@ useSwipe(annotationsPanelEl, {
   <Teleport to="body">
     <div class="fixed inset-0 z-[60]" :style="{ background: containerBg }">
       <!-- Reader target (always present) -->
-      <div ref="readerEl" class="absolute inset-0" style="touch-action: manipulation;" />
+      <div
+        ref="readerEl"
+        class="absolute inset-0 transition-[left,right] duration-300 ease-out"
+        :style="{ left: readerLeft, right: readerRight, 'touch-action': 'manipulation' }"
+      />
 
       <!-- Loading -->
       <div v-if="loading" class="absolute inset-0 flex items-center justify-center z-10">
@@ -1048,18 +1186,17 @@ useSwipe(annotationsPanelEl, {
           leave-active-class="transition-all duration-150 ease-in"
           leave-from-class="opacity-100 translate-y-0"
           leave-to-class="opacity-0 -translate-y-full"
-          :css="!isDesktop"
         >
           <div
-            v-if="toolbarVisible || isDesktop"
-            class="absolute top-0 left-0 right-0 z-20 backdrop-blur-md border-b flex items-center gap-2 px-3 py-2.5"
+            v-if="toolbarVisible"
+            class="absolute top-0 left-0 right-0 z-[35] backdrop-blur-md border-b flex items-center gap-2 md:gap-3 px-3 md:px-5 py-2.5"
             :class="toolbarCls"
             :style="{ paddingTop: 'max(10px, env(safe-area-inset-top, 0px))' }"
           >
             <!-- Close -->
             <button
               @click="handleClose"
-              class="w-9 h-9 flex items-center justify-center rounded-lg hover:bg-black/10 active:bg-black/15 transition-colors shrink-0"
+              class="h-9 flex items-center justify-center rounded-lg hover:bg-black/10 active:bg-black/15 transition-colors shrink-0 px-1.5 md:px-2"
             >
               <svg
                 class="w-5 h-5"
@@ -1070,6 +1207,7 @@ useSwipe(annotationsPanelEl, {
               >
                 <path d="m15 18-6-6 6-6" />
               </svg>
+              <span v-if="isDesktop" class="text-sm ml-0.5">返回</span>
             </button>
 
             <!-- Title -->
@@ -1077,10 +1215,10 @@ useSwipe(annotationsPanelEl, {
               {{ bookTitle }}
             </span>
 
-            <!-- TOC -->
+            <!-- TOC (mobile only — desktop uses edge tab) -->
             <button
               @click="tocVisible = !tocVisible; settingsVisible = false; annotationsSidebarVisible = false"
-              class="w-9 h-9 flex items-center justify-center rounded-lg hover:bg-black/10 active:bg-black/15 transition-colors shrink-0"
+              class="w-9 h-9 flex items-center justify-center rounded-lg hover:bg-black/10 active:bg-black/15 transition-colors shrink-0 md:hidden"
             >
               <svg
                 class="w-5 h-5"
@@ -1109,10 +1247,10 @@ useSwipe(annotationsPanelEl, {
               </svg>
             </button>
 
-            <!-- Annotations sidebar -->
+            <!-- Annotations sidebar (hidden from toolbar — desktop uses edge tab, mobile uses TOC entry) -->
             <button
               @click="annotationsSidebarVisible = !annotationsSidebarVisible; tocVisible = false; settingsVisible = false"
-              class="w-9 h-9 flex items-center justify-center rounded-lg hover:bg-black/10 active:bg-black/15 transition-colors shrink-0"
+              class="w-9 h-9 items-center justify-center rounded-lg hover:bg-black/10 active:bg-black/15 transition-colors shrink-0 hidden"
             >
               <svg
                 class="w-5 h-5"
@@ -1154,13 +1292,12 @@ useSwipe(annotationsPanelEl, {
           leave-active-class="transition-all duration-150 ease-in"
           leave-from-class="opacity-100 translate-y-0"
           leave-to-class="opacity-0 translate-y-full"
-          :css="!isDesktop"
         >
           <div
-            v-if="toolbarVisible || isDesktop"
-            class="absolute bottom-0 left-0 right-0 z-20 backdrop-blur-md border-t px-4 pt-2.5"
+            v-if="toolbarVisible"
+            class="absolute bottom-0 z-20 backdrop-blur-md border-t px-4 pt-2.5 transition-[left,right] duration-300 ease-out"
             :class="toolbarCls"
-            :style="{ paddingBottom: 'max(10px, env(safe-area-inset-bottom, 0px))' }"
+            :style="{ left: readerLeft, right: readerRight, paddingBottom: 'max(10px, env(safe-area-inset-bottom, 0px))' }"
           >
             <!-- Chapter & progress text -->
             <div class="flex items-center justify-between text-xs mb-2" :class="subCls">
@@ -1185,8 +1322,83 @@ useSwipe(annotationsPanelEl, {
           </div>
         </Transition>
 
+        <!-- ======== Mini progress bar (toolbar hidden) ======== -->
+        <div
+          v-if="!toolbarVisible && !loading && !errorMsg"
+          @click="toggleToolbar"
+          class="absolute bottom-0 z-10 px-4 py-2
+                 flex items-center justify-between text-[11px] opacity-60 cursor-pointer
+                 transition-[left,right] duration-300 ease-out"
+          :class="subCls"
+          :style="{ left: readerLeft, right: readerRight, paddingBottom: 'max(8px, env(safe-area-inset-bottom, 0px))' }"
+        >
+          <span class="truncate max-w-[70%]">{{ chapterTitle || '—' }}</span>
+          <span class="tabular-nums shrink-0">{{ Math.round(progress * 100) }}%</span>
+        </div>
+
+        <!-- ======== Shortcut hint button (desktop, toolbar hidden) ======== -->
+        <button
+          v-if="isDesktop && !toolbarVisible && !loading && !errorMsg"
+          @click="shortcutHelpVisible = true"
+          class="absolute bottom-3 right-3 z-10 w-7 h-7 flex items-center justify-center
+                 rounded-lg border opacity-40 hover:opacity-80 transition-opacity text-xs font-mono"
+          :class="panelEdgeCls"
+          title="键盘快捷键 (?)"
+        >?</button>
+
+        <!-- ======== Bookmark feedback indicator ======== -->
+        <Transition
+          enter-active-class="transition-all duration-200 ease-out"
+          enter-from-class="opacity-0 scale-75"
+          enter-to-class="opacity-100 scale-100"
+          leave-active-class="transition-all duration-300 ease-in"
+          leave-from-class="opacity-100 scale-100"
+          leave-to-class="opacity-0 scale-75"
+        >
+          <div
+            v-if="bookmarkFeedback"
+            class="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50
+                   flex flex-col items-center gap-1.5 px-5 py-3.5 rounded-2xl
+                   backdrop-blur-md shadow-lg pointer-events-none"
+            :class="theme === 'dark' ? 'bg-gray-800/80 text-gray-100' : 'bg-black/60 text-white'"
+          >
+            <svg class="w-7 h-7" viewBox="0 0 24 24" :fill="bookmarkFeedback.added ? '#6366f1' : 'none'" stroke="currentColor" stroke-width="2">
+              <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+            </svg>
+            <span class="text-xs font-medium">{{ bookmarkFeedback.added ? '已添加书签' : '已移除书签' }}</span>
+          </div>
+        </Transition>
+
+        <!-- ======== Desktop edge tabs (panel collapsed) ======== -->
+        <!-- Left edge tab: open TOC -->
+        <button
+          v-if="isDesktop && !tocVisible && !loading && !errorMsg"
+          @click="tocVisible = true"
+          class="absolute left-0 top-1/2 -translate-y-1/2 z-20 w-5 h-14 flex items-center justify-center
+                 rounded-r-lg border border-l-0 backdrop-blur-md hover:bg-black/5 active:bg-black/10 transition-colors"
+          :class="panelEdgeCls"
+          title="打开目录"
+        >
+          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="m9 18 6-6-6-6" />
+          </svg>
+        </button>
+        <!-- Right edge tab: open annotations -->
+        <button
+          v-if="isDesktop && !annotationsSidebarVisible && !loading && !errorMsg"
+          @click="annotationsSidebarVisible = true"
+          class="absolute right-0 top-1/2 -translate-y-1/2 z-20 w-5 h-14 flex items-center justify-center
+                 rounded-l-lg border border-r-0 backdrop-blur-md hover:bg-black/5 active:bg-black/10 transition-colors"
+          :class="panelEdgeCls"
+          title="打开标注"
+        >
+          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="m15 18-6-6 6-6" />
+          </svg>
+        </button>
+
         <!-- ======== TOC sidebar ======== -->
-        <!-- Backdrop -->
+        <!-- Backdrop (mobile only — desktop pushes content) -->
         <Transition
           enter-active-class="transition-opacity duration-200"
           enter-from-class="opacity-0"
@@ -1196,7 +1408,7 @@ useSwipe(annotationsPanelEl, {
           leave-to-class="opacity-0"
         >
           <div
-            v-if="tocVisible"
+            v-if="tocVisible && !isDesktop"
             class="absolute inset-0 z-[25] bg-black/20"
             @click="tocVisible = false"
           />
@@ -1213,9 +1425,9 @@ useSwipe(annotationsPanelEl, {
           <div
             v-if="tocVisible"
             ref="tocPanelEl"
-            class="absolute inset-y-0 left-0 w-72 max-w-[80vw] z-30 flex flex-col border-r backdrop-blur-xl"
-            :class="toolbarCls"
-            :style="{ background: containerBg }"
+            class="absolute left-0 bottom-0 w-72 z-30 flex flex-col border-r backdrop-blur-xl transition-[top] duration-200 ease-out"
+            :class="[toolbarCls, isDesktop ? '' : 'max-w-[80vw]']"
+            :style="{ top: panelTop, background: panelBg, boxShadow: isDesktop ? panelShadowLeft : 'none' }"
           >
             <!-- TOC header -->
             <div class="flex items-center justify-between px-4 py-3 border-b" :class="toolbarCls">
@@ -1242,6 +1454,7 @@ useSwipe(annotationsPanelEl, {
                 :key="idx"
                 @click="goToHref(item.href)"
                 class="block w-full text-left text-sm py-2.5 px-4 hover:bg-black/5 active:bg-black/10 transition-colors truncate"
+                :class="panelTextCls"
                 :style="{ paddingLeft: item.depth * 16 + 16 + 'px' }"
               >
                 <span :class="item.depth > 0 ? subCls : ''">{{ item.title }}</span>
@@ -1250,6 +1463,18 @@ useSwipe(annotationsPanelEl, {
                 暂无目录
               </div>
             </div>
+            <!-- Mobile entry to annotations sidebar -->
+            <button
+              v-if="!isDesktop"
+              @click="tocVisible = false; annotationsSidebarVisible = true"
+              class="flex items-center gap-2 w-full px-4 py-3 border-t text-sm hover:bg-black/5 active:bg-black/10 transition-colors"
+              :class="[toolbarCls, subCls]"
+            >
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+              </svg>
+              划线与笔记
+            </button>
           </div>
         </Transition>
 
@@ -1264,7 +1489,7 @@ useSwipe(annotationsPanelEl, {
         >
           <div
             v-if="settingsVisible"
-            class="absolute w-56 z-30 rounded-xl border shadow-xl p-4 space-y-4"
+            class="absolute w-56 z-[35] rounded-xl border shadow-xl p-4 space-y-4"
             :class="toolbarCls"
             :style="{
               top: 'calc(max(10px, env(safe-area-inset-top, 0px)) + 46px)',
@@ -1544,7 +1769,7 @@ useSwipe(annotationsPanelEl, {
         </Teleport>
 
         <!-- ======== Annotations/Bookmarks sidebar ======== -->
-        <!-- Backdrop -->
+        <!-- Backdrop (mobile only — desktop pushes content) -->
         <Transition
           enter-active-class="transition-opacity duration-200"
           enter-from-class="opacity-0"
@@ -1554,7 +1779,7 @@ useSwipe(annotationsPanelEl, {
           leave-to-class="opacity-0"
         >
           <div
-            v-if="annotationsSidebarVisible"
+            v-if="annotationsSidebarVisible && !isDesktop"
             class="absolute inset-0 z-[25] bg-black/20"
             @click="annotationsSidebarVisible = false"
           />
@@ -1571,9 +1796,9 @@ useSwipe(annotationsPanelEl, {
           <div
             v-if="annotationsSidebarVisible"
             ref="annotationsPanelEl"
-            class="absolute inset-y-0 right-0 w-72 max-w-[80vw] z-30 flex flex-col border-l backdrop-blur-xl"
-            :class="toolbarCls"
-            :style="{ background: containerBg }"
+            class="absolute right-0 bottom-0 w-72 z-30 flex flex-col border-l backdrop-blur-xl transition-[top] duration-200 ease-out"
+            :class="[toolbarCls, isDesktop ? '' : 'max-w-[80vw]']"
+            :style="{ top: panelTop, background: panelBg, boxShadow: isDesktop ? panelShadowRight : 'none' }"
           >
             <!-- Header -->
             <div class="flex items-center justify-between px-4 py-3 border-b" :class="toolbarCls">
@@ -1615,6 +1840,7 @@ useSwipe(annotationsPanelEl, {
                       v-for="ann in items"
                       :key="ann.id"
                       class="group relative flex items-start gap-2.5 px-4 py-2.5 hover:bg-black/5 active:bg-black/10 transition-colors cursor-pointer"
+                      :class="panelTextCls"
                       @click="goToAnnotation(ann)"
                     >
                       <div
@@ -1653,6 +1879,7 @@ useSwipe(annotationsPanelEl, {
                     v-for="bm in bookmarks"
                     :key="bm.id"
                     class="group relative flex items-center gap-2.5 px-4 py-3 hover:bg-black/5 active:bg-black/10 transition-colors cursor-pointer"
+                    :class="panelTextCls"
                     @click="goToBookmark(bm)"
                   >
                     <svg class="w-4 h-4 text-indigo-500 shrink-0" viewBox="0 0 24 24" fill="#6366f1" stroke="#6366f1" stroke-width="2">
@@ -1684,17 +1911,72 @@ useSwipe(annotationsPanelEl, {
           </div>
         </Transition>
 
+        <!-- ======== Shortcut help panel (desktop only) ======== -->
+        <Teleport to="body">
+          <Transition
+            enter-active-class="transition-opacity duration-200 ease-out"
+            enter-from-class="opacity-0"
+            enter-to-class="opacity-100"
+            leave-active-class="transition-opacity duration-150 ease-in"
+            leave-from-class="opacity-100"
+            leave-to-class="opacity-0"
+          >
+            <div
+              v-if="shortcutHelpVisible && isDesktop"
+              class="fixed inset-0 z-[80] flex items-center justify-center bg-black/30 backdrop-blur-sm"
+              @click.self="shortcutHelpVisible = false"
+            >
+              <div
+                class="w-80 max-h-[80vh] rounded-2xl border shadow-2xl overflow-hidden"
+                :class="toolbarCls"
+                :style="{ background: containerBg }"
+              >
+                <!-- Header -->
+                <div class="flex items-center justify-between px-5 py-3.5 border-b" :class="toolbarCls">
+                  <h3 class="text-sm font-semibold">键盘快捷键</h3>
+                  <button
+                    @click="shortcutHelpVisible = false"
+                    class="w-7 h-7 flex items-center justify-center rounded-lg hover:bg-black/10 transition-colors"
+                  >
+                    <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M18 6 6 18M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+                <!-- Key list -->
+                <div class="px-5 py-3 space-y-2 overflow-y-auto max-h-[60vh]">
+                  <div
+                    v-for="(item, idx) in shortcutList"
+                    :key="idx"
+                    class="flex items-center justify-between py-1"
+                  >
+                    <span class="text-sm" :class="panelTextCls">{{ item.desc }}</span>
+                    <span class="flex items-center gap-1">
+                      <kbd
+                        v-for="(k, ki) in item.key.split(' / ')"
+                        :key="ki"
+                        class="inline-block px-1.5 py-0.5 text-xs font-mono rounded border leading-none"
+                        :class="kbdCls"
+                      >{{ k }}</kbd>
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </Transition>
+        </Teleport>
+
         <!-- ======== Page turn areas (desktop) ======== -->
         <button
-          v-if="!toolbarVisible || isDesktop"
           @click="prev"
-          class="absolute left-0 top-0 bottom-0 w-[15%] z-[5] cursor-w-resize opacity-0 focus:outline-none hidden md:block"
+          class="absolute top-0 bottom-0 w-[15%] z-[5] cursor-w-resize opacity-0 focus:outline-none hidden md:block transition-[left] duration-300 ease-out"
+          :style="{ left: readerLeft }"
           aria-label="上一页"
         />
         <button
-          v-if="!toolbarVisible || isDesktop"
           @click="next"
-          class="absolute right-0 top-0 bottom-0 w-[15%] z-[5] cursor-e-resize opacity-0 focus:outline-none hidden md:block"
+          class="absolute top-0 bottom-0 w-[15%] z-[5] cursor-e-resize opacity-0 focus:outline-none hidden md:block transition-[right] duration-300 ease-out"
+          :style="{ right: readerRight }"
           aria-label="下一页"
         />
       </template>

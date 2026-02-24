@@ -24,14 +24,26 @@ from app.schemas.ebook import (
     ReadingProgressUpdate,
     AnnotationCreate, AnnotationUpdate,
     BookmarkCreate,
+    EbookMetadataUpdate,
+    BookSearchResult,
+    MetadataApplyRequest,
 )
 from app.services.ebook_parser import parse_ebook, EbookMetadata
+from app.services.book_metadata import search_google_books
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 SUPPORTED_EXTENSIONS = {".epub", ".mobi", ".azw", ".azw3"}
 MAX_EBOOK_SIZE = 200 * 1024 * 1024  # 200 MB
+
+
+def _verify_ebook_exists(content_id: str, db: Session) -> bool:
+    """验证 content_id 对应的电子书是否存在（ContentItem + ebook MediaItem）。"""
+    return db.query(MediaItem.id).filter(
+        MediaItem.content_id == content_id,
+        MediaItem.media_type == "ebook",
+    ).first() is not None
 
 
 def _safe_media_path(rel_or_abs: str) -> Path:
@@ -143,7 +155,7 @@ async def upload_ebook(
         content_id=content_id,
         media_type="ebook",
         original_url=f"file://{filename}",
-        local_path=str(book_path),
+        local_path=f"{content_id}/{book_filename}",  # 相对于 MEDIA_DIR
         filename=book_filename,
         status="downloaded",
         metadata_json=json.dumps(media_metadata, ensure_ascii=False),
@@ -182,6 +194,8 @@ async def list_ebooks(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     search: Optional[str] = Query(None),
+    author: Optional[str] = Query(None, description="按作者筛选"),
+    category: Optional[str] = Query(None, description="按分类筛选"),
     sort_by: str = Query("updated_at", description="排序: updated_at / title / created_at"),
     sort_order: str = Query("desc"),
     db: Session = Depends(get_db),
@@ -199,6 +213,13 @@ async def list_ebooks(
         query = query.filter(
             (ContentItem.title.ilike(like)) | (ContentItem.author.ilike(like))
         )
+
+    if author:
+        query = query.filter(ContentItem.author == author)
+
+    if category:
+        # raw_data 是 Text 列存 JSON，用 LIKE 匹配 subjects 数组中的值
+        query = query.filter(ContentItem.raw_data.ilike(f'%"{category}"%'))
 
     total = query.count()
 
@@ -224,13 +245,15 @@ async def list_ebooks(
             except (json.JSONDecodeError, TypeError):
                 pass
 
-        cover_path_val = meta.get("cover_path")
-        has_cover = False
-        if cover_path_val:
+        raw = {}
+        if content.raw_data:
             try:
-                has_cover = _safe_media_path(cover_path_val).is_file()
-            except Exception:
+                raw = json.loads(content.raw_data)
+            except (json.JSONDecodeError, TypeError):
                 pass
+
+        # 信任 DB 中的 cover_path（上传时已验证），列表接口不做磁盘 I/O
+        has_cover = bool(meta.get("cover_path"))
 
         data.append({
             "content_id": content.id,
@@ -239,6 +262,7 @@ async def list_ebooks(
             "format": meta.get("format", "epub"),
             "file_size": meta.get("file_size"),
             "cover_url": f"/api/ebook/{content.id}/cover" if has_cover else None,
+            "subjects": raw.get("subjects", []),
             "progress": progress.progress if progress else 0,
             "section_title": progress.section_title if progress else None,
             "last_read_at": progress.updated_at.isoformat() if progress and progress.updated_at else None,
@@ -253,6 +277,234 @@ async def list_ebooks(
         "page_size": page_size,
         "message": "ok",
     }
+
+
+# ─── Cross-book Annotations ──────────────────────────────────────────────────
+
+# 注意: 此路由必须在 /{content_id} 之前定义，否则会被参数路由拦截
+@router.get("/annotations/recent")
+async def list_recent_annotations(
+    limit: int = Query(10, ge=1, le=50),
+    db: Session = Depends(get_db),
+):
+    """跨书最近标注"""
+    rows = (
+        db.query(BookAnnotation, ContentItem, MediaItem)
+        .join(ContentItem, ContentItem.id == BookAnnotation.content_id)
+        .join(MediaItem, (MediaItem.content_id == ContentItem.id) & (MediaItem.media_type == "ebook"))
+        .order_by(desc(BookAnnotation.created_at))
+        .limit(limit)
+        .all()
+    )
+
+    data = []
+    for ann, content, media in rows:
+        meta = {}
+        if media.metadata_json:
+            try:
+                meta = json.loads(media.metadata_json)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        # 信任 DB 中的 cover_path（上传时已验证），列表接口不做磁盘 I/O
+        has_cover = bool(meta.get("cover_path"))
+
+        data.append({
+            "id": ann.id,
+            "content_id": content.id,
+            "book_title": content.title,
+            "book_author": content.author,
+            "cover_url": f"/api/ebook/{content.id}/cover" if has_cover else None,
+            "cfi_range": ann.cfi_range,
+            "section_index": ann.section_index,
+            "type": ann.type,
+            "color": ann.color,
+            "selected_text": ann.selected_text,
+            "note": ann.note,
+            "created_at": ann.created_at.isoformat() if ann.created_at else None,
+        })
+
+    return {"code": 0, "data": data, "message": "ok"}
+
+
+# ─── Filters ──────────────────────────────────────────────────────────────────
+
+@router.get("/filters")
+async def get_ebook_filters(db: Session = Depends(get_db)):
+    """获取筛选选项：distinct 作者列表 + 汇总分类列表"""
+    rows = (
+        db.query(ContentItem.author, ContentItem.raw_data)
+        .join(MediaItem, MediaItem.content_id == ContentItem.id)
+        .filter(MediaItem.media_type == "ebook")
+        .all()
+    )
+
+    authors = set()
+    categories = set()
+    for author_val, raw_data in rows:
+        if author_val:
+            authors.add(author_val)
+        if raw_data:
+            try:
+                raw = json.loads(raw_data)
+                for s in raw.get("subjects", []):
+                    if s:
+                        categories.add(s)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+    return {
+        "code": 0,
+        "data": {
+            "authors": sorted(authors),
+            "categories": sorted(categories),
+        },
+        "message": "ok",
+    }
+
+
+# ─── Metadata ──────────────────────────────────────────────────────────────────
+
+@router.put("/{content_id}/metadata")
+async def update_ebook_metadata(
+    content_id: str,
+    body: EbookMetadataUpdate,
+    db: Session = Depends(get_db),
+):
+    """手动编辑元数据"""
+    content = db.get(ContentItem, content_id)
+    if not content:
+        return error_response(404, "电子书不存在")
+
+    if body.title is not None:
+        content.title = body.title
+    if body.author is not None:
+        content.author = body.author
+
+    raw = {}
+    if content.raw_data:
+        try:
+            raw = json.loads(content.raw_data)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    field_map = {
+        "description": body.description,
+        "isbn": body.isbn,
+        "publisher": body.publisher,
+        "language": body.language,
+        "subjects": body.subjects,
+        "publish_date": body.publish_date,
+        "series": body.series,
+        "page_count": body.page_count,
+    }
+    for key, val in field_map.items():
+        if val is not None:
+            raw[key] = val
+
+    raw["metadata_source"] = "manual"
+    content.raw_data = json.dumps(raw, ensure_ascii=False)
+    content.updated_at = utcnow()
+    db.commit()
+
+    return {"code": 0, "data": {"content_id": content_id}, "message": "ok"}
+
+
+@router.get("/{content_id}/metadata/search")
+async def search_book_metadata(
+    content_id: str,
+    query: Optional[str] = Query(None, description="自定义搜索词"),
+    db: Session = Depends(get_db),
+):
+    """在线搜索书籍元数据（Google Books API）"""
+    content = db.get(ContentItem, content_id)
+    if not content:
+        return error_response(404, "电子书不存在")
+
+    search_query = query
+    if not search_query:
+        parts = []
+        if content.title:
+            parts.append(content.title)
+        if content.author:
+            parts.append(content.author)
+        search_query = " ".join(parts)
+
+    if not search_query:
+        return {"code": 0, "data": [], "message": "ok"}
+
+    results = await search_google_books(search_query, max_results=5)
+
+    return {
+        "code": 0,
+        "data": [
+            BookSearchResult(
+                title=r.title,
+                author=r.author,
+                isbn_10=r.isbn_10,
+                isbn_13=r.isbn_13,
+                publisher=r.publisher,
+                publish_date=r.publish_date,
+                language=r.language,
+                page_count=r.page_count,
+                subjects=r.subjects,
+                description=r.description,
+                cover_url=r.cover_url,
+            ).model_dump()
+            for r in results
+        ],
+        "message": "ok",
+    }
+
+
+@router.post("/{content_id}/metadata/apply")
+async def apply_book_metadata(
+    content_id: str,
+    body: MetadataApplyRequest,
+    db: Session = Depends(get_db),
+):
+    """将选中的在线搜索结果应用到书籍"""
+    content = db.get(ContentItem, content_id)
+    if not content:
+        return error_response(404, "电子书不存在")
+
+    if body.title:
+        content.title = body.title
+    if body.author:
+        content.author = body.author
+
+    raw = {}
+    if content.raw_data:
+        try:
+            raw = json.loads(content.raw_data)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    if body.description:
+        raw["description"] = body.description
+    if body.publisher:
+        raw["publisher"] = body.publisher
+    if body.language:
+        raw["language"] = body.language
+    if body.publish_date:
+        raw["publish_date"] = body.publish_date
+    if body.page_count:
+        raw["page_count"] = body.page_count
+    if body.subjects:
+        existing = set(raw.get("subjects", []))
+        existing.update(body.subjects)
+        raw["subjects"] = sorted(existing)
+
+    isbn = body.isbn_13 or body.isbn_10
+    if isbn:
+        raw["isbn"] = isbn
+
+    raw["metadata_source"] = "google_books"
+    content.raw_data = json.dumps(raw, ensure_ascii=False)
+    content.updated_at = utcnow()
+    db.commit()
+
+    return {"code": 0, "data": {"content_id": content_id}, "message": "ok"}
 
 
 # ─── Detail / Delete ────────────────────────────────────────────────────────
@@ -309,6 +561,12 @@ async def get_ebook_detail(content_id: str, db: Session = Depends(get_db)):
             "language": raw.get("language"),
             "publisher": raw.get("publisher"),
             "description": raw.get("description"),
+            "isbn": raw.get("isbn"),
+            "subjects": raw.get("subjects", []),
+            "publish_date": raw.get("publish_date"),
+            "series": raw.get("series"),
+            "page_count": raw.get("page_count"),
+            "metadata_source": raw.get("metadata_source"),
             "toc": raw.get("toc", []),
             "progress": {
                 "cfi": progress.cfi if progress else None,
@@ -452,6 +710,9 @@ async def update_reading_progress(
     db: Session = Depends(get_db),
 ):
     """更新阅读进度"""
+    if not _verify_ebook_exists(content_id, db):
+        return error_response(404, "电子书不存在")
+
     progress = db.query(ReadingProgress).filter(
         ReadingProgress.content_id == content_id
     ).first()
@@ -504,6 +765,7 @@ async def list_annotations(content_id: str, db: Session = Depends(get_db)):
                 "selected_text": a.selected_text,
                 "note": a.note,
                 "created_at": a.created_at.isoformat() if a.created_at else None,
+                "updated_at": a.updated_at.isoformat() if a.updated_at else None,
             }
             for a in items
         ],
@@ -518,6 +780,9 @@ async def create_annotation(
     db: Session = Depends(get_db),
 ):
     """新增批注"""
+    if not _verify_ebook_exists(content_id, db):
+        return error_response(404, "电子书不存在")
+
     annotation = BookAnnotation(
         content_id=content_id,
         cfi_range=body.cfi_range,
@@ -610,6 +875,9 @@ async def create_bookmark(
     db: Session = Depends(get_db),
 ):
     """新增书签"""
+    if not _verify_ebook_exists(content_id, db):
+        return error_response(404, "电子书不存在")
+
     bookmark = BookBookmark(
         content_id=content_id,
         cfi=body.cfi,

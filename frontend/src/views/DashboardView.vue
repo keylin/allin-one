@@ -10,6 +10,7 @@ import {
   getDailyStats,
   getContentStatusDistribution,
   getStorageStats,
+  getDedupStats,
 } from '@/api/dashboard'
 import { getFinanceSummary } from '@/api/finance'
 import { collectSource, collectAllSources } from '@/api/sources'
@@ -29,6 +30,7 @@ const sourceHealthList = ref([])
 const financeSummaries = ref([])
 const contentStatus = ref({ pending: 0, processing: 0, ready: 0, analyzed: 0, failed: 0, total: 0 })
 const storageStats = ref({ media: {}, database_bytes: 0, total_bytes: 0 })
+const dedupStats = ref({ total_items: 0, duplicate_count: 0, originals_with_dups: 0, dedup_rate: 0, today_duplicates: 0, by_source: [] })
 const loading = ref(true)
 const collectingId = ref(null)
 const collectingAll = ref(false)
@@ -153,7 +155,7 @@ const healthStyles = {
 // --- 数据获取 ---
 async function fetchData() {
   try {
-    const [statsRes, actRes, trendRes, healthRes, finRes, statusRes, storageRes] = await Promise.all([
+    const [statsRes, actRes, trendRes, healthRes, finRes, statusRes, storageRes, dedupRes] = await Promise.all([
       getDashboardStats(),
       getRecentActivity(8),
       getCollectionTrend(7),
@@ -161,6 +163,7 @@ async function fetchData() {
       getFinanceSummary().catch(() => ({ code: -1 })),
       getContentStatusDistribution(),
       getStorageStats(),
+      getDedupStats(),
     ])
     if (statsRes.code === 0) stats.value = statsRes.data
     if (actRes.code === 0) activities.value = actRes.data
@@ -169,6 +172,7 @@ async function fetchData() {
     if (finRes.code === 0) financeSummaries.value = finRes.data.slice(0, 4)
     if (statusRes.code === 0) contentStatus.value = statusRes.data
     if (storageRes.code === 0) storageStats.value = storageRes.data
+    if (dedupRes.code === 0) dedupStats.value = dedupRes.data
   } catch (e) {
     toast.error('仪表盘数据加载失败')
   } finally {
@@ -583,6 +587,101 @@ onUnmounted(() => {
             </div>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- 内容去重统计 -->
+    <div class="bg-white rounded-xl border border-slate-200/60 shadow-sm p-4">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="text-sm font-semibold text-slate-700">内容去重统计</h3>
+        <router-link to="/content?duplicates_only=1" class="text-xs text-indigo-500 hover:text-indigo-700">查看重复内容</router-link>
+      </div>
+
+      <div v-if="loading" class="flex items-center justify-center h-24">
+        <svg class="w-6 h-6 animate-spin text-slate-200" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+        </svg>
+      </div>
+
+      <template v-else-if="dedupStats.duplicate_count > 0">
+        <!-- 指标卡片 -->
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-5">
+          <div class="bg-white rounded-xl border border-slate-200/60 p-4 shadow-sm">
+            <div class="flex items-center justify-between mb-2">
+              <div class="w-9 h-9 rounded-lg flex items-center justify-center bg-amber-50">
+                <svg class="w-5 h-5 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                </svg>
+              </div>
+            </div>
+            <div class="text-2xl font-bold tracking-tight text-amber-700">{{ dedupStats.duplicate_count }}</div>
+            <div class="text-sm text-slate-500 mt-0.5">重复内容</div>
+          </div>
+          <div class="bg-white rounded-xl border border-slate-200/60 p-4 shadow-sm">
+            <div class="flex items-center justify-between mb-2">
+              <div class="w-9 h-9 rounded-lg flex items-center justify-center" :class="dedupStats.dedup_rate > 20 ? 'bg-rose-50' : 'bg-emerald-50'">
+                <svg class="w-5 h-5" :class="dedupStats.dedup_rate > 20 ? 'text-rose-600' : 'text-emerald-600'" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" />
+                </svg>
+              </div>
+            </div>
+            <div class="text-2xl font-bold tracking-tight" :class="dedupStats.dedup_rate > 20 ? 'text-rose-700' : 'text-emerald-700'">{{ dedupStats.dedup_rate }}%</div>
+            <div class="text-sm text-slate-500 mt-0.5">去重率</div>
+          </div>
+          <div class="bg-white rounded-xl border border-slate-200/60 p-4 shadow-sm">
+            <div class="flex items-center justify-between mb-2">
+              <div class="w-9 h-9 rounded-lg flex items-center justify-center bg-indigo-50">
+                <svg class="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+                </svg>
+              </div>
+            </div>
+            <div class="text-2xl font-bold tracking-tight text-indigo-700">{{ dedupStats.originals_with_dups }}</div>
+            <div class="text-sm text-slate-500 mt-0.5">被重复原件</div>
+          </div>
+          <div class="bg-white rounded-xl border border-slate-200/60 p-4 shadow-sm">
+            <div class="flex items-center justify-between mb-2">
+              <div class="w-9 h-9 rounded-lg flex items-center justify-center bg-emerald-50">
+                <svg class="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </div>
+            </div>
+            <div class="text-2xl font-bold tracking-tight text-emerald-700">{{ dedupStats.today_duplicates }}</div>
+            <div class="text-sm text-slate-500 mt-0.5">今日重复</div>
+          </div>
+        </div>
+
+        <!-- 按数据源分布 -->
+        <div v-if="dedupStats.by_source.length > 0">
+          <div class="text-xs text-slate-400 mb-2.5">按数据源分布 (Top {{ dedupStats.by_source.length }})</div>
+          <div class="space-y-2">
+            <div v-for="src in dedupStats.by_source" :key="src.source_id" class="flex items-center gap-3">
+              <div class="w-20 text-xs text-slate-600 truncate shrink-0" :title="src.source_name">{{ src.source_name }}</div>
+              <div class="flex-1 bg-slate-100 rounded-full h-2 overflow-hidden">
+                <div
+                  class="h-2 rounded-full transition-all duration-500"
+                  :class="src.dedup_rate > 20 ? 'bg-amber-400' : 'bg-indigo-400'"
+                  :style="{ width: `${src.duplicate_count / dedupStats.by_source[0].duplicate_count * 100}%` }"
+                ></div>
+              </div>
+              <div class="text-xs text-slate-500 shrink-0 w-20 text-right">
+                {{ src.duplicate_count }} <span class="text-slate-400">({{ src.dedup_rate }}%)</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </template>
+
+      <!-- 空状态 -->
+      <div v-else-if="!loading" class="flex flex-col items-center justify-center py-6">
+        <div class="w-10 h-10 bg-emerald-50 rounded-full flex items-center justify-center mb-2">
+          <svg class="w-5 h-5 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+          </svg>
+        </div>
+        <span class="text-xs text-slate-400">暂无重复内容</span>
       </div>
     </div>
 
