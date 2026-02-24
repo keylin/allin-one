@@ -9,6 +9,7 @@ import DOMPurify from 'dompurify'
 import dayjs from 'dayjs'
 import { formatTimeFull } from '@/utils/time'
 import PodcastPlayer from '@/components/podcast-player.vue'
+import VideoPlayer from '@/components/video-player.vue'
 import ImageLightbox from '@/components/image-lightbox.vue'
 
 const props = defineProps({
@@ -27,8 +28,6 @@ const content = ref(null)
 const loading = ref(false)
 const analyzing = ref(false)
 const transitioning = ref(false)
-const videoRef = ref(null)
-const videoError = ref(false)
 
 // --- Chat composable ---
 const {
@@ -133,7 +132,6 @@ async function loadContent() {
   if (!props.contentId) return
 
   loading.value = true
-  videoError.value = false
   try {
     const res = await getContent(props.contentId)
     if (res.code === 0) {
@@ -376,24 +374,13 @@ function formatTime(t) {
             :class="transitioning ? 'opacity-0' : 'opacity-100'"
           >
 
-            <div v-if="content.media_items?.some(m => m.media_type === 'video')" class="bg-black rounded-xl overflow-hidden">
-              <video
-                ref="videoRef"
-                controls
-                preload="metadata"
-                class="w-full max-h-[60vh]"
-                :poster="`/api/video/${content.id}/thumbnail`"
-                @error="videoError = true"
-              >
-                <source :src="`/api/video/${content.id}/stream`" type="video/mp4" />
-              </video>
-              <div v-if="videoError" class="flex items-center justify-center py-8 text-slate-400 text-sm bg-slate-900">
-                <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
-                </svg>
-                视频文件未找到
-              </div>
-            </div>
+            <VideoPlayer
+              v-if="content.media_items?.some(m => m.media_type === 'video')"
+              :key="'vp-' + content.id"
+              :content-id="content.id"
+              :title="content.title || '视频播放'"
+              :saved-position="content.playback_position || 0"
+            />
 
             <!-- 播客音频播放器 -->
             <PodcastPlayer
