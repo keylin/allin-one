@@ -845,7 +845,9 @@ function addTouchHandler(doc) {
 // --- Relocate ---
 function onRelocate(e) {
   const { fraction, section, tocItem } = e.detail
-  progress.value = fraction ?? 0
+  // 防御异常 fraction：NaN / Infinity / 负数 → 忽略本次 relocate
+  if (typeof fraction !== 'number' || !isFinite(fraction) || fraction < 0) return
+  progress.value = fraction
   currentSectionIndex.value = section?.current ?? 0
   chapterTitle.value = tocItem?.label?.trim() || getChapterTitle(currentSectionIndex.value)
   scheduleSave()
@@ -858,7 +860,7 @@ function scheduleSave() {
 }
 
 function saveNow() {
-  if (progress.value <= 0) return
+  if (!isFinite(progress.value) || progress.value <= 0) return
   updateReadingProgress(props.contentId, {
     cfi: null,
     progress: progress.value,
