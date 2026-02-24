@@ -14,7 +14,8 @@ import uuid
 from enum import Enum
 
 from sqlalchemy import (
-    Column, String, Boolean, DateTime, Text, Integer, ForeignKey, UniqueConstraint, Index
+    Column, String, Boolean, DateTime, Text, Integer, BigInteger,
+    ForeignKey, UniqueConstraint, Index,
 )
 from sqlalchemy.orm import relationship
 
@@ -205,6 +206,10 @@ class ContentItem(Base):
     playback_position = Column(Integer, default=0)       # 视频播放进度（秒）
     last_played_at = Column(DateTime, nullable=True)     # 最后播放时间
 
+    # 相似度去重
+    title_hash = Column(BigInteger, nullable=True)       # SimHash 64 位指纹
+    duplicate_of_id = Column(String, ForeignKey("content_items.id", ondelete="SET NULL"), nullable=True)
+
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
@@ -212,9 +217,12 @@ class ContentItem(Base):
     source = relationship("SourceConfig", back_populates="content_items")
     pipeline_executions = relationship("PipelineExecution", back_populates="content", cascade="all, delete-orphan")
     media_items = relationship("MediaItem", back_populates="content", cascade="all, delete-orphan")
+    duplicates = relationship("ContentItem", backref="duplicate_of", remote_side="ContentItem.id")
 
     __table_args__ = (
         UniqueConstraint("source_id", "external_id", name="uq_source_external"),
+        Index("ix_content_title_hash", "title_hash"),
+        Index("ix_content_duplicate_of", "duplicate_of_id"),
     )
 
 

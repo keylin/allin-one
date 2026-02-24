@@ -50,6 +50,12 @@ async def collect_single_source(source_id: str, trigger: str = "scheduled", use_
             # 智能调度: 更新下次采集时间
             SchedulingService.update_next_collection_time(source, db)
 
+            # ---- 中间阶段: 标题相似度去重 ----
+            from app.services.dedup import check_and_mark_duplicates
+            dedup_count = check_and_mark_duplicates(db, new_items, source_id=source.id)
+            if dedup_count:
+                logger.info(f"[collect_task] {source.name}: {dedup_count} items marked as duplicates")
+
             # ---- 第二阶段: 对每条新内容触发流水线 ----
             trigger_source = TriggerSource.MANUAL if trigger == "manual" else TriggerSource.SCHEDULED
             orchestrator = PipelineOrchestrator(db)

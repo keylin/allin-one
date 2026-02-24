@@ -36,6 +36,7 @@ class ContentResponse(BaseModel):
     last_viewed_at: Optional[datetime] = None
     playback_position: int = 0
     last_played_at: Optional[datetime] = None
+    duplicate_of_id: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     # 列表摘要字段（API 层计算，非 ORM 字段）
