@@ -502,8 +502,14 @@ function createOverlay() {
   return overlay
 }
 
-function runOverlayAnimation(overlay, direction, onEnd) {
-  overlay.style.transform = 'translateX(0)'
+function runOverlayAnimation(overlay, direction, onEnd, startOffsetPx = 0) {
+  const containerWidth = readerEl.value?.offsetWidth || window.innerWidth
+  const remaining = Math.max(0, containerWidth - Math.abs(startOffsetPx)) / containerWidth
+  const duration = Math.max(120, Math.round(380 * remaining))
+
+  overlay.style.transition = 'none'
+  overlay.style.transform = `translateX(${startOffsetPx}px)`
+
   let ended = false
   function finish() {
     if (ended) return
@@ -512,10 +518,13 @@ function runOverlayAnimation(overlay, direction, onEnd) {
     onEnd()
   }
   overlay.addEventListener('transitionend', finish, { once: true })
-  setTimeout(finish, 500)
+  setTimeout(finish, duration + 150)
+
   requestAnimationFrame(() => {
-    overlay.style.transition = 'transform 380ms cubic-bezier(0.25,0.46,0.45,0.94)'
-    overlay.style.transform = direction === 'next' ? 'translateX(-100%)' : 'translateX(100%)'
+    requestAnimationFrame(() => {
+      overlay.style.transition = `transform ${duration}ms cubic-bezier(0.25,0.46,0.45,0.94)`
+      overlay.style.transform = direction === 'next' ? 'translateX(-100%)' : 'translateX(100%)'
+    })
   })
 }
 
@@ -818,7 +827,7 @@ function addTouchHandler(doc) {
           if (direction === 'next') await view?.next()
           else await view?.prev()
         } catch { /* ignore */ }
-        runOverlayAnimation(ol, direction, () => { isAnimating = false })
+        runOverlayAnimation(ol, direction, () => { isAnimating = false }, dx)
       } else {
         // Snap back to original position
         let removed = false
