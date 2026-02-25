@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
-import { getContent, analyzeContent, toggleFavorite } from '@/api/content'
+import { getContent, analyzeContent } from '@/api/content'
 import JsonTreeViewer from '@/components/json-tree-viewer.vue'
 import MarkdownIt from 'markdown-it'
 import DOMPurify from 'dompurify'
@@ -191,9 +191,8 @@ async function handleAnalyze() {
   }
 }
 
-async function handleFavorite() {
+function handleFavorite() {
   if (!props.contentId) return
-  await toggleFavorite(props.contentId)
   if (content.value) content.value.is_favorited = !content.value.is_favorited
   emit('favorite', props.contentId)
 }
