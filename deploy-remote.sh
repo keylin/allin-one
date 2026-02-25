@@ -35,9 +35,35 @@ rsync -avz --delete -e 'ssh -p 2222' \
     ./ ${REMOTE_HOST}:${REMOTE_DIR}/ --quiet
 
 # 3. Remote build & restart
-echo ">> [3/3] Building and restarting..."
-${SSH} "cd ${REMOTE_DIR} && docker compose up -d --build" 2>&1 | tail -20
-${SSH} "cd ${REMOTE_DIR} && docker compose exec -T allin-one alembic upgrade head" 2>/dev/null || true
+echo ">> [3/4] Building and restarting..."
+${SSH} "cd ${REMOTE_DIR} && docker compose build allin-one" 2>&1 | tail -20
+${SSH} "cd ${REMOTE_DIR} && docker compose up -d" 2>&1 | tail -10
+
+# 4. Wait for app healthy & run migrations
+echo ">> [4/4] Waiting for app to be healthy..."
+HEALTHY=false
+for i in $(seq 1 30); do
+    STATUS=$(${SSH} "cd ${REMOTE_DIR} && docker compose ps allin-one --format '{{.Status}}'" 2>/dev/null || echo "")
+    case "${STATUS}" in
+        *healthy*)
+            HEALTHY=true
+            break
+            ;;
+        *unhealthy*)
+            echo "   Container unhealthy, check logs"
+            break
+            ;;
+    esac
+    sleep 2
+done
+
+if ${HEALTHY}; then
+    echo "   Running database migrations..."
+    ${SSH} "cd ${REMOTE_DIR} && docker compose exec -T allin-one alembic upgrade head" || echo "   ⚠ Migration failed, check manually"
+else
+    echo "   ⚠ Container not healthy after 60s, skipping migrations"
+fi
+
 ${SSH} "docker image prune -f" > /dev/null 2>&1
 
 # 修正 data/ 目录权限（Docker 以 root 创建，需要让宿主用户可写以便 rsync 同步）

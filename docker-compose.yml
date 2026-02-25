@@ -76,6 +76,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    image: allin-one:local
     container_name: allin-one
     restart: unless-stopped
     ports:
@@ -118,9 +119,7 @@ services:
 
   # Procrastinate Worker - 流水线任务 (enrich, localize, analyze, publish ...)
   allin-worker-pipeline:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: allin-one:local
     container_name: allin-worker-pipeline
     restart: unless-stopped
     deploy:
@@ -153,9 +152,7 @@ services:
 
   # Procrastinate Worker - 定时调度任务 (采集循环, 日报, 清理)
   allin-worker-scheduled:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: allin-one:local
     container_name: allin-worker-scheduled
     restart: unless-stopped
     deploy:

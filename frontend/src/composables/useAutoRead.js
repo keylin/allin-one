@@ -25,11 +25,8 @@ export function useAutoRead({ items, leftPanelRef, loadStats, contentStats }) {
   // [D] O(1) 查找：用 Map 替代 find
   const itemMap = computed(() => new Map(items.value.map(i => [i.id, i])))
 
-  // [E] 记录 itemId → DOM element 映射，用于标记后 unobserve
+  // itemId → DOM element 映射，用于标记后 unobserve 和滚动到底部检测
   const elementMap = new Map()
-
-  // [F] 已观察的 itemId 集合，增量观察新卡片
-  const observedIds = new Set()
 
   // --- IntersectionObserver 回调 ---
   function handleCardVisible(entry) {
@@ -71,12 +68,11 @@ export function useAutoRead({ items, leftPanelRef, loadStats, contentStats }) {
       contentStats.value.read++
     }
 
-    // [E] 标记后立即取消观察
+    // 标记后立即取消观察
     const el = elementMap.get(itemId)
     if (el) {
       unobserve(el)
       elementMap.delete(itemId)
-      observedIds.delete(itemId)
     }
 
     debouncedBatchSubmit()
@@ -150,27 +146,51 @@ export function useAutoRead({ items, leftPanelRef, loadStats, contentStats }) {
     }
   }
 
-  // [F] 监听 items 变化，增量观察新卡片（只对新增的调用 observe）
-  watch(items, () => {
-    nextTick(() => {
-      const container = leftPanelRef.value
-      if (!container) return
+  /**
+   * 扫描当前 DOM 卡片，同步观察状态：
+   * - 新出现的卡片 → observe
+   * - DOM 元素更换（同 itemId 不同 element）→ 换绑 observe
+   * - 已被标记已读的卡片 → 跳过
+   */
+  function syncObservers() {
+    const container = leftPanelRef.value
+    if (!container) return
 
-      const cards = container.querySelectorAll('[data-item-id]')
-      cards.forEach(card => {
-        const itemId = card.dataset.itemId
-        if (observedIds.has(itemId)) return // 已观察，跳过
+    const cards = container.querySelectorAll('[data-item-id]')
+    const currentIds = new Set()
 
-        const item = itemMap.value.get(itemId)
-        if (item && (item.view_count || 0) === 0) {
-          observe(card)
-          observedIds.add(itemId)
-          elementMap.set(itemId, card)
-        }
-      })
+    cards.forEach(card => {
+      const itemId = card.dataset.itemId
+      currentIds.add(itemId)
 
-      checkAndActivateAutoRead()
+      const item = itemMap.value.get(itemId)
+      if (!item || (item.view_count || 0) > 0) return
+
+      const existing = elementMap.get(itemId)
+      if (existing === card) return // 同一 DOM 元素，已在观察中
+
+      // DOM 元素更换或新卡片：先 unobserve 旧元素，再 observe 新元素
+      if (existing) {
+        unobserve(existing)
+      }
+      observe(card)
+      elementMap.set(itemId, card)
     })
+
+    // 清理已不在 DOM 中的旧条目
+    for (const [itemId, el] of elementMap) {
+      if (!currentIds.has(itemId)) {
+        unobserve(el)
+        elementMap.delete(itemId)
+      }
+    }
+
+    checkAndActivateAutoRead()
+  }
+
+  // 监听 items 变化，同步观察状态
+  watch(items, () => {
+    nextTick(syncObservers)
   }, { flush: 'post' })
 
   // 窗口 resize 处理（防抖）
@@ -201,6 +221,15 @@ export function useAutoRead({ items, leftPanelRef, loadStats, contentStats }) {
     }
   }
 
+  // 重置观察状态（下拉刷新、容器可见性恢复等场景）
+  function reset() {
+    disconnect()
+    elementMap.clear()
+    pendingReadIds.value.clear()
+    // 在下一个 tick 重新扫描并绑定观察
+    nextTick(syncObservers)
+  }
+
   onMounted(() => {
     const container = leftPanelRef.value
     if (container) {
@@ -215,7 +244,6 @@ export function useAutoRead({ items, leftPanelRef, loadStats, contentStats }) {
     disconnect()
     pendingReadIds.value.clear()
     hasScrolled.value = false
-    observedIds.clear()
     elementMap.clear()
     if (autoActivateTimer.value) {
       clearTimeout(autoActivateTimer.value)
@@ -228,5 +256,6 @@ export function useAutoRead({ items, leftPanelRef, loadStats, contentStats }) {
     pendingReadIds,
     markAsRead,
     handleScrollBottom,
+    reset,
   }
 }

@@ -174,7 +174,7 @@ const {
 })
 
 // --- Auto-read composable (pass contentStats for optimistic update) ---
-const { markAsRead, handleScrollBottom } = useAutoRead({
+const { markAsRead, handleScrollBottom, reset: resetAutoRead } = useAutoRead({
   items,
   leftPanelRef,
   loadStats,
@@ -370,6 +370,8 @@ function selectItem(item) {
 
 function closeMobileDetail() {
   showMobileDetail.value = false
+  // display:none → block 后重新绑定 IntersectionObserver
+  resetAutoRead()
 }
 
 // 键盘弹起时动态调整移动端详情面板位置和高度，防止 sticky header 被顶出屏幕
@@ -715,6 +717,7 @@ useSwipe(mobileDetailRef, {
 const { isPulling, pullDistance, isRefreshing } = usePullToRefresh(leftPanelRef, {
   onRefresh: async () => {
     sessionInitialUnread.value = 0
+    resetAutoRead()
     await fetchItems(true)
     await loadStats()
   }
