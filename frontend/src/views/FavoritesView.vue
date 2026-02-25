@@ -4,8 +4,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { listContent, toggleFavorite, batchMarkRead, incrementView } from '@/api/content'
 import { listSources } from '@/api/sources'
 import { useToast } from '@/composables/useToast'
+import { formatTimeShort } from '@/utils/time'
 import ContentDetailModal from '@/components/content-detail-modal.vue'
-import ContentMetaRow from '@/components/common/content-meta-row.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -20,7 +20,6 @@ const page = ref(1)
 const pageSize = 24
 const hasMore = ref(true)
 const sentinelRef = ref(null)
-const mobileSearchInput = ref(null)
 let observer = null
 
 // --- 筛选 ---
@@ -64,39 +63,60 @@ const currentSort = computed({
   },
 })
 
-// --- 移动端筛选状态 ---
-const mobileSearchOpen = ref(false)
-const mobileFilterOpen = ref(false)
-
-function toggleMobileSearch() {
-  mobileSearchOpen.value = !mobileSearchOpen.value
-  if (mobileSearchOpen.value) {
-    mobileFilterOpen.value = false
-    nextTick(() => mobileSearchInput.value?.focus())
+// --- 辅助判断 ---
+function hasVideo(item) {
+  return item.media_items?.some(m => m.media_type === 'video')
+}
+function hasAudio(item) {
+  return item.media_items?.some(m => m.media_type === 'audio')
+}
+function hasThumbnail(item) {
+  return item.has_thumbnail === true
+}
+function getContentId(item) {
+  return item.id
+}
+function getVideoInfo(item) {
+  const videoMedia = item.media_items?.find(m => m.media_type === 'video') || {}
+  let duration = null
+  if (videoMedia.metadata_json) {
+    try { duration = JSON.parse(videoMedia.metadata_json).duration || null } catch { /* ignore */ }
+  }
+  return {
+    platform: item.url?.includes('youtube') ? 'youtube' : item.url?.includes('bilibili') ? 'bilibili' : '',
+    has_thumbnail: item.has_thumbnail,
+    thumbnail_path: videoMedia.thumbnail_path,
+    duration,
   }
 }
-
-function closeMobileSearch() {
-  mobileSearchOpen.value = false
-  if (!searchQuery.value) searchQuery.value = ''
+function formatDuration(seconds) {
+  if (!seconds) return ''
+  const m = Math.floor(seconds / 60)
+  const s = Math.floor(seconds % 60)
+  return `${m}:${String(s).padStart(2, '0')}`
 }
 
-function toggleMobileFilter() {
-  mobileFilterOpen.value = !mobileFilterOpen.value
-  if (mobileFilterOpen.value) mobileSearchOpen.value = false
-}
+// --- 统计 pills（基于当前已加载内容） ---
+const videoCount = computed(() => items.value.filter(i => hasVideo(i)).length)
+const audioCount = computed(() => items.value.filter(i => hasAudio(i) && !hasVideo(i)).length)
+const articleCount = computed(() => items.value.filter(i => !hasVideo(i) && !hasAudio(i)).length)
 
-// 活跃筛选器数量（移动端角标）
-const activeFilterCount = computed(() => {
-  let count = 0
-  if (filterSourceId.value) count++
-  if (dateRange.value) count++
-  if (sortBy.value !== 'favorited_at') count++
-  return count
-})
+// --- 筛选状态 ---
+const hasActiveFilters = computed(() =>
+  !!(searchQuery.value || activeMediaType.value || filterSourceId.value || dateRange.value)
+)
+
+function clearFilters() {
+  searchQuery.value = ''
+  activeMediaType.value = ''
+  filterSourceId.value = ''
+  dateRange.value = ''
+  currentSort.value = 'favorited_at:desc'
+}
 
 // --- 批量操作 ---
 const selectedIds = ref([])
+const showBatchBar = computed(() => selectedIds.value.length > 0)
 
 // --- 详情弹层 ---
 const modalVisible = ref(false)
@@ -109,37 +129,17 @@ const currentItemIndex = computed(() => {
 const hasPrev = computed(() => currentItemIndex.value > 0)
 const hasNext = computed(() => currentItemIndex.value < items.value.length - 1)
 
-// --- 辅助计算 ---
-function hasVideo(item) {
-  return item.media_items?.some(m => m.media_type === 'video')
+// --- 封面横竖屏检测 ---
+const detectedOrientations = ref({})
+function isPortrait(item) {
+  return detectedOrientations.value[item.id] === 'portrait'
 }
-
-function hasThumbnail(item) {
-  // content API 的 has_thumbnail 在顶层
-  return item.has_thumbnail === true
-}
-
-function getContentId(item) {
-  return item.id
-}
-
-function getVideoInfo(item) {
-  // content API 没有嵌套 video_info，信息在顶层和 media_items 中
-  const videoMedia = item.media_items?.find(m => m.media_type === 'video') || {}
-  return {
-    platform: item.url?.includes('youtube') ? 'youtube' : item.url?.includes('bilibili') ? 'bilibili' : '',
-    has_thumbnail: item.has_thumbnail,
-    thumbnail_path: videoMedia.thumbnail_path,
+function onThumbnailLoad(event, itemId) {
+  const img = event.target
+  if (img.naturalHeight > img.naturalWidth) {
+    detectedOrientations.value[itemId] = 'portrait'
   }
 }
-
-function formatDuration(seconds) {
-  if (!seconds) return ''
-  const m = Math.floor(seconds / 60)
-  const s = Math.floor(seconds % 60)
-  return `${m}:${String(s).padStart(2, '0')}`
-}
-
 
 // --- URL 同步 ---
 function syncQueryParams() {
@@ -192,8 +192,6 @@ async function fetchItems(reset = false) {
     if (activeMediaType.value === 'audio') params.has_audio = true
     if (activeMediaType.value === 'article') { params.has_video = false; params.has_audio = false }
     if (filterSourceId.value) params.source_id = filterSourceId.value
-
-    // 游标分页: 非 reset 且有已加载项时，用最后一条的 id 作为游标
     if (!reset && items.value.length > 0) {
       params.cursor_id = items.value[items.value.length - 1].id
     }
@@ -225,7 +223,6 @@ watch(searchQuery, () => {
   clearTimeout(searchTimer)
   searchTimer = setTimeout(() => fetchItems(true), 300)
 })
-
 watch([() => activeMediaType.value, () => filterSourceId.value, () => dateRange.value, currentSort], () => {
   fetchItems(true)
 })
@@ -234,25 +231,18 @@ watch([() => activeMediaType.value, () => filterSourceId.value, () => dateRange.
 async function handleFavorite(id) {
   const item = items.value.find(i => i.id === id)
   if (!item) return
-
   const wasFavorited = item.is_favorited
   item.is_favorited = !wasFavorited
-
   try {
     const res = await toggleFavorite(id)
     if (res.code === 0) {
       item.is_favorited = res.data.is_favorited
       if (!res.data.is_favorited) {
-        // 如果弹层正在显示该条目，先导航到下一条或关闭
         if (modalVisible.value && selectedId.value === id) {
           const idx = items.value.findIndex(i => i.id === id)
-          if (idx < items.value.length - 1) {
-            selectedId.value = items.value[idx + 1].id
-          } else if (idx > 0) {
-            selectedId.value = items.value[idx - 1].id
-          } else {
-            closeModal()
-          }
+          if (idx < items.value.length - 1) selectedId.value = items.value[idx + 1].id
+          else if (idx > 0) selectedId.value = items.value[idx - 1].id
+          else closeModal()
         }
         items.value = items.value.filter(i => i.id !== id)
         totalCount.value = Math.max(0, totalCount.value - 1)
@@ -308,11 +298,9 @@ function selectItem(item) {
   modalVisible.value = true
   incrementView(item.id).catch(() => {})
 }
-
 function closeModal() {
   modalVisible.value = false
 }
-
 function goToPrev() {
   const idx = currentItemIndex.value
   if (idx > 0) {
@@ -320,7 +308,6 @@ function goToPrev() {
     incrementView(items.value[idx - 1].id).catch(() => {})
   }
 }
-
 function goToNext() {
   const idx = currentItemIndex.value
   if (idx < items.value.length - 1) {
@@ -334,27 +321,7 @@ function goToNext() {
 function handleKeydown(e) {
   const tag = e.target.tagName
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
-  if (e.key === 'Escape' && modalVisible.value) {
-    closeModal()
-    return
-  }
-}
-
-// --- 封面加载检测（横竖屏） ---
-const detectedOrientations = ref({})
-function isPortrait(item) {
-  const info = getVideoInfo(item)
-  const w = info.width
-  const h = info.height
-  if (w && h) return h > w
-  return detectedOrientations.value[item.id] === 'portrait'
-}
-
-function onThumbnailLoad(event, itemId) {
-  const img = event.target
-  if (img.naturalHeight > img.naturalWidth) {
-    detectedOrientations.value[itemId] = 'portrait'
-  }
+  if (e.key === 'Escape' && modalVisible.value) closeModal()
 }
 
 // --- IntersectionObserver 无限滚动 ---
@@ -384,249 +351,267 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="flex flex-col h-full">
-    <!-- ═══════════ Sticky header ═══════════ -->
-    <div class="sticky top-0 bg-white z-10 border-b border-slate-100 shrink-0">
+  <div class="flex flex-col h-full bg-slate-50">
 
-      <!-- ── 移动端工具栏 (<md) ── -->
-      <div class="md:hidden">
-        <!-- 主行: 搜索展开态 -->
-        <div v-if="mobileSearchOpen" class="flex items-center gap-2 px-3 py-2.5">
-          <div class="relative flex-1">
-            <svg class="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
-            </svg>
-            <input
-              v-model="searchQuery"
-              ref="mobileSearchInput"
-              type="text"
-              placeholder="搜索收藏内容..."
-              class="w-full bg-slate-50 rounded-lg pl-8 pr-3 py-2 text-sm text-slate-700 placeholder-slate-400 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all"
-              @keydown.escape="closeMobileSearch"
-            />
-          </div>
-          <button
-            class="shrink-0 p-2 text-slate-400 hover:text-slate-600 transition-colors"
-            @click="closeMobileSearch"
-          >
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
+    <!-- ══════════════════════════════════════════════
+         Sticky 头部
+         ══════════════════════════════════════════════ -->
+    <div class="sticky top-0 z-10 bg-white/95 backdrop-blur-sm border-b border-slate-100 shrink-0">
 
-        <!-- 主行: 默认紧凑态 -->
-        <div v-else class="flex items-center gap-1.5 px-3 py-2.5">
-          <!-- 类型 pills -->
-          <div class="flex items-center gap-1">
-            <button
-              v-for="mt in mediaTypes"
-              :key="mt.value"
-              class="px-2.5 py-1.5 text-xs font-medium rounded-lg border transition-all duration-200"
-              :class="activeMediaType === mt.value
-                ? 'bg-indigo-50 border-indigo-300 text-indigo-700'
-                : 'bg-white border-slate-200 text-slate-500'"
-              @click="activeMediaType = mt.value"
-            >
-              {{ mt.label }}
-            </button>
+      <!-- ── 标题行 ── -->
+      <div class="flex items-start justify-between px-4 pt-3.5 pb-0 md:px-5">
+        <div class="flex-1 min-w-0">
+          <!-- 标题 + 总数 -->
+          <div class="flex items-center gap-2">
+            <div class="w-6 h-6 bg-amber-50 rounded-lg flex items-center justify-center shrink-0">
+              <svg class="w-3.5 h-3.5 text-amber-400" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>
+              </svg>
+            </div>
+            <h1 class="text-base font-bold text-slate-900 tracking-tight">收藏</h1>
+            <span v-if="!loading && totalCount > 0" class="text-xs text-slate-400">{{ totalCount }} 条</span>
           </div>
 
-          <div class="flex-1" />
-
-          <!-- 搜索按钮 -->
-          <button
-            class="p-2.5 md:p-2 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-all"
-            :class="searchQuery ? 'text-indigo-600 bg-indigo-50' : ''"
-            @click="toggleMobileSearch"
-          >
-            <svg class="w-4.5 h-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
-            </svg>
-          </button>
-
-          <!-- 筛选按钮 -->
-          <button
-            class="relative p-2.5 md:p-2 rounded-lg transition-all"
-            :class="mobileFilterOpen || activeFilterCount > 0
-              ? 'text-indigo-600 bg-indigo-50'
-              : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'"
-            @click="toggleMobileFilter"
-          >
-            <svg class="w-4.5 h-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 6h9.75M10.5 6a1.5 1.5 0 11-3 0m3 0a1.5 1.5 0 10-3 0M3.75 6H7.5m3 12h9.75m-9.75 0a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m-3.75 0H7.5m9-6h3.75m-3.75 0a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m-9.75 0h9.75" />
-            </svg>
-            <!-- 活跃筛选角标 -->
-            <span
-              v-if="activeFilterCount > 0"
-              class="absolute -top-0.5 -right-0.5 w-4 h-4 bg-indigo-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center"
-            >{{ activeFilterCount }}</span>
-          </button>
-
-          <!-- 总数 -->
-          <span class="text-xs text-slate-400 whitespace-nowrap ml-1">{{ totalCount }}条</span>
+          <!-- 统计 pills（桌面端，有内容后显示） -->
+          <div v-if="!loading && items.length > 0" class="hidden md:flex items-center gap-1.5 mt-2 mb-0.5">
+            <span v-if="videoCount > 0" class="inline-flex items-center gap-1 px-2 py-0.5 bg-violet-50 text-violet-600 text-[11px] font-medium rounded-md">
+              <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+              </svg>
+              {{ videoCount }} 视频
+            </span>
+            <span v-if="audioCount > 0" class="inline-flex items-center gap-1 px-2 py-0.5 bg-rose-50 text-rose-600 text-[11px] font-medium rounded-md">
+              <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"/>
+              </svg>
+              {{ audioCount }} 播客
+            </span>
+            <span v-if="articleCount > 0" class="inline-flex items-center gap-1 px-2 py-0.5 bg-sky-50 text-sky-600 text-[11px] font-medium rounded-md">
+              <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+              </svg>
+              {{ articleCount }} 文章
+            </span>
+          </div>
         </div>
 
-        <!-- 筛选面板 (slide-down) -->
-        <Transition
-          enter-active-class="transition-all duration-200 ease-out"
-          leave-active-class="transition-all duration-150 ease-in"
-          enter-from-class="opacity-0 -translate-y-2 max-h-0"
-          enter-to-class="opacity-100 translate-y-0 max-h-60"
-          leave-from-class="opacity-100 translate-y-0 max-h-60"
-          leave-to-class="opacity-0 -translate-y-2 max-h-0"
+        <!-- 全选/管理按钮 -->
+        <button
+          v-if="!loading && items.length > 0"
+          class="shrink-0 ml-3 mt-0.5 text-xs text-slate-500 hover:text-indigo-600 px-2.5 py-1.5 rounded-lg hover:bg-indigo-50 transition-all duration-200 font-medium"
+          @click="toggleSelectAll"
         >
-          <div v-if="mobileFilterOpen" class="overflow-hidden border-t border-slate-100 bg-slate-50/50 px-3 py-3 space-y-3">
-            <!-- 来源 -->
-            <div v-if="sources.length > 0" class="flex items-center gap-2">
-              <span class="text-xs text-slate-500 w-10 shrink-0">来源</span>
-              <select
-                v-model="filterSourceId"
-                class="flex-1 px-3 py-2 text-xs font-medium bg-white border border-slate-200 rounded-lg text-slate-600 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 outline-none transition-all"
-              >
-                <option value="">全部来源</option>
-                <option v-for="s in sources" :key="s.id" :value="String(s.id)">{{ s.name }}</option>
-              </select>
-            </div>
-
-            <!-- 时间 -->
-            <div class="flex items-center gap-2">
-              <span class="text-xs text-slate-500 w-10 shrink-0">时间</span>
-              <select
-                v-model="dateRange"
-                class="flex-1 px-3 py-2 text-xs font-medium bg-white border border-slate-200 rounded-lg text-slate-600 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 outline-none transition-all"
-              >
-                <option v-for="opt in dateRangeOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-              </select>
-            </div>
-
-            <!-- 排序 2×2 网格 -->
-            <div class="flex items-start gap-2">
-              <span class="text-xs text-slate-500 w-10 shrink-0 pt-2">排序</span>
-              <div class="flex-1 grid grid-cols-2 gap-1.5">
-                <button
-                  v-for="opt in sortOptions"
-                  :key="opt.value"
-                  class="px-2.5 py-2 text-xs font-medium rounded-lg border transition-all duration-200 text-center"
-                  :class="currentSort === opt.value
-                    ? 'bg-indigo-50 border-indigo-300 text-indigo-700'
-                    : 'bg-white border-slate-200 text-slate-500'"
-                  @click="currentSort = opt.value"
-                >
-                  {{ opt.label }}
-                </button>
-              </div>
-            </div>
-          </div>
-        </Transition>
+          {{ selectedIds.length === items.length && items.length > 0 ? '取消全选' : '全选' }}
+        </button>
       </div>
 
-      <!-- ── 桌面端工具栏 (>=md) ── -->
-      <div class="hidden md:block px-4 pt-3 pb-2">
-        <div class="flex flex-wrap items-center gap-3">
-          <!-- 搜索 -->
-          <div class="relative flex-1 min-w-[200px] max-w-sm">
-            <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+      <!-- ── 搜索框 ── -->
+      <div class="px-4 pt-2.5 md:px-5">
+        <div class="relative">
+          <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/>
+          </svg>
+          <input
+            v-model="searchQuery"
+            type="text"
+            placeholder="搜索收藏内容..."
+            class="w-full pl-9 pr-4 py-2 bg-slate-50 rounded-xl border border-slate-200 text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 focus:bg-white transition-all duration-200"
+          />
+          <button
+            v-if="searchQuery"
+            class="absolute right-2.5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-200 flex items-center justify-center transition-colors"
+            @click="searchQuery = ''"
+          >
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
             </svg>
-            <input
-              v-model="searchQuery"
-              type="text"
-              placeholder="搜索收藏内容..."
-              class="w-full bg-white rounded-lg pl-9 pr-3 py-2 text-sm text-slate-700 placeholder-slate-400 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all"
-            />
-          </div>
-
-          <!-- 类型 pills -->
-          <div class="flex items-center gap-1">
-            <button
-              v-for="mt in mediaTypes"
-              :key="mt.value"
-              class="px-2.5 py-1.5 text-xs font-medium rounded-lg border transition-all duration-200"
-              :class="activeMediaType === mt.value
-                ? 'bg-indigo-50 border-indigo-300 text-indigo-700'
-                : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300'"
-              @click="activeMediaType = mt.value"
-            >
-              {{ mt.label }}
-            </button>
-          </div>
-
-          <!-- 来源 -->
-          <select
-            v-if="sources.length > 0"
-            v-model="filterSourceId"
-            class="px-3 py-1.5 text-xs font-medium bg-white border border-slate-200 rounded-lg text-slate-600 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 outline-none transition-all"
-          >
-            <option value="">全部来源</option>
-            <option v-for="s in sources" :key="s.id" :value="String(s.id)">{{ s.name }}</option>
-          </select>
-
-          <!-- 时间范围 -->
-          <select
-            v-model="dateRange"
-            class="px-3 py-1.5 text-xs font-medium bg-white border border-slate-200 rounded-lg text-slate-600 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 outline-none transition-all"
-          >
-            <option v-for="opt in dateRangeOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-          </select>
-
-          <!-- 排序 pills + 总数 -->
-          <div class="flex items-center gap-1 ml-auto">
-            <button
-              v-for="opt in sortOptions"
-              :key="opt.value"
-              class="px-2.5 py-1.5 text-xs font-medium rounded-lg border transition-all duration-200"
-              :class="currentSort === opt.value
-                ? 'bg-indigo-50 border-indigo-300 text-indigo-700'
-                : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300'"
-              @click="currentSort = opt.value"
-            >
-              {{ opt.label }}
-            </button>
-            <span class="text-xs text-slate-400 ml-2 whitespace-nowrap">{{ totalCount }} 条收藏</span>
-          </div>
+          </button>
         </div>
+      </div>
+
+      <!-- ── 筛选工具栏 ── -->
+      <div class="flex items-center gap-1.5 px-4 pt-2 pb-2.5 md:px-5 overflow-x-auto scrollbar-hide">
+        <!-- 媒体类型 tabs -->
+        <div class="flex items-center gap-1 flex-shrink-0">
+          <button
+            v-for="mt in mediaTypes"
+            :key="mt.value"
+            class="px-2.5 py-1 text-xs font-medium rounded-lg border transition-all duration-200 whitespace-nowrap"
+            :class="activeMediaType === mt.value
+              ? 'bg-indigo-50 border-indigo-300 text-indigo-700'
+              : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300 hover:text-slate-700'"
+            @click="activeMediaType = mt.value"
+          >{{ mt.label }}</button>
+        </div>
+
+        <div class="h-4 w-px bg-slate-200 flex-shrink-0 mx-0.5"/>
+
+        <!-- 来源 -->
+        <select
+          v-if="sources.length > 0"
+          v-model="filterSourceId"
+          class="flex-shrink-0 pl-2.5 pr-6 py-1 text-xs font-medium border rounded-lg outline-none transition-all duration-200 cursor-pointer"
+          :class="filterSourceId ? 'border-indigo-300 text-indigo-700 bg-indigo-50' : 'border-slate-200 text-slate-500 bg-white'"
+          style="appearance:none; background-image:url(\"data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e\"); background-repeat:no-repeat; background-position:right 0.3rem center; background-size:1.2em 1.2em;"
+        >
+          <option value="">来源</option>
+          <option v-for="s in sources" :key="s.id" :value="String(s.id)">{{ s.name }}</option>
+        </select>
+
+        <!-- 时间 -->
+        <select
+          v-model="dateRange"
+          class="flex-shrink-0 pl-2.5 pr-6 py-1 text-xs font-medium border rounded-lg outline-none transition-all duration-200 cursor-pointer"
+          :class="dateRange ? 'border-indigo-300 text-indigo-700 bg-indigo-50' : 'border-slate-200 text-slate-500 bg-white'"
+          style="appearance:none; background-image:url(\"data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e\"); background-repeat:no-repeat; background-position:right 0.3rem center; background-size:1.2em 1.2em;"
+        >
+          <option v-for="opt in dateRangeOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+        </select>
+
+        <!-- 排序 -->
+        <select
+          v-model="currentSort"
+          class="flex-shrink-0 pl-2.5 pr-6 py-1 text-xs font-medium border rounded-lg outline-none transition-all duration-200 cursor-pointer"
+          :class="sortBy !== 'favorited_at' ? 'border-indigo-300 text-indigo-700 bg-indigo-50' : 'border-slate-200 text-slate-500 bg-white'"
+          style="appearance:none; background-image:url(\"data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e\"); background-repeat:no-repeat; background-position:right 0.3rem center; background-size:1.2em 1.2em;"
+        >
+          <option v-for="opt in sortOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+        </select>
+
+        <!-- 清除筛选 -->
+        <button
+          v-if="hasActiveFilters"
+          class="flex-shrink-0 px-2.5 py-1 text-xs text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition-colors font-medium ml-auto whitespace-nowrap"
+          @click="clearFilters"
+        >清除</button>
       </div>
     </div>
 
-    <!-- Scrollable content -->
+    <!-- ══════════════════════════════════════════════
+         内容区（可滚动）
+         ══════════════════════════════════════════════ -->
     <div class="flex-1 overflow-y-auto overscroll-contain">
-      <div class="px-3 py-3 md:px-4 md:py-4">
-        <!-- Loading -->
-        <div v-if="loading" class="flex items-center justify-center py-24">
-          <svg class="w-8 h-8 animate-spin text-slate-300" fill="none" viewBox="0 0 24 24">
-            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-          </svg>
-        </div>
+      <div class="px-3 py-4 md:px-5 md:py-5">
 
-        <!-- Empty -->
-        <div v-else-if="items.length === 0" class="text-center py-24">
-          <div class="w-16 h-16 mx-auto mb-4 bg-slate-100 rounded-2xl flex items-center justify-center">
-            <svg class="w-8 h-8 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
-            </svg>
+        <!-- ── 骨架屏 ── -->
+        <div v-if="loading" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3 md:gap-4">
+          <!-- 视频骨架（前3个） -->
+          <div v-for="i in 3" :key="'vsk-' + i" class="bg-white rounded-xl border border-slate-200/60 overflow-hidden animate-pulse">
+            <div class="aspect-video bg-slate-100"/>
+            <div class="p-3 space-y-2.5">
+              <div class="h-3.5 bg-slate-100 rounded-md w-full"/>
+              <div class="h-3.5 bg-slate-100 rounded-md w-4/5"/>
+              <div class="flex items-center gap-2 pt-0.5">
+                <div class="h-2.5 bg-slate-100 rounded w-14"/>
+                <div class="h-2.5 bg-slate-100 rounded w-10"/>
+              </div>
+            </div>
           </div>
-          <p class="text-sm text-slate-500 font-medium mb-1">
-            {{ searchQuery || activeMediaType || filterSourceId ? '没有找到匹配的收藏' : '还没有收藏内容' }}
-          </p>
-          <p class="text-xs text-slate-400">
-            {{ searchQuery || activeMediaType || filterSourceId ? '试试调整筛选条件' : '在信息流中点击星标即可收藏' }}
-          </p>
+          <!-- 文章骨架（后9个） -->
+          <div v-for="i in 9" :key="'ask-' + i" class="bg-white rounded-xl border border-slate-200/60 overflow-hidden animate-pulse h-[200px] flex flex-col">
+            <div class="p-3.5 flex flex-col h-full">
+              <div class="flex items-center gap-2 mb-2.5">
+                <div class="h-2.5 bg-slate-100 rounded w-16"/>
+                <div class="h-2 bg-slate-100 rounded w-10"/>
+              </div>
+              <div class="h-3.5 bg-slate-100 rounded-md w-full mb-1.5"/>
+              <div class="h-3.5 bg-slate-100 rounded-md w-4/5 mb-2.5"/>
+              <div class="h-2.5 bg-slate-100 rounded w-full mb-1.5"/>
+              <div class="h-2.5 bg-slate-100 rounded w-3/4 mb-1.5"/>
+              <div class="h-2.5 bg-slate-100 rounded w-1/2"/>
+              <div class="mt-auto pt-2.5 flex gap-1.5">
+                <div class="h-4 bg-slate-100 rounded-md w-12"/>
+                <div class="h-4 bg-slate-100 rounded-md w-10"/>
+              </div>
+            </div>
+          </div>
         </div>
 
-        <!-- 卡片网格 -->
+        <!-- ── 空状态 ── -->
+        <div v-else-if="items.length === 0" class="flex flex-col items-center justify-center py-20 px-6">
+
+          <!-- 搜索/筛选无结果 -->
+          <template v-if="hasActiveFilters">
+            <div class="w-20 h-20 bg-slate-100 rounded-2xl flex items-center justify-center mb-5">
+              <svg class="w-9 h-9 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/>
+              </svg>
+            </div>
+            <h3 class="text-base font-semibold text-slate-700 mb-1.5">没有找到匹配的收藏</h3>
+            <p class="text-sm text-slate-400 text-center max-w-xs leading-relaxed mb-5">试试调整搜索词或筛选条件</p>
+            <button
+              class="inline-flex items-center gap-1.5 px-4 py-2 bg-slate-100 text-slate-600 text-sm font-medium rounded-xl hover:bg-slate-200 transition-colors"
+              @click="clearFilters"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+              </svg>
+              清除筛选条件
+            </button>
+          </template>
+
+          <!-- 真正空状态 -->
+          <template v-else>
+            <div class="relative mb-5">
+              <div class="w-24 h-24 bg-indigo-50 rounded-3xl flex items-center justify-center">
+                <svg class="w-11 h-11 text-indigo-200" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>
+                </svg>
+              </div>
+              <!-- 装饰小星星 -->
+              <div class="absolute -top-1.5 -right-2 w-8 h-8 bg-amber-50 rounded-xl flex items-center justify-center shadow-sm border border-amber-100">
+                <svg class="w-4 h-4 text-amber-400" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>
+                </svg>
+              </div>
+            </div>
+            <h3 class="text-base font-semibold text-slate-700 mb-2">还没有收藏内容</h3>
+            <p class="text-sm text-slate-400 text-center max-w-xs leading-relaxed mb-6">
+              在信息流中点击 ★ 即可收藏，<br>收藏的内容永久保留，不受自动清理影响。
+            </p>
+            <router-link
+              to="/feed"
+              class="inline-flex items-center gap-2 px-5 py-2.5 bg-indigo-600 text-white text-sm font-medium rounded-xl hover:bg-indigo-700 active:bg-indigo-800 transition-colors shadow-sm shadow-indigo-200"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3"/>
+              </svg>
+              去信息流看看
+            </router-link>
+          </template>
+        </div>
+
+        <!-- ── 卡片网格 ── -->
         <template v-else>
           <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3 md:gap-4">
             <div
               v-for="item in items"
               :key="item.id"
-              class="group relative bg-white rounded-xl border overflow-hidden cursor-pointer transition-all duration-300 border-slate-200/60 hover:border-slate-300 hover:shadow-lg hover:-translate-y-0.5 active:scale-[0.98] active:shadow-sm"
+              class="group relative bg-white rounded-xl border overflow-hidden cursor-pointer transition-all duration-200 border-slate-200/60 hover:border-slate-300 hover:shadow-md hover:-translate-y-0.5 active:scale-[0.99]"
+              :class="selectedIds.includes(item.id) ? 'ring-2 ring-indigo-400 border-indigo-300 shadow-sm' : ''"
               @click="selectItem(item)"
             >
-              <!-- ═══════════ 视频卡片 ═══════════ -->
+              <!-- 选中复选框 -->
+              <div
+                class="absolute top-2 left-2 z-10 transition-all duration-150"
+                :class="showBatchBar || selectedIds.includes(item.id) ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'"
+                @click.stop="toggleSelect(item.id)"
+              >
+                <div
+                  class="w-5 h-5 rounded-full border-2 flex items-center justify-center transition-all duration-150 shadow-sm"
+                  :class="selectedIds.includes(item.id)
+                    ? 'bg-indigo-500 border-indigo-500'
+                    : 'bg-white/90 border-slate-300 backdrop-blur-sm'"
+                >
+                  <svg v-if="selectedIds.includes(item.id)" class="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="3">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/>
+                  </svg>
+                </div>
+              </div>
+
+              <!-- ════ 视频卡片 ════ -->
               <template v-if="hasVideo(item)">
-                <!-- 封面区域 -->
+                <!-- 封面 -->
                 <div class="aspect-video bg-gradient-to-br from-slate-800 to-slate-900 relative overflow-hidden">
                   <img
                     v-if="hasThumbnail(item)"
@@ -639,82 +624,102 @@ onUnmounted(() => {
                   />
                   <div v-else class="absolute inset-0 flex items-center justify-center">
                     <svg class="w-10 h-10 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
-                      <path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/>
                     </svg>
                   </div>
-
-                  <!-- 底部渐变遮罩 -->
-                  <div class="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/60 to-transparent pointer-events-none" />
-
-                  <!-- 悬浮播放按钮 -->
+                  <div class="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/60 to-transparent pointer-events-none"/>
                   <div class="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-all duration-300 flex items-center justify-center">
-                    <div class="w-12 h-12 bg-white/95 rounded-full flex items-center justify-center opacity-70 md:opacity-0 group-hover:opacity-100 transform scale-90 md:scale-75 group-hover:scale-100 transition-all duration-300 shadow-xl backdrop-blur-sm">
+                    <div class="w-11 h-11 bg-white/95 rounded-full flex items-center justify-center opacity-75 md:opacity-0 group-hover:opacity-100 scale-90 group-hover:scale-100 transition-all duration-300 shadow-lg">
                       <svg class="w-5 h-5 text-indigo-600 ml-0.5" fill="currentColor" viewBox="0 0 24 24">
-                        <path d="M8 5v14l11-7z" />
+                        <path d="M8 5v14l11-7z"/>
                       </svg>
                     </div>
                   </div>
-
-                  <!-- 时长角标 -->
-                  <span
-                    v-if="getVideoInfo(item).duration"
-                    class="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 text-[10px] font-medium bg-black/70 text-white rounded backdrop-blur-sm"
-                  >
+                  <span v-if="getVideoInfo(item).duration" class="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 text-[10px] font-medium tabular-nums bg-black/70 text-white rounded backdrop-blur-sm">
                     {{ formatDuration(getVideoInfo(item).duration) }}
                   </span>
-
-
-
-                  <!-- 平台标签 -->
-                  <span
-                    v-if="getVideoInfo(item).platform"
-                    class="absolute top-2 right-2 px-1.5 py-0.5 text-[10px] font-medium bg-white/80 text-slate-600 rounded capitalize backdrop-blur-sm group-hover:opacity-0 transition-opacity duration-200"
-                  >
+                  <span v-if="getVideoInfo(item).platform" class="absolute top-2 right-2 px-1.5 py-0.5 text-[10px] font-medium bg-white/80 text-slate-600 rounded capitalize backdrop-blur-sm group-hover:opacity-0 transition-opacity duration-200">
                     {{ getVideoInfo(item).platform }}
                   </span>
-
-
                 </div>
 
                 <!-- 视频信息 -->
-                <div class="p-3 sm:p-4">
-                  <h4 class="text-sm font-medium text-slate-800 line-clamp-2 leading-snug min-h-[2.5rem]">
+                <div class="p-3">
+                  <h4 class="text-[13px] font-semibold text-slate-800 line-clamp-2 leading-snug mb-2">
                     {{ item.title || '未知标题' }}
                   </h4>
-                  <div class="mt-2">
-                    <ContentMetaRow
-                      :source-name="item.source_name"
-                      :published-at="item.published_at"
-                      :collected-at="item.collected_at"
-                      :view-count="item.view_count || 0"
-                      :favorited-at="item.favorited_at"
-                    />
+                  <!-- Tags -->
+                  <div v-if="item.tags && item.tags.length > 0" class="flex items-center gap-1 flex-wrap mb-2">
+                    <span
+                      v-for="tag in item.tags.slice(0, 2)"
+                      :key="tag"
+                      class="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-indigo-50 text-indigo-600"
+                    >#{{ tag }}</span>
+                  </div>
+                  <!-- 元信息 -->
+                  <div class="flex items-center justify-between text-[11px] text-slate-400">
+                    <span class="truncate max-w-[100px] text-slate-500 font-medium">{{ item.source_name }}</span>
+                    <div class="flex items-center gap-2 shrink-0">
+                      <span v-if="item.view_count > 0" class="flex items-center gap-0.5">
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                          <path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                        </svg>
+                        {{ item.view_count }}
+                      </span>
+                      <span v-if="item.favorited_at" class="flex items-center gap-0.5 text-amber-400">
+                        <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
+                          <path d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>
+                        </svg>
+                        {{ formatTimeShort(item.favorited_at) }}
+                      </span>
+                    </div>
                   </div>
                 </div>
               </template>
 
-              <!-- ═══════════ 文章（信息）卡片 ═══════════ -->
+              <!-- ════ 文章卡片（固定高度，三层布局） ════ -->
               <template v-else>
-                <div class="flex flex-col h-full p-3.5">
-                  <!-- 标题 -->
-                  <h4 class="text-[13px] font-semibold text-slate-800 line-clamp-2 leading-snug mb-1.5">
-                    {{ item.title || '未知标题' }}
-                  </h4>
+                <div class="flex flex-col h-[200px] md:h-[210px]">
+                  <!-- 头部：来源 + 时间 + 收藏星标 -->
+                  <div class="flex items-center justify-between px-3.5 pt-3 pb-0 flex-shrink-0">
+                    <div class="flex items-center gap-1.5 min-w-0 text-[11px] text-slate-400">
+                      <span v-if="item.source_name" class="text-slate-500 font-medium truncate max-w-[90px]">{{ item.source_name }}</span>
+                      <span v-if="item.source_name && (item.published_at || item.collected_at)" class="text-slate-200 shrink-0">&middot;</span>
+                      <span class="shrink-0 whitespace-nowrap">{{ formatTimeShort(item.published_at || item.collected_at) }}</span>
+                    </div>
+                    <svg v-if="item.favorited_at" class="w-3.5 h-3.5 text-amber-400 shrink-0 ml-2" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>
+                    </svg>
+                  </div>
 
-                  <!-- 摘要 -->
-                  <p class="text-xs text-slate-400 line-clamp-3 leading-relaxed flex-1 mb-2">
-                    {{ item.summary_text || item.processed_content?.substring(0, 150) || '暂无摘要' }}
-                  </p>
+                  <!-- 中部：标题 + 摘要（flex-1，超出截断） -->
+                  <div class="flex-1 min-h-0 overflow-hidden px-3.5 pt-2">
+                    <h4 class="text-[13px] font-semibold text-slate-800 line-clamp-2 leading-snug">
+                      {{ item.title || '未知标题' }}
+                    </h4>
+                    <p class="text-[11px] text-slate-400 leading-relaxed line-clamp-3 mt-1.5">
+                      {{ item.summary_text || item.processed_content?.substring(0, 200) || '暂无摘要' }}
+                    </p>
+                  </div>
 
-                  <!-- 底部元信息 -->
-                  <div class="pt-2 border-t border-slate-100">
-                    <ContentMetaRow
-                      :source-name="item.source_name"
-                      :published-at="item.published_at"
-                      :collected-at="item.collected_at"
-                      :view-count="item.view_count || 0"
-                      :favorited-at="item.favorited_at"
-                    />
+                  <!-- 底部：tags + 浏览数 -->
+                  <div class="flex items-center gap-1.5 px-3.5 pb-3 pt-2 border-t border-slate-50 flex-shrink-0">
+                    <div class="flex items-center gap-1 flex-1 min-w-0 overflow-hidden">
+                      <template v-if="item.tags && item.tags.length > 0">
+                        <span
+                          v-for="tag in item.tags.slice(0, 3)"
+                          :key="tag"
+                          class="inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-indigo-50 text-indigo-600 whitespace-nowrap"
+                        >#{{ tag }}</span>
+                      </template>
+                      <span v-else class="text-[10px] text-slate-300">暂无标签</span>
+                    </div>
+                    <span v-if="item.view_count > 0" class="flex items-center gap-0.5 text-[11px] text-slate-400 shrink-0">
+                      <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                      </svg>
+                      {{ item.view_count }}
+                    </span>
                   </div>
                 </div>
               </template>
@@ -722,28 +727,81 @@ onUnmounted(() => {
           </div>
 
           <!-- 加载更多 -->
-          <div v-if="loadingMore" class="flex items-center justify-center py-8">
-            <svg class="w-6 h-6 animate-spin text-slate-300" fill="none" viewBox="0 0 24 24">
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
-            </svg>
-          </div>
-          <div v-else-if="!hasMore && items.length > 0" class="text-center py-8">
-            <div class="inline-flex items-center gap-2 px-4 py-2 bg-slate-100 rounded-full text-xs text-slate-500">
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          <div v-if="loadingMore" class="flex items-center justify-center py-10">
+            <div class="flex items-center gap-2.5 text-slate-400">
+              <svg class="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
               </svg>
-              已显示全部收藏
+              <span class="text-xs">加载更多...</span>
             </div>
           </div>
 
-          <!-- sentinel for infinite scroll -->
-          <div ref="sentinelRef" class="h-1" />
+          <!-- 已显示全部：分割线设计 -->
+          <div v-else-if="!hasMore && items.length > 0" class="flex items-center gap-3 py-10 px-2">
+            <div class="h-px flex-1 bg-slate-100"/>
+            <span class="flex items-center gap-1.5 text-xs text-slate-400 whitespace-nowrap">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+              </svg>
+              已显示全部 {{ totalCount }} 条收藏
+            </span>
+            <div class="h-px flex-1 bg-slate-100"/>
+          </div>
+
+          <!-- 无限滚动 sentinel -->
+          <div ref="sentinelRef" class="h-1"/>
         </template>
       </div>
     </div>
 
-    <!-- Detail Modal -->
+    <!-- ══════════════════════════════════════════════
+         批量操作浮层（底部，选中后滑入）
+         ══════════════════════════════════════════════ -->
+    <Transition
+      enter-active-class="transition-transform duration-300 ease-out"
+      leave-active-class="transition-transform duration-200 ease-in"
+      enter-from-class="translate-y-full"
+      enter-to-class="translate-y-0"
+      leave-from-class="translate-y-0"
+      leave-to-class="translate-y-full"
+    >
+      <div v-if="showBatchBar" class="shrink-0 bg-white border-t border-slate-200 shadow-lg px-4 py-3">
+        <div class="flex items-center gap-2 max-w-4xl mx-auto">
+          <div class="flex items-center gap-1.5 text-sm font-medium text-slate-700">
+            <div class="w-5 h-5 bg-indigo-500 rounded-full flex items-center justify-center shrink-0">
+              <svg class="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="3">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/>
+              </svg>
+            </div>
+            已选 {{ selectedIds.length }} 条
+          </div>
+          <button
+            class="text-xs text-slate-500 hover:text-slate-700 px-2.5 py-1.5 rounded-lg hover:bg-slate-50 transition-colors"
+            @click="toggleSelectAll"
+          >{{ selectedIds.length === items.length ? '取消全选' : '全选' }}</button>
+          <div class="flex-1"/>
+          <button
+            class="text-xs font-medium text-slate-600 hover:text-slate-800 px-3 py-1.5 rounded-lg border border-slate-200 hover:border-slate-300 hover:bg-slate-50 transition-all"
+            @click="handleBatchRead"
+          >标记已读</button>
+          <button
+            class="text-xs font-medium text-rose-600 hover:text-rose-700 px-3 py-1.5 rounded-lg border border-rose-200 hover:border-rose-300 hover:bg-rose-50 transition-all"
+            @click="handleBatchUnfavorite"
+          >取消收藏</button>
+          <button
+            class="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-50 transition-colors"
+            @click="selectedIds = []"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </Transition>
+
+    <!-- 详情弹层 -->
     <ContentDetailModal
       :visible="modalVisible"
       :content-id="String(selectedId || '')"
