@@ -1,15 +1,12 @@
-"""Ebook API — 电子书上传、书架、阅读进度、批注、书签"""
+"""Ebook API — 书架管理、标注只读、元数据编辑"""
 
-import hashlib
 import json
 import logging
 import mimetypes
-import shutil
-import uuid
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, HTTPException, status
+from fastapi import APIRouter, Depends, Query, HTTPException, status
 from fastapi.responses import FileResponse
 from sqlalchemy import desc, asc
 from sqlalchemy.orm import Session
@@ -21,29 +18,14 @@ from app.models.content import ContentItem, ContentStatus, MediaItem
 from app.models.ebook import ReadingProgress, BookAnnotation, BookBookmark
 from app.schemas import error_response
 from app.schemas.ebook import (
-    ReadingProgressUpdate,
-    AnnotationCreate, AnnotationUpdate,
-    BookmarkCreate,
     EbookMetadataUpdate,
     BookSearchResult,
     MetadataApplyRequest,
 )
-from app.services.ebook_parser import parse_ebook, EbookMetadata
 from app.services.book_metadata import search_google_books
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-SUPPORTED_EXTENSIONS = {".epub", ".mobi", ".azw", ".azw3"}
-MAX_EBOOK_SIZE = 200 * 1024 * 1024  # 200 MB
-
-
-def _verify_ebook_exists(content_id: str, db: Session) -> bool:
-    """验证 content_id 对应的电子书是否存在（ContentItem + ebook MediaItem）。"""
-    return db.query(MediaItem.id).filter(
-        MediaItem.content_id == content_id,
-        MediaItem.media_type == "ebook",
-    ).first() is not None
 
 
 def _safe_media_path(rel_or_abs: str) -> Path:
@@ -59,132 +41,6 @@ def _safe_media_path(rel_or_abs: str) -> Path:
     except ValueError:
         raise HTTPException(status_code=403, detail="非法路径")
     return real
-
-
-# ─── Upload ──────────────────────────────────────────────────────────────────
-
-@router.post("/upload")
-async def upload_ebook(
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db),
-):
-    """上传电子书文件，解析元数据，创建 ContentItem + MediaItem"""
-    filename = file.filename or "unnamed"
-    ext = Path(filename).suffix.lower()
-    if ext not in SUPPORTED_EXTENSIONS:
-        return error_response(400, f"不支持的文件格式: {ext}，支持: {', '.join(SUPPORTED_EXTENSIONS)}")
-
-    # 生成 content_id 并保存文件（流式写入 + 大小限制）
-    content_id = uuid.uuid4().hex
-    media_dir = Path(settings.MEDIA_DIR) / content_id
-    media_dir.mkdir(parents=True, exist_ok=True)
-
-    book_filename = f"book{ext}"
-    book_path = media_dir / book_filename
-
-    file_size = 0
-    file_hash = hashlib.sha256()
-    try:
-        with open(book_path, "wb") as f:
-            while chunk := await file.read(65536):
-                file_size += len(chunk)
-                if file_size > MAX_EBOOK_SIZE:
-                    f.close()
-                    shutil.rmtree(media_dir, ignore_errors=True)
-                    return error_response(413, f"文件过大，最大支持 {MAX_EBOOK_SIZE // 1024 // 1024} MB")
-                file_hash.update(chunk)
-                f.write(chunk)
-    except Exception:
-        shutil.rmtree(media_dir, ignore_errors=True)
-        raise
-
-    if file_size == 0:
-        shutil.rmtree(media_dir, ignore_errors=True)
-        return error_response(400, "文件为空")
-
-    # 解析元数据 (foliate-js 前端原生支持 EPUB/MOBI，无需转换)
-    try:
-        metadata = parse_ebook(str(book_path))
-    except Exception as e:
-        logger.warning(f"Ebook metadata parsing failed: {e}")
-        metadata = EbookMetadata(title=Path(filename).stem)
-
-    # 保存封面（存相对路径）
-    cover_rel = None
-    if metadata.cover_data:
-        cover_ext = metadata.cover_ext or "jpg"
-        cover_file = media_dir / f"cover.{cover_ext}"
-        cover_file.write_bytes(metadata.cover_data)
-        cover_rel = f"{content_id}/cover.{cover_ext}"
-
-    # 创建 ContentItem（使用文件内容 hash 去重）
-    external_id = file_hash.hexdigest()[:32]
-    raw_data = json.dumps({
-        "format": ext.lstrip("."),
-        "filename": filename,
-        "file_size": file_size,
-        "language": metadata.language,
-        "publisher": metadata.publisher,
-        "description": metadata.description,
-        "toc": metadata.toc_to_list(),
-    }, ensure_ascii=False)
-
-    content = ContentItem(
-        id=content_id,
-        title=metadata.title,
-        author=metadata.author,
-        external_id=external_id,
-        raw_data=raw_data,
-        status=ContentStatus.READY.value,
-    )
-    db.add(content)
-    db.flush()
-
-    # 创建 MediaItem
-    media_metadata = {
-        "format": ext.lstrip("."),
-        "file_size": file_size,
-        "original_filename": filename,
-    }
-    if cover_rel:
-        media_metadata["cover_path"] = cover_rel
-    if metadata.language:
-        media_metadata["language"] = metadata.language
-
-    media_item = MediaItem(
-        content_id=content_id,
-        media_type="ebook",
-        original_url=f"file://{filename}",
-        local_path=f"{content_id}/{book_filename}",  # 相对于 MEDIA_DIR
-        filename=book_filename,
-        status="downloaded",
-        metadata_json=json.dumps(media_metadata, ensure_ascii=False),
-    )
-    db.add(media_item)
-
-    # 初始化阅读进度
-    progress = ReadingProgress(content_id=content_id)
-    db.add(progress)
-
-    try:
-        db.commit()
-    except Exception:
-        shutil.rmtree(media_dir, ignore_errors=True)
-        raise
-
-    logger.info(f"Ebook uploaded: {metadata.title} ({ext}) content_id={content_id}")
-
-    return {
-        "code": 0,
-        "data": {
-            "content_id": content_id,
-            "title": metadata.title,
-            "author": metadata.author,
-            "format": ext.lstrip("."),
-            "cover_url": f"/api/ebook/{content_id}/cover" if cover_rel else None,
-        },
-        "message": "上传成功",
-    }
 
 
 # ─── List ────────────────────────────────────────────────────────────────────
@@ -590,6 +446,8 @@ async def get_ebook_detail(content_id: str, db: Session = Depends(get_db)):
 @router.delete("/{content_id}")
 async def delete_ebook(content_id: str, db: Session = Depends(get_db)):
     """删除电子书: 文件 + DB 记录"""
+    import shutil
+
     content = db.get(ContentItem, content_id)
     if not content:
         return error_response(404, "电子书不存在")
@@ -611,47 +469,7 @@ async def delete_ebook(content_id: str, db: Session = Depends(get_db)):
     return {"code": 0, "data": {"deleted": 1}, "message": "ok"}
 
 
-# ─── File / Cover ────────────────────────────────────────────────────────────
-
-@router.get("/{content_id}/file")
-async def get_ebook_file(content_id: str, db: Session = Depends(get_db)):
-    """返回电子书原始文件 (供 foliate-js 加载)"""
-    media = db.query(MediaItem).filter(
-        MediaItem.content_id == content_id,
-        MediaItem.media_type == "ebook",
-        MediaItem.status == "downloaded",
-    ).first()
-
-    if not media or not media.local_path:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="电子书文件未找到")
-
-    safe_path = _safe_media_path(media.local_path)
-    if not safe_path.is_file():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="电子书文件未找到")
-
-    mime_map = {
-        ".epub": "application/epub+zip",
-        ".mobi": "application/x-mobipocket-ebook",
-        ".azw": "application/x-mobipocket-ebook",
-        ".azw3": "application/x-mobipocket-ebook",
-    }
-    ext = safe_path.suffix.lower()
-    mime_type = mime_map.get(ext, "application/octet-stream")
-
-    # ETag for conditional requests (avoid re-downloading unchanged files)
-    mtime = int(safe_path.stat().st_mtime)
-    etag = hashlib.md5(f"{content_id}:{mtime}".encode()).hexdigest()
-
-    return FileResponse(
-        str(safe_path),
-        media_type=mime_type,
-        filename=safe_path.name,
-        headers={
-            "ETag": f'"{etag}"',
-            "Cache-Control": "private, max-age=3600",
-        },
-    )
-
+# ─── Cover ────────────────────────────────────────────────────────────────────
 
 @router.get("/{content_id}/cover")
 async def get_ebook_cover(content_id: str, db: Session = Depends(get_db)):
@@ -680,81 +498,11 @@ async def get_ebook_cover(content_id: str, db: Session = Depends(get_db)):
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="封面未找到")
 
 
-# ─── Reading Progress ────────────────────────────────────────────────────────
-
-@router.get("/{content_id}/progress")
-async def get_reading_progress(content_id: str, db: Session = Depends(get_db)):
-    """获取阅读进度"""
-    progress = db.query(ReadingProgress).filter(
-        ReadingProgress.content_id == content_id
-    ).first()
-
-    if not progress:
-        return {
-            "code": 0,
-            "data": {"cfi": None, "progress": 0, "section_index": 0, "section_title": None, "updated_at": None},
-            "message": "ok",
-        }
-
-    return {
-        "code": 0,
-        "data": {
-            "cfi": progress.cfi,
-            "progress": progress.progress,
-            "section_index": progress.section_index,
-            "section_title": progress.section_title,
-            "updated_at": progress.updated_at.isoformat() if progress.updated_at else None,
-        },
-        "message": "ok",
-    }
-
-
-@router.put("/{content_id}/progress")
-async def update_reading_progress(
-    content_id: str,
-    body: ReadingProgressUpdate,
-    db: Session = Depends(get_db),
-):
-    """更新阅读进度"""
-    if not _verify_ebook_exists(content_id, db):
-        return error_response(404, "电子书不存在")
-
-    progress = db.query(ReadingProgress).filter(
-        ReadingProgress.content_id == content_id
-    ).first()
-
-    if not progress:
-        progress = ReadingProgress(content_id=content_id)
-        db.add(progress)
-
-    if body.cfi is not None:
-        progress.cfi = body.cfi
-    progress.progress = max(0.0, min(1.0, body.progress))
-    if body.section_index is not None:
-        progress.section_index = body.section_index
-    if body.section_title is not None:
-        progress.section_title = body.section_title
-    progress.updated_at = utcnow()
-
-    db.commit()
-
-    return {
-        "code": 0,
-        "data": {
-            "cfi": progress.cfi,
-            "progress": progress.progress,
-            "section_index": progress.section_index,
-            "section_title": progress.section_title,
-        },
-        "message": "ok",
-    }
-
-
-# ─── Annotations (Phase 2) ──────────────────────────────────────────────────
+# ─── Annotations (read-only) ─────────────────────────────────────────────────
 
 @router.get("/{content_id}/annotations")
 async def list_annotations(content_id: str, db: Session = Depends(get_db)):
-    """获取全部批注"""
+    """获取全部批注（只读）"""
     items = db.query(BookAnnotation).filter(
         BookAnnotation.content_id == content_id
     ).order_by(BookAnnotation.created_at).all()
@@ -777,139 +525,3 @@ async def list_annotations(content_id: str, db: Session = Depends(get_db)):
         ],
         "message": "ok",
     }
-
-
-@router.post("/{content_id}/annotations")
-async def create_annotation(
-    content_id: str,
-    body: AnnotationCreate,
-    db: Session = Depends(get_db),
-):
-    """新增批注"""
-    if not _verify_ebook_exists(content_id, db):
-        return error_response(404, "电子书不存在")
-
-    annotation = BookAnnotation(
-        content_id=content_id,
-        cfi_range=body.cfi_range,
-        section_index=body.section_index,
-        type=body.type,
-        color=body.color,
-        selected_text=body.selected_text,
-        note=body.note,
-    )
-    db.add(annotation)
-    db.commit()
-    db.refresh(annotation)
-
-    return {
-        "code": 0,
-        "data": {"id": annotation.id},
-        "message": "ok",
-    }
-
-
-@router.put("/{content_id}/annotations/{annotation_id}")
-async def update_annotation(
-    content_id: str,
-    annotation_id: str,
-    body: AnnotationUpdate,
-    db: Session = Depends(get_db),
-):
-    """修改批注"""
-    annotation = db.get(BookAnnotation, annotation_id)
-    if not annotation or annotation.content_id != content_id:
-        return error_response(404, "批注不存在")
-
-    if body.color is not None:
-        annotation.color = body.color
-    if body.note is not None:
-        annotation.note = body.note
-    annotation.updated_at = utcnow()
-
-    db.commit()
-    return {"code": 0, "data": {"id": annotation.id}, "message": "ok"}
-
-
-@router.delete("/{content_id}/annotations/{annotation_id}")
-async def delete_annotation(
-    content_id: str,
-    annotation_id: str,
-    db: Session = Depends(get_db),
-):
-    """删除批注"""
-    deleted = db.query(BookAnnotation).filter(
-        BookAnnotation.id == annotation_id,
-        BookAnnotation.content_id == content_id,
-    ).delete(synchronize_session=False)
-    db.commit()
-
-    if not deleted:
-        return error_response(404, "批注不存在")
-    return {"code": 0, "data": {"deleted": 1}, "message": "ok"}
-
-
-# ─── Bookmarks (Phase 2) ────────────────────────────────────────────────────
-
-@router.get("/{content_id}/bookmarks")
-async def list_bookmarks(content_id: str, db: Session = Depends(get_db)):
-    """获取全部书签"""
-    items = db.query(BookBookmark).filter(
-        BookBookmark.content_id == content_id
-    ).order_by(BookBookmark.created_at).all()
-
-    return {
-        "code": 0,
-        "data": [
-            {
-                "id": b.id,
-                "cfi": b.cfi,
-                "title": b.title,
-                "section_title": b.section_title,
-                "created_at": b.created_at.isoformat() if b.created_at else None,
-            }
-            for b in items
-        ],
-        "message": "ok",
-    }
-
-
-@router.post("/{content_id}/bookmarks")
-async def create_bookmark(
-    content_id: str,
-    body: BookmarkCreate,
-    db: Session = Depends(get_db),
-):
-    """新增书签"""
-    if not _verify_ebook_exists(content_id, db):
-        return error_response(404, "电子书不存在")
-
-    bookmark = BookBookmark(
-        content_id=content_id,
-        cfi=body.cfi,
-        title=body.title,
-        section_title=body.section_title,
-    )
-    db.add(bookmark)
-    db.commit()
-    db.refresh(bookmark)
-
-    return {"code": 0, "data": {"id": bookmark.id}, "message": "ok"}
-
-
-@router.delete("/{content_id}/bookmarks/{bookmark_id}")
-async def delete_bookmark(
-    content_id: str,
-    bookmark_id: str,
-    db: Session = Depends(get_db),
-):
-    """删除书签"""
-    deleted = db.query(BookBookmark).filter(
-        BookBookmark.id == bookmark_id,
-        BookBookmark.content_id == content_id,
-    ).delete(synchronize_session=False)
-    db.commit()
-
-    if not deleted:
-        return error_response(404, "书签不存在")
-    return {"code": 0, "data": {"deleted": 1}, "message": "ok"}
