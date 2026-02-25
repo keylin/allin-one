@@ -1036,7 +1036,7 @@ onUnmounted(() => {
         <!-- 新内容横幅 -->
         <div
           v-if="newContentCount > 0"
-          class="sticky top-0 z-20 mx-4 mt-2"
+          class="mx-4 mt-2"
         >
           <button
             class="w-full flex items-center justify-center gap-2 px-4 py-2 bg-indigo-50 text-indigo-700 text-sm font-medium rounded-xl border border-indigo-200 hover:bg-indigo-100 transition-all"
