@@ -93,3 +93,13 @@ export function applyBookMetadata(contentId, data) {
 export function getEbookFilters() {
   return api.get('/ebook/filters')
 }
+
+// Ebook Sync (Apple Books / 微信读书等)
+export function getEbookSyncStatus(sourceId) {
+  const params = sourceId ? { source_id: sourceId } : {}
+  return api.get('/ebook/sync/status', { params })
+}
+
+export function setupEbookSync(sourceType = 'sync.apple_books') {
+  return api.post('/ebook/sync/setup', null, { params: { source_type: sourceType } })
+}

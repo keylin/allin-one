@@ -1,7 +1,8 @@
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { listEbooks, uploadEbook, deleteEbook, getEbookFilters } from '@/api/ebook'
+import { listEbooks, uploadEbook, deleteEbook, getEbookFilters, getEbookSyncStatus } from '@/api/ebook'
+import { isExternalSource, getSourceConfig } from '@/config/external-sources'
 import { formatTimeShort } from '@/utils/time'
 import EbookReader from '@/components/ebook-reader.vue'
 import EbookMetadataModal from '@/components/ebook-metadata-modal.vue'
@@ -28,6 +29,9 @@ const filterAuthor = ref('')
 const filterCategory = ref('')
 const filterAuthors = ref([])
 const filterCategories = ref([])
+
+// Sync status
+const syncStatus = ref(null)
 
 // Metadata modal state
 const metadataBookId = ref(null)
@@ -261,9 +265,17 @@ function closeContextMenu() {
   deleteConfirmId.value = null
 }
 
+// External source detail panel (Apple Books, 微信读书 etc.)
+const externalDetailBook = ref(null)
+
 // Open reader
 function openBook(book, fromMenu = false) {
   if (!fromMenu && contextMenuBook.value) return // Don't open if context menu is showing
+  // External source: show detail panel instead of reader
+  if (isExternalSource(book.source)) {
+    externalDetailBook.value = book
+    return
+  }
   selectedBookId.value = book.content_id
   readerVisible.value = true
 }
@@ -284,9 +296,21 @@ watch(sortBy, fetchBooks)
 watch(filterAuthor, fetchBooks)
 watch(filterCategory, fetchBooks)
 
+async function fetchSyncStatus() {
+  try {
+    const res = await getEbookSyncStatus()
+    if (res.code === 0 && res.data?.source_id) {
+      syncStatus.value = res.data
+    }
+  } catch (e) {
+    // ignore
+  }
+}
+
 onMounted(() => {
   fetchBooks()
   fetchFilters()
+  fetchSyncStatus()
 })
 
 // 整页拖拽：自动展开上传区并处理文件
@@ -320,6 +344,19 @@ function formatTime(iso) {
       <!-- Row 1: Title + count + sort + upload button -->
       <div class="flex items-center gap-2.5">
         <span class="text-xs text-slate-400 tabular-nums shrink-0">{{ totalCount }} 本</span>
+
+        <!-- Apple Books sync status -->
+        <span
+          v-if="syncStatus"
+          class="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] text-emerald-600 bg-emerald-50 rounded-full"
+          :title="syncStatus.last_sync_at ? `上次同步: ${formatTime(syncStatus.last_sync_at)}` : '尚未同步'"
+        >
+          <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" /><path d="M16 16h5v5" />
+          </svg>
+          <span class="hidden sm:inline">{{ syncStatus.total_books }} 本同步</span>
+        </span>
+
         <div class="flex-1" />
 
         <select
@@ -530,8 +567,12 @@ function formatTime(iso) {
                 </button>
               </div>
 
-              <!-- Format badge -->
-              <span class="absolute top-2 left-2 px-1.5 py-0.5 text-[10px] font-medium bg-black/60 text-white rounded uppercase">
+              <!-- Format / Source badge -->
+              <span v-if="isExternalSource(book.source)" class="absolute top-2 left-2 px-1.5 py-0.5 text-[10px] font-medium bg-slate-800/70 text-white rounded flex items-center gap-0.5">
+                <svg v-if="book.source === 'apple_books'" class="w-2.5 h-2.5" viewBox="0 0 24 24" fill="currentColor"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
+                {{ getSourceConfig(book.source)?.label || book.source }}
+              </span>
+              <span v-else class="absolute top-2 left-2 px-1.5 py-0.5 text-[10px] font-medium bg-black/60 text-white rounded uppercase">
                 {{ book.format }}
               </span>
 
@@ -583,7 +624,19 @@ function formatTime(iso) {
               <p class="text-xs text-slate-400 truncate">{{ contextMenuBook.author || '未知作者' }}</p>
             </div>
             <div class="py-1">
+              <a
+                v-if="isExternalSource(contextMenuBook.source)"
+                :href="getSourceConfig(contextMenuBook.source)?.deepLink(contextMenuBook.external_id)"
+                @click="closeContextMenu()"
+                class="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 active:bg-slate-100 flex items-center gap-3"
+              >
+                <svg class="w-4 h-4 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" />
+                </svg>
+                {{ getSourceConfig(contextMenuBook.source)?.openLabel || '打开' }}
+              </a>
               <button
+                v-else
                 @click="openBook(contextMenuBook, true); closeContextMenu()"
                 class="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 active:bg-slate-100 flex items-center gap-3"
               >
@@ -631,6 +684,61 @@ function formatTime(iso) {
       :content-id="selectedBookId"
       @close="closeReader"
     />
+
+    <!-- External Source Detail Panel (Apple Books / 微信读书 etc.) -->
+    <Teleport to="body">
+      <Transition
+        enter-active-class="transition-opacity duration-150"
+        enter-from-class="opacity-0"
+        enter-to-class="opacity-100"
+        leave-active-class="transition-opacity duration-100"
+        leave-from-class="opacity-100"
+        leave-to-class="opacity-0"
+      >
+        <div v-if="externalDetailBook" class="fixed inset-0 z-50 flex items-end sm:items-center justify-center" @click.self="externalDetailBook = null">
+          <div class="absolute inset-0 bg-black/30" @click="externalDetailBook = null" />
+          <div class="relative z-10 bg-white rounded-t-2xl sm:rounded-2xl w-full sm:w-96 shadow-2xl overflow-hidden pb-safe max-h-[80vh] flex flex-col">
+            <!-- Header -->
+            <div class="px-5 pt-5 pb-3">
+              <h3 class="text-lg font-bold text-slate-900 leading-snug line-clamp-2">{{ externalDetailBook.title }}</h3>
+              <p v-if="externalDetailBook.author" class="text-sm text-slate-500 mt-0.5">{{ externalDetailBook.author }}</p>
+              <div class="flex items-center gap-2 mt-2">
+                <span class="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium bg-slate-100 text-slate-600 rounded-full">
+                  <svg v-if="externalDetailBook.source === 'apple_books'" class="w-2.5 h-2.5" viewBox="0 0 24 24" fill="currentColor"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
+                  {{ getSourceConfig(externalDetailBook.source)?.label || externalDetailBook.source }}
+                </span>
+                <span v-if="externalDetailBook.progress > 0" class="text-xs text-indigo-500 font-medium">
+                  {{ Math.round((externalDetailBook.progress || 0) * 100) }}%
+                </span>
+              </div>
+              <!-- Progress bar -->
+              <div v-if="externalDetailBook.progress > 0" class="mt-2 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                <div class="h-full bg-indigo-500 rounded-full" :style="{ width: Math.round((externalDetailBook.progress || 0) * 100) + '%' }" />
+              </div>
+            </div>
+            <!-- Actions -->
+            <div class="px-5 pb-5 space-y-2">
+              <a
+                :href="getSourceConfig(externalDetailBook.source)?.deepLink(externalDetailBook.external_id)"
+                class="flex items-center justify-center gap-2 w-full px-4 py-2.5 text-sm font-medium text-white bg-indigo-600 rounded-xl hover:bg-indigo-700 active:scale-95 transition-all duration-150 shadow-sm"
+              >
+                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" />
+                </svg>
+                {{ getSourceConfig(externalDetailBook.source)?.openLabel || '打开' }}
+              </a>
+            </div>
+            <!-- Close -->
+            <button
+              @click="externalDetailBook = null"
+              class="w-full py-3 text-sm text-slate-500 font-medium border-t border-slate-100 hover:bg-slate-50 active:bg-slate-100"
+            >
+              关闭
+            </button>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
 
     <!-- Metadata modal -->
     <EbookMetadataModal

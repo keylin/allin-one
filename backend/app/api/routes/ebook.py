@@ -267,6 +267,9 @@ async def list_ebooks(
             "section_title": progress.section_title if progress else None,
             "last_read_at": progress.updated_at.isoformat() if progress and progress.updated_at else None,
             "created_at": content.created_at.isoformat() if content.created_at else None,
+            "source": raw.get("source"),  # 平台标识: apple_books / wechat_read 等
+            "external_id": content.external_id,
+            "media_status": media.status,
         })
 
     return {
@@ -576,6 +579,9 @@ async def get_ebook_detail(content_id: str, db: Session = Depends(get_db)):
                 "updated_at": progress.updated_at.isoformat() if progress and progress.updated_at else None,
             },
             "created_at": content.created_at.isoformat() if content.created_at else None,
+            "source": raw.get("source"),
+            "external_id": content.external_id,
+            "media_status": media.status,
         },
         "message": "ok",
     }

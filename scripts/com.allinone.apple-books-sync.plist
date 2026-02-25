@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.allinone.apple-books-sync</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <!-- 请修改为实际 Python 路径 -->
+        <string>/usr/bin/python3</string>
+        <!-- 请修改为实际脚本路径 -->
+        <string>/Users/YOUR_USERNAME/workspace/allin-one/scripts/apple-books-sync.py</string>
+        <string>--api-url</string>
+        <string>http://localhost:8000</string>
+        <!-- 如需 API Key，取消注释下面两行 -->
+        <!-- <string>--api-key</string> -->
+        <!-- <string>YOUR_API_KEY</string> -->
+    </array>
+
+    <!-- 每 30 分钟执行一次 -->
+    <key>StartInterval</key>
+    <integer>1800</integer>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/apple-books-sync.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/apple-books-sync.err</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>

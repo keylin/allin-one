@@ -15,6 +15,7 @@ import {
   createBookmark,
   deleteBookmark,
 } from '@/api/ebook'
+import { getSourceConfig } from '@/config/external-sources'
 import { Overlayer } from 'foliate-js/overlayer.js'
 
 // 注册 foliate-view 自定义元素
@@ -63,6 +64,9 @@ function showBookmarkFeedback(added) {
   bookmarkFeedback.value = { added }
   bookmarkFeedbackTimer = setTimeout(() => { bookmarkFeedback.value = null }, 1200)
 }
+
+// Overscroll hint for scrolled mode chapter navigation
+const overscrollHint = ref(null) // { direction: 'next'|'prev', progress: 0-1 }
 
 const HIGHLIGHT_COLORS = {
   yellow: '#facc15', green: '#4ade80', blue: '#60a5fa', pink: '#f472b6', purple: '#a78bfa',
@@ -154,6 +158,14 @@ let toolbarTimer = null
 let isAnimating = false
 let keyThrottle = false
 let pendingAnnotationClick = false
+let isRecovering = false
+let navCtx = {
+  source: 'init',       // 'sequential' | 'jump' | 'init'
+  direction: null,       // 'next' | 'prev' | null
+  lastGoodFraction: 0,   // 上次验证通过的全局 fraction
+  stuckCount: 0,         // 连续未收到有效 relocate 的导航次数
+  lastRelocateTs: Date.now(),
+}
 const sectionDocs = new Map() // 暂存 section doc 引用，供 create-overlay 使用
 const iframeDocs = [] // 所有 iframe doc 引用，用于 cleanup keydown 监听
 
@@ -286,6 +298,19 @@ async function init() {
       if (detail.data.toc?.length) tocItems.value = detail.data.toc
     }
 
+    // Guard: external media (Apple Books / 微信读书 etc.) — cannot load file
+    if (detail?.data?.media_status === 'external') {
+      const extId = detail.data.external_id
+      const srcCfg = getSourceConfig(detail.data.source)
+      const platformName = srcCfg?.label || '外部应用'
+      errorMsg.value = `此书来自 ${platformName}，请${srcCfg?.openLabel || '在原应用中打开阅读'}`
+      if (extId && srcCfg) {
+        window.location.href = srcCfg.deepLink(extId)
+      }
+      loading.value = false
+      return
+    }
+
     // Fetch ebook binary (auth handled by axios interceptor)
     const blob = await fetchEbookBlob(props.contentId)
     // foliate-js 的 isCBZ/isFBZ 会调用 name.endsWith()，Blob 没有 name 属性会抛错
@@ -326,6 +351,8 @@ async function init() {
     try {
       const prog = await getReadingProgress(props.contentId)
       if (prog?.data?.progress > 0) {
+        navCtx.source = 'init'
+        navCtx.lastGoodFraction = prog.data.progress
         await view.goToFraction(prog.data.progress)
         navigated = true
       }
@@ -354,8 +381,15 @@ async function init() {
     }
 
     loading.value = false
-    // 桌面端初始显示工具栏后启动自动隐藏
-    if (toolbarVisible.value) startAutoHide()
+    updateThemeColor(containerBg.value)
+    // 移动端首次加载时短暂显示工具栏，提示用户控件存在
+    if (!isDesktop.value) {
+      toolbarVisible.value = true
+      startAutoHide()
+    } else if (toolbarVisible.value) {
+      // 桌面端初始显示工具栏后启动自动隐藏
+      startAutoHide()
+    }
   } catch (e) {
     console.error('Reader init error:', e)
     const status = e.response?.status
@@ -478,7 +512,10 @@ function getStyles() {
 }
 
 function applyStyles() {
-  view?.renderer?.setStyles?.(getStyles())
+  // 延迟到下一帧，让 Vue 的 UI 更新（按钮高亮、背景色）先完成渲染
+  requestAnimationFrame(() => {
+    view?.renderer?.setStyles?.(getStyles())
+  })
 }
 
 // --- Section load: attach interaction handlers ---
@@ -534,11 +571,35 @@ async function animatePageTurn(direction) {
   isAnimating = true
   const overlay = createOverlay()
   readerEl.value.appendChild(overlay)
-  try {
-    if (direction === 'next') await view?.next()
-    else await view?.prev()
-  } catch { /* ignore */ }
+  await safeNav(direction)
   runOverlayAnimation(overlay, direction, () => { isAnimating = false })
+}
+
+// --- Scrolled mode: fade transition for chapter navigation ---
+async function fadeChapterNav(direction) {
+  if (isAnimating) return
+  dismissOverlays()
+  isAnimating = true
+  const mask = document.createElement('div')
+  mask.style.cssText = `position:absolute;inset:0;z-index:10;pointer-events:none;background:${containerBg.value};opacity:0;transition:opacity 150ms ease-in;`
+  readerEl.value.appendChild(mask)
+  // Fade in
+  await new Promise(r => requestAnimationFrame(() => { mask.style.opacity = '1'; mask.addEventListener('transitionend', r, { once: true }); setTimeout(r, 200) }))
+  // Navigate — 等待 load 事件确认新 section 就绪
+  const loadPromise = new Promise(r => {
+    const onLoad = () => { view.removeEventListener('load', onLoad); r() }
+    view.addEventListener('load', onLoad)
+    setTimeout(r, 1000) // 超时兜底
+  })
+  await safeNav(direction)
+  await loadPromise
+  // 等待浏览器完成 paint
+  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
+  // Fade out
+  mask.style.transition = 'opacity 200ms ease-out'
+  await new Promise(r => requestAnimationFrame(() => { mask.style.opacity = '0'; mask.addEventListener('transitionend', r, { once: true }); setTimeout(r, 250) }))
+  mask.remove()
+  isAnimating = false
 }
 
 // --- Selection handler for annotations ---
@@ -606,6 +667,8 @@ async function addHighlight(color) {
 
   // Restore position if addAnnotation caused drift
   if (Math.abs(progress.value - savedProgress) > 0.001) {
+    navCtx.source = 'jump'
+    navCtx.direction = null
     await view.goToFraction(savedProgress)
   }
 
@@ -752,6 +815,7 @@ function addTouchHandler(doc) {
   let overlay = null
   let swipeHandled = false
   let mouseDownX = 0, mouseDownY = 0
+  let hitBoundaryAt = null // touchY when scroll hit top/bottom boundary
 
   doc.addEventListener('mousedown', (e) => {
     mouseDownX = e.clientX
@@ -782,11 +846,27 @@ function addTouchHandler(doc) {
     }
     if (settingsVisible.value) { settingsVisible.value = false; return }
 
-    const w = doc.defaultView?.innerWidth || window.innerWidth
-    const x = e.clientX
-    if (x < w * 0.25) prev()
-    else if (x > w * 0.75) next()
-    else toggleToolbar()
+    if (flowMode.value === 'scrolled') {
+      // 滚动模式：纵向点击区域 — 上 25% 向上滚，下 75% 向下滚，中间切换工具栏
+      const h = doc.defaultView?.innerHeight || window.innerHeight
+      const y = e.clientY
+      if (y < h * 0.25) {
+        const el = doc.scrollingElement || doc.documentElement
+        el.scrollBy({ top: -Math.round(h * 0.85), behavior: 'smooth' })
+      } else if (y > h * 0.75) {
+        const el = doc.scrollingElement || doc.documentElement
+        el.scrollBy({ top: Math.round(h * 0.85), behavior: 'smooth' })
+      } else {
+        toggleToolbar()
+      }
+    } else {
+      // 翻页模式：左右点击区域
+      const w = doc.defaultView?.innerWidth || window.innerWidth
+      const x = e.clientX
+      if (x < w * 0.25) prev()
+      else if (x > w * 0.75) next()
+      else toggleToolbar()
+    }
   })
 
   doc.addEventListener('touchstart', (e) => {
@@ -794,12 +874,39 @@ function addTouchHandler(doc) {
     sy = e.changedTouches[0].clientY
     swipeHandled = false
     overlay = null
+    hitBoundaryAt = null
+    overscrollHint.value = null
   }, { passive: true })
 
   doc.addEventListener('touchmove', (e) => {
-    if (flowMode.value !== 'paginated') return
+    const touchY = e.changedTouches[0].clientY
+    if (flowMode.value === 'scrolled') {
+      // 滚动模式：检测是否到达上下边界并过度滚动
+      const el = doc.scrollingElement || doc.documentElement
+      const atTop = el.scrollTop <= 0
+      const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 1
+      const dy = touchY - sy
+      // 到达底部且继续上拉（dy < 0），或到达顶部且继续下拉（dy > 0）
+      const pullingNext = atBottom && dy < 0
+      const pullingPrev = atTop && dy > 0
+      if (pullingNext || pullingPrev) {
+        if (hitBoundaryAt === null) hitBoundaryAt = touchY
+        const overDelta = Math.abs(touchY - hitBoundaryAt)
+        if (overDelta > 20) {
+          overscrollHint.value = {
+            direction: pullingNext ? 'next' : 'prev',
+            progress: Math.min(1, (overDelta - 20) / 60),
+          }
+        }
+      } else {
+        hitBoundaryAt = null
+        overscrollHint.value = null
+      }
+      return
+    }
+    // 翻页模式：水平滑动覆盖层动画
     const dx = e.changedTouches[0].clientX - sx
-    const dy = e.changedTouches[0].clientY - sy
+    const dy = touchY - sy
     if (Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy) && !isAnimating) {
       if (!overlay) {
         overlay = createOverlay()
@@ -811,6 +918,18 @@ function addTouchHandler(doc) {
   }, { passive: true })
 
   doc.addEventListener('touchend', async (e) => {
+    // 滚动模式：过度滚动触发章节导航
+    if (overscrollHint.value && overscrollHint.value.progress >= 0.8) {
+      const dir = overscrollHint.value.direction
+      overscrollHint.value = null
+      hitBoundaryAt = null
+      swipeHandled = true
+      fadeChapterNav(dir)
+      return
+    }
+    overscrollHint.value = null
+    hitBoundaryAt = null
+
     const dx = e.changedTouches[0].clientX - sx
     const dy = e.changedTouches[0].clientY - sy
     const threshold = Math.max(40, window.innerWidth * 0.15)
@@ -823,10 +942,7 @@ function addTouchHandler(doc) {
         swipeHandled = true
         isAnimating = true
         const direction = dx < 0 ? 'next' : 'prev'
-        try {
-          if (direction === 'next') await view?.next()
-          else await view?.prev()
-        } catch { /* ignore */ }
+        await safeNav(direction)
         runOverlayAnimation(ol, direction, () => { isAnimating = false }, dx)
       } else {
         // Snap back to original position
@@ -841,11 +957,8 @@ function addTouchHandler(doc) {
       if (flowMode.value === 'paginated') {
         dx < 0 ? animatePageTurn('next') : animatePageTurn('prev')
       } else {
-        // 滚动模式：横划直接跳章节，无动画
-        try {
-          if (dx < 0) await view?.next()
-          else await view?.prev()
-        } catch { /* ignore */ }
+        // 滚动模式：横划跳章节，使用淡入淡出动画
+        fadeChapterNav(dx < 0 ? 'next' : 'prev')
       }
     }
   }, { passive: true })
@@ -854,12 +967,91 @@ function addTouchHandler(doc) {
 // --- Relocate ---
 function onRelocate(e) {
   const { fraction, section, tocItem } = e.detail
-  // 防御异常 fraction：NaN / Infinity / 负数 → 忽略本次 relocate
-  if (typeof fraction !== 'number' || !isFinite(fraction) || fraction < 0) return
+
+  // TIER 1: 拒绝非法值
+  if (typeof fraction !== 'number' || !isFinite(fraction) || fraction < 0 || fraction > 1) return
+
+  // TIER 2: 顺序导航的方向性验证
+  if (navCtx.source === 'sequential' && navCtx.lastGoodFraction > 0.01) {
+    const delta = fraction - navCtx.lastGoodFraction
+    const sectionChanged = (section?.current ?? 0) !== currentSectionIndex.value
+    // 同章节内阈值 8%，跨章节阈值 20%（章节切换时进度变化可能稍大）
+    const threshold = sectionChanged ? 0.20 : 0.08
+
+    if (navCtx.direction === 'next' && delta < -threshold) {
+      console.warn('[ebook] Rejected regression on next():',
+        navCtx.lastGoodFraction.toFixed(4), '→', fraction.toFixed(4))
+      return
+    }
+    if (navCtx.direction === 'prev' && delta > threshold) {
+      console.warn('[ebook] Rejected forward jump on prev():',
+        navCtx.lastGoodFraction.toFixed(4), '→', fraction.toFixed(4))
+      return
+    }
+  }
+
+  // TIER 3: 接受并更新状态
   progress.value = fraction
+  navCtx.lastGoodFraction = fraction
+  navCtx.stuckCount = 0
+  navCtx.lastRelocateTs = Date.now()
   currentSectionIndex.value = section?.current ?? 0
   chapterTitle.value = tocItem?.label?.trim() || getChapterTitle(currentSectionIndex.value)
   scheduleSave()
+}
+
+// --- Safe navigation with stuck detection ---
+async function safeNav(direction) {
+  if (isRecovering) return
+
+  // 书首/书末边界：进度不变是正常的，不计入卡死检测
+  if ((direction === 'prev' && progress.value <= 0.001) ||
+      (direction === 'next' && progress.value >= 0.999)) {
+    try {
+      if (direction === 'next') await view?.next()
+      else await view?.prev()
+    } catch { /* ignore */ }
+    return
+  }
+
+  navCtx.source = 'sequential'
+  navCtx.direction = direction
+
+  try {
+    if (direction === 'next') await view?.next()
+    else await view?.prev()
+  } catch { /* ignore */ }
+
+  // 卡死检测：如果 relocate 被拒或未触发，stuckCount 递增
+  // 等 300ms 让 relocate 有时间触发
+  setTimeout(() => {
+    if (Date.now() - navCtx.lastRelocateTs > 300) {
+      navCtx.stuckCount++
+    }
+    if (navCtx.stuckCount >= 5 && Date.now() - navCtx.lastRelocateTs > 3000) {
+      console.warn('[ebook] Navigation stuck, recovering...')
+      navCtx.stuckCount = 0
+      recoverView()
+    }
+  }, 300)
+}
+
+async function recoverView() {
+  if (isRecovering) return
+  isRecovering = true
+  try {
+    if (!navCtx.lastGoodFraction || navCtx.lastGoodFraction <= 0) return
+
+    saveNow()
+    cleanup()
+    // 等待旧视图的异步操作自然结束，避免 SES_UNCAUGHT_EXCEPTION
+    await new Promise(r => setTimeout(r, 200))
+    await init()
+  } finally {
+    navCtx.stuckCount = 0
+    navCtx.lastRelocateTs = Date.now()
+    isRecovering = false
+  }
 }
 
 // --- Progress persistence ---
@@ -975,10 +1167,7 @@ async function doKeyNav(direction) {
   dismissOverlays()
   // Safety reset in case view.next/prev hangs (e.g. broken epub)
   const safety = setTimeout(() => { keyThrottle = false }, 5000)
-  try {
-    if (direction === 'next') await view.next()
-    else await view.prev()
-  } catch { /* ignore */ }
+  await safeNav(direction)
   clearTimeout(safety)
   keyThrottle = false
   // 章节切换后新 iframe 可能未获得焦点，主动聚焦以恢复键盘快捷键
@@ -1014,12 +1203,16 @@ function toggleToolbar() {
 // --- Annotation/Bookmark navigation ---
 function goToAnnotation(ann) {
   if (!ann?.cfi_range) return
+  navCtx.source = 'jump'
+  navCtx.direction = null
   view?.showAnnotation?.({ value: ann.cfi_range })
   if (!isDesktop.value) annotationsSidebarVisible.value = false
 }
 
 function goToBookmark(bm) {
   if (!bm?.cfi) return
+  navCtx.source = 'jump'
+  navCtx.direction = null
   view?.goTo(bm.cfi)
   if (!isDesktop.value) annotationsSidebarVisible.value = false
 }
@@ -1027,6 +1220,8 @@ function goToBookmark(bm) {
 // --- TOC navigation ---
 function goToHref(href) {
   if (!href || !book) return
+  navCtx.source = 'jump'
+  navCtx.direction = null
   view?.goTo(href)
   if (!isDesktop.value) {
     tocVisible.value = false
@@ -1035,8 +1230,13 @@ function goToHref(href) {
 }
 
 // --- Settings ---
+function updateThemeColor(color) {
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', color)
+}
+
 function changeTheme(t) {
   theme.value = t
+  updateThemeColor(containerBg.value)
   applyStyles()
   savePrefs()
 }
@@ -1061,12 +1261,16 @@ function changeFont(f) {
 
 function changeFlowMode(mode) {
   flowMode.value = mode
-  view?.renderer?.setAttribute('flow', mode)
   savePrefs()
+  requestAnimationFrame(() => {
+    view?.renderer?.setAttribute('flow', mode)
+  })
 }
 
 // --- Progress slider ---
 function onSlider(e) {
+  navCtx.source = 'jump'
+  navCtx.direction = null
   const frac = parseFloat(e.target.value)
   view?.goToFraction(frac)
 }
@@ -1074,6 +1278,7 @@ function onSlider(e) {
 // --- Close ---
 function handleClose() {
   saveNow()
+  updateThemeColor('#ffffff')
   isVisible.value = false
   emit('close')
 }
@@ -1258,10 +1463,10 @@ useSwipe(annotationsPanelEl, {
               </svg>
             </button>
 
-            <!-- Annotations sidebar (hidden from toolbar — desktop uses edge tab, mobile uses TOC entry) -->
+            <!-- Annotations sidebar (mobile only — desktop uses edge tab) -->
             <button
               @click="annotationsSidebarVisible = !annotationsSidebarVisible; tocVisible = false; settingsVisible = false"
-              class="w-9 h-9 items-center justify-center rounded-lg hover:bg-black/10 active:bg-black/15 transition-colors shrink-0 hidden"
+              class="w-9 h-9 flex md:hidden items-center justify-center rounded-lg hover:bg-black/10 active:bg-black/15 transition-colors shrink-0"
             >
               <svg
                 class="w-5 h-5"
@@ -1380,6 +1585,25 @@ useSwipe(annotationsPanelEl, {
           </div>
         </Transition>
 
+        <!-- ======== Overscroll hint (scrolled mode chapter nav) ======== -->
+        <div
+          v-if="overscrollHint"
+          class="absolute left-0 right-0 z-20 flex justify-center pointer-events-none"
+          :class="overscrollHint.direction === 'next' ? 'bottom-8' : 'top-8'"
+          :style="{ opacity: overscrollHint.progress }"
+        >
+          <div
+            class="flex items-center gap-1.5 px-4 py-2 rounded-full backdrop-blur-md shadow-lg text-xs font-medium"
+            :class="theme === 'dark' ? 'bg-gray-800/80 text-gray-100' : 'bg-black/60 text-white'"
+          >
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path v-if="overscrollHint.direction === 'next'" d="M12 5v14M19 12l-7 7-7-7" />
+              <path v-else d="M12 19V5M5 12l7-7 7 7" />
+            </svg>
+            {{ overscrollHint.direction === 'next' ? '释放进入下一章' : '释放进入上一章' }}
+          </div>
+        </div>
+
         <!-- ======== Desktop edge tabs (panel collapsed) ======== -->
         <!-- Left edge tab: open TOC -->
         <button
@@ -1464,7 +1688,7 @@ useSwipe(annotationsPanelEl, {
                 v-for="(item, idx) in flatToc"
                 :key="idx"
                 @click="goToHref(item.href)"
-                class="block w-full text-left text-sm py-2.5 px-4 hover:bg-black/5 active:bg-black/10 transition-colors truncate"
+                class="block w-full text-left text-sm py-3 px-4 hover:bg-black/5 active:bg-black/10 transition-colors truncate"
                 :class="panelTextCls"
                 :style="{ paddingLeft: item.depth * 16 + 16 + 'px' }"
               >
@@ -1490,24 +1714,48 @@ useSwipe(annotationsPanelEl, {
         </Transition>
 
         <!-- ======== Settings panel ======== -->
+        <!-- Mobile backdrop -->
         <Transition
-          enter-active-class="transition-all duration-200 ease-out"
-          enter-from-class="opacity-0 scale-95 origin-top-right"
-          enter-to-class="opacity-100 scale-100"
-          leave-active-class="transition-all duration-150 ease-in"
-          leave-from-class="opacity-100 scale-100"
-          leave-to-class="opacity-0 scale-95 origin-top-right"
+          enter-active-class="transition-opacity duration-200"
+          enter-from-class="opacity-0"
+          enter-to-class="opacity-100"
+          leave-active-class="transition-opacity duration-150"
+          leave-from-class="opacity-100"
+          leave-to-class="opacity-0"
+        >
+          <div
+            v-if="settingsVisible && !isDesktop"
+            class="absolute inset-0 z-[34] bg-black/20"
+            @click="settingsVisible = false"
+          />
+        </Transition>
+        <Transition
+          :enter-active-class="isDesktop ? 'transition-all duration-200 ease-out' : 'transition-transform duration-300 ease-out'"
+          :enter-from-class="isDesktop ? 'opacity-0 scale-95 origin-top-right' : 'translate-y-full'"
+          :enter-to-class="isDesktop ? 'opacity-100 scale-100' : 'translate-y-0'"
+          :leave-active-class="isDesktop ? 'transition-all duration-150 ease-in' : 'transition-transform duration-200 ease-in'"
+          :leave-from-class="isDesktop ? 'opacity-100 scale-100' : 'translate-y-0'"
+          :leave-to-class="isDesktop ? 'opacity-0 scale-95 origin-top-right' : 'translate-y-full'"
         >
           <div
             v-if="settingsVisible"
-            class="absolute w-56 z-[35] rounded-xl border shadow-xl p-4 space-y-4"
-            :class="toolbarCls"
-            :style="{
-              top: 'calc(max(10px, env(safe-area-inset-top, 0px)) + 46px)',
-              right: '12px',
-              background: containerBg,
-            }"
+            class="absolute z-[35] border shadow-xl"
+            :class="[
+              toolbarCls,
+              isDesktop
+                ? 'w-56 rounded-xl p-4 space-y-4'
+                : 'left-0 right-0 bottom-0 rounded-t-2xl px-5 pt-8 space-y-5'
+            ]"
+            :style="isDesktop
+              ? { top: 'calc(max(10px, env(safe-area-inset-top, 0px)) + 46px)', right: '12px', background: containerBg }
+              : { paddingBottom: 'max(20px, env(safe-area-inset-bottom, 0px))', background: containerBg }"
           >
+            <!-- Mobile drag handle indicator -->
+            <div
+              v-if="!isDesktop"
+              class="absolute top-2.5 left-1/2 -translate-x-1/2 w-10 h-1 rounded-full"
+              :class="theme === 'dark' ? 'bg-gray-600' : 'bg-gray-300'"
+            />
             <!-- Font size -->
             <div>
               <label class="text-[11px] font-medium mb-2 block tracking-wide uppercase" :class="subCls">
@@ -1850,7 +2098,7 @@ useSwipe(annotationsPanelEl, {
                     <div
                       v-for="ann in items"
                       :key="ann.id"
-                      class="group relative flex items-start gap-2.5 px-4 py-2.5 hover:bg-black/5 active:bg-black/10 transition-colors cursor-pointer"
+                      class="group relative flex items-start gap-2.5 px-4 py-3 hover:bg-black/5 active:bg-black/10 transition-colors cursor-pointer"
                       :class="panelTextCls"
                       @click="goToAnnotation(ann)"
                     >
