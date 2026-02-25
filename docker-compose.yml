@@ -1,8 +1,8 @@
 # 代理设置（httpx / OpenAI SDK / requests 自动识别）
-# 本地 Clash 监听在局域网 192.168.31.117:1082，远程容器通过宿主网络访问
+# PROXY_URL 从 .env 读取，留空则不走代理
 x-proxy-env: &proxy-env
-  HTTP_PROXY: http://192.168.31.117:1082
-  HTTPS_PROXY: http://192.168.31.117:1082
+  HTTP_PROXY: ${PROXY_URL:-}
+  HTTPS_PROXY: ${PROXY_URL:-}
   NO_PROXY: localhost,127.0.0.1,rsshub,browserless,postgres
 
 services:
@@ -35,14 +35,14 @@ services:
     ports:
       - "1200:1200"
     env_file:
-      - ./backend/.env
+      - ./.env
     environment:
       TZ: Asia/Shanghai
       NODE_ENV: production
       CACHE_TYPE: memory
       CACHE_EXPIRE: 900
       PUPPETEER_WS_ENDPOINT: ws://browserless:3000
-      PROXY_URI: http://192.168.31.117:1082
+      PROXY_URI: ${PROXY_URL:-}
     depends_on:
       - browserless
     networks:
@@ -82,10 +82,10 @@ services:
       - "8000:8000"
     volumes:
       - ./data:/app/data
-      - ./backend/.env:/app/.env
+      - ./.env:/app/.env
       - ${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
       - ./docker-compose.yml:/project/docker-compose.yml:ro
-      - ./backend/.env:/project/backend/.env
+      - ./.env:/project/.env
     environment:
       TZ: Asia/Shanghai
       DATABASE_URL: postgresql://allinone:allinone@postgres:5432/allinone
@@ -133,7 +133,7 @@ services:
     command: [ "python", "-m", "procrastinate", "--app=app.tasks.procrastinate_app.proc_app", "worker", "--concurrency=4", "--queues=pipeline" ]
     volumes:
       - ./data:/app/data
-      - ./backend/.env:/app/.env:ro
+      - ./.env:/app/.env:ro
     environment:
       TZ: Asia/Shanghai
       DATABASE_URL: postgresql://allinone:allinone@postgres:5432/allinone
@@ -168,7 +168,7 @@ services:
     command: [ "python", "-m", "procrastinate", "--app=app.tasks.procrastinate_app.proc_app", "worker", "--concurrency=2", "--queues=scheduled" ]
     volumes:
       - ./data:/app/data
-      - ./backend/.env:/app/.env:ro
+      - ./.env:/app/.env:ro
     environment:
       TZ: Asia/Shanghai
       DATABASE_URL: postgresql://allinone:allinone@postgres:5432/allinone

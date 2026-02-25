@@ -15,10 +15,9 @@ echo ""
 
 # 1. Check remote .env
 echo ">> [1/3] Checking remote .env..."
-ENV_EXISTS=$(${SSH} "test -f ${REMOTE_DIR}/backend/.env && echo y || echo n")
+ENV_EXISTS=$(${SSH} "test -f ${REMOTE_DIR}/.env && echo y || echo n")
 if [ "${ENV_EXISTS}" = "n" ]; then
-    ${SSH} "mkdir -p ${REMOTE_DIR}/backend"
-    ${SCP_CMD} backend/.env ${REMOTE_HOST}:${REMOTE_DIR}/backend/.env
+    ${SCP_CMD} .env ${REMOTE_HOST}:${REMOTE_DIR}/.env
     echo "   .env synced (first deploy)"
 else
     echo "   .env exists, skipped"

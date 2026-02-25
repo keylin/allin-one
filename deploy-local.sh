@@ -124,17 +124,21 @@ check_deps() {
 
 # ---- .env 模板 ----
 ensure_env() {
-    if [ ! -f "$ROOT_DIR/backend/.env" ]; then
+    if [ ! -f "$ROOT_DIR/.env" ]; then
         warn "未找到 .env，生成默认配置..."
-        cat > "$ROOT_DIR/backend/.env" << 'ENVEOF'
-# LLM 配置 (必填)
-LLM_API_KEY=your-api-key-here
-LLM_PROVIDER=deepseek
-LLM_BASE_URL=https://api.deepseek.com/v1
-LLM_MODEL=deepseek-chat
-SCHEDULER_ENABLED=true
+        cat > "$ROOT_DIR/.env" << 'ENVEOF'
+# 安全设置 (留空则不启用认证)
+API_KEY=
+CORS_ORIGINS=*
+
+# 本地开发 (RSSHub/Browserless 按需启动)
+RSSHUB_URL=http://localhost:1200
+BROWSERLESS_URL=http://localhost:3000
+
+# 代理（可选，留空则不走代理）
+# PROXY_URL=http://127.0.0.1:7890
 ENVEOF
-        warn "请编辑 backend/.env 填入 LLM_API_KEY"
+        warn "请在系统设置页面配置 LLM API Key"
     fi
 }
 

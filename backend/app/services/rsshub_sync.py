@@ -7,7 +7,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# .env 文件路径: backend/.env (容器内 /app/.env)
+# .env 文件路径: 项目根 .env (容器内 /app/.env)
 _ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
 
 

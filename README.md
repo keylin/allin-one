@@ -93,7 +93,7 @@ RSS、B站、YouTube、播客、技术博客、网页监控、宏观经济数据
 
 ```bash
 git clone <repo-url> && cd allin-one
-cp backend/.env.example backend/.env
+cp .env.example .env
 # 编辑 .env，填入你的大模型 API Key（支持 OpenAI 兼容接口）
 docker compose up -d --build
 ```

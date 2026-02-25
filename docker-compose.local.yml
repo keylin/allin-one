@@ -1,5 +1,11 @@
 # 本地开发环境 - 全容器化，支持热重载
 
+# 代理设置 — PROXY_URL 从 .env 读取，留空则不走代理
+x-proxy-env: &proxy-env
+  HTTP_PROXY: ${PROXY_URL:-}
+  HTTPS_PROXY: ${PROXY_URL:-}
+  NO_PROXY: localhost,127.0.0.1,rsshub,browserless,postgres
+
 services:
   # ---- 基础设施 ----
   postgres:
@@ -32,17 +38,14 @@ services:
     ports:
       - "1200:1200"
     env_file:
-      - ./backend/.env
+      - ./.env
     environment:
       TZ: Asia/Shanghai
       NODE_ENV: production
       CACHE_TYPE: memory
       CACHE_EXPIRE: 900
       PUPPETEER_WS_ENDPOINT: ws://browserless:3000
-      # 代理配置（解决 GFW DNS 污染，使用 RSSHub 原生代理变量）
-      PROXY_PROTOCOL: http
-      PROXY_HOST: 192.168.31.117
-      PROXY_PORT: "1082"
+      PROXY_URI: ${PROXY_URL:-}
     depends_on:
       browserless:
         condition: service_healthy
@@ -96,10 +99,11 @@ services:
       - ./backend:/app
       - ./data:/app/data
       - ${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
+      - ./.env:/app/.env
       - ./docker-compose.local.yml:/project/docker-compose.yml:ro
-      - ./backend/.env:/project/backend/.env
+      - ./.env:/project/.env
     env_file:
-      - ./backend/.env
+      - ./.env
     environment:
       TZ: Asia/Shanghai
       DATABASE_URL: postgresql://allinone:allinone@postgres:5432/allinone
@@ -108,6 +112,7 @@ services:
       BROWSERLESS_URL: http://browserless:3000
       # macOS Docker bind mount 不传递 inotify 事件，需要轮询
       WATCHFILES_FORCE_POLLING: "true"
+      <<: *proxy-env
     depends_on:
       postgres:
         condition: service_healthy
@@ -149,13 +154,14 @@ services:
       - ./backend:/app
       - ./data:/app/data
     env_file:
-      - ./backend/.env
+      - ./.env
     environment:
       TZ: Asia/Shanghai
       DATABASE_URL: postgresql://allinone:allinone@postgres:5432/allinone
       RSSHUB_URL: http://rsshub:1200
       BROWSERLESS_URL: http://browserless:3000
       WATCHFILES_FORCE_POLLING: "true"
+      <<: *proxy-env
     depends_on:
       postgres:
         condition: service_healthy
@@ -177,13 +183,14 @@ services:
       - ./backend:/app
       - ./data:/app/data
     env_file:
-      - ./backend/.env
+      - ./.env
     environment:
       TZ: Asia/Shanghai
       DATABASE_URL: postgresql://allinone:allinone@postgres:5432/allinone
       RSSHUB_URL: http://rsshub:1200
       BROWSERLESS_URL: http://browserless:3000
       WATCHFILES_FORCE_POLLING: "true"
+      <<: *proxy-env
     depends_on:
       postgres:
         condition: service_healthy
