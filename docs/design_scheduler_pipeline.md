@@ -44,7 +44,7 @@ graph TD
 
 1.  **加载**: 查找所有 `is_active=True` 且 `schedule_enabled=True` 的源。
 2.  **过滤**: 排除尚未这就绪（当前时间 < 上次时间 + 间隔）的源。
-3.  **执行**: 调用对应的 Collector (如 `RSSCollector`, `BilibiliCollector`)。
+3.  **执行**: 调用对应的 Collector (如 `RSSCollector`, `ScraperCollector`)。
 4.  **去重**:
     *   使用 `source_id` + `external_id` (外部唯一ID) 作为唯一约束。
     *   数据库层面 `UniqueConstraint` 防止重复插入。

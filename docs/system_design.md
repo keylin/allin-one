@@ -1,6 +1,6 @@
 # Allin-One 系统方案
 
-> 版本: v1.2 | 更新日期: 2026-02-21
+> 版本: v1.3 | 更新日期: 2026-02-25
 
 ---
 
@@ -119,8 +119,8 @@ source_configs 1───∞ finance_data_points  (source_id FK)
 只描述「从哪获取信息」，source_type 不含视频平台等混合类型。
 
 数据源分为两大类（派生属性，非 DB 列）：
-- **网络数据 (network)**: rss.hub, rss.standard, api.akshare, web.scraper, podcast.apple, account.bilibili, account.generic — 有 Collector，定时自动采集
-- **用户数据 (user)**: user.note, file.upload, system.notification — 用户/系统主动提交，schedule_enabled 自动置 false
+- **网络数据 (network)**: rss.hub, rss.standard, api.akshare, web.scraper, podcast.apple, account.generic — 有 Collector，定时自动采集
+- **用户数据 (user)**: user.note, file.upload, system.notification, sync.apple_books, sync.wechat_read, sync.bilibili — 用户/系统主动提交或外部脚本推送，schedule_enabled 自动置 false
 
 通用内容提交 API：`POST /api/content/submit`（文本）、`POST /api/content/upload`（文件），校验目标源必须为 user 分类。
 
@@ -522,11 +522,11 @@ class BaseCollector(ABC):
 | `AkShareCollector` | `api.akshare` | AkShare API | 金融数据 |
 | `PodcastCollector` | `podcast.apple` | 播客 RSS 解析 | Apple Podcasts |
 | `FileUploadCollector` | `file.upload` | 读取上传文件 | 文本/图片/文档 |
-| `BilibiliCollector` | `account.bilibili` | B站账号 API | 动态/收藏夹/历史 (需Cookie) |
 | `GenericAccountCollector` | `account.generic` | 平台特定 API | 其他需认证的平台 |
 
-注意: 没有 BilibiliVideoCollector / YouTubeVideoCollector。
-视频下载由流水线中的 `localize_media` 步骤 (yt-dlp) 处理, 不是 Collector 的职责。
+注意:
+- 没有 BilibiliVideoCollector / YouTubeVideoCollector。视频下载由流水线中的 `localize_media` 步骤 (yt-dlp) 处理, 不是 Collector 的职责。
+- `sync.*` 类型（Apple Books、微信读书、B站视频）无 Collector，由外部脚本通过同步 API 推送数据（见 §4.4）。
 
 ### 4.3 三级抓取策略实现
 
@@ -560,6 +560,33 @@ class ContentEnricher:
     async def _browser_use_fetch(self, url: str) -> str:
         """L3: browser-use AI 操控浏览器"""
 ```
+
+### 4.4 外部数据同步 (Sync API)
+
+对于需要用户凭证（Cookie）且不适合作为 Collector 的平台，采用「外部脚本 + 同步 API」模式。
+
+**架构**: 外部脚本（独立运行，不依赖后端环境）负责从平台获取数据，通过 HTTP API 推送到后端。
+
+**同步 API 端点**:
+
+| API 前缀 | 适用类型 | 端点 |
+|----------|---------|------|
+| `/api/ebook/sync` | `sync.apple_books`, `sync.wechat_read` | setup / status / sync (书籍+标注) |
+| `/api/video/sync` | `sync.bilibili` | setup / status / sync (视频元数据) |
+
+**同步流程** (三步式):
+1. `POST /setup?source_type=sync.xxx` — 获取或创建 SourceConfig，返回 source_id
+2. `GET /status?source_id=xxx` — 查询上次同步时间，用于增量过滤
+3. `POST /sync` — 推送数据（支持批量 upsert）
+
+**外部脚本**:
+
+| 脚本 | 平台 | 数据 |
+|------|------|------|
+| `scripts/bilibili-sync.py` | B站 | 收藏夹/历史/动态视频 |
+| `scripts/wechat-read-sync.py` | 微信读书 | 书籍元数据、阅读进度、划线标注 |
+
+脚本独立于后端环境，仅依赖 `httpx`，支持增量/全量/预览模式。
 
 ---
 
@@ -753,6 +780,20 @@ PUT    /api/video/{id}/progress         → 更新播放进度
 DELETE /api/video/{id}                  → 删除视频
 GET    /api/video/{id}/thumbnail        → image file (封面图)
 GET    /api/video/{id}/stream           → video stream (Range 支持)
+```
+
+#### Video Sync (外部同步)
+```
+POST   /api/video/sync/setup           → { source_id } (创建/获取 sync 数据源)
+GET    /api/video/sync/status           → VideoSyncStatus (同步状态)
+POST   /api/video/sync                  → VideoSyncResponse (批量推送视频数据)
+```
+
+#### Ebook Sync (外部同步)
+```
+POST   /api/ebook/sync/setup           → { source_id } (创建/获取 sync 数据源)
+GET    /api/ebook/sync/status           → EbookSyncStatus (同步状态)
+POST   /api/ebook/sync                  → EbookSyncResponse (批量推送书籍+标注)
 ```
 
 #### Media (通用媒体文件服务)

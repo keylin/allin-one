@@ -30,35 +30,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fountain"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "chrono",
- "env_logger",
- "log",
- "qrcodegen",
- "reqwest 0.12.28",
- "rusqlite",
- "security-framework 2.11.1",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-autostart",
- "tauri-plugin-dialog",
- "tauri-plugin-notification",
- "tauri-plugin-shell",
- "tauri-plugin-store",
- "thiserror 2.0.18",
- "tokio",
- "tokio-cron-scheduler",
- "uuid",
- "windows-sys 0.59.0",
-]
-
-[[package]]
 name = "alloc-no-stdlib"
 version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1197,6 +1168,35 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
+]
+
+[[package]]
+name = "fountain"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "chrono",
+ "env_logger",
+ "log",
+ "qrcodegen",
+ "reqwest 0.12.28",
+ "rusqlite",
+ "security-framework 2.11.1",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-autostart",
+ "tauri-plugin-dialog",
+ "tauri-plugin-notification",
+ "tauri-plugin-shell",
+ "tauri-plugin-store",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-cron-scheduler",
+ "uuid",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

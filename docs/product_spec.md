@@ -84,12 +84,14 @@ Allin-One 是 AI 驱动的个人思维训练系统。它从海量信息源中自
 | 网页 | `web.scraper` | 网页抓取 | L1 HTTP / L2 Browserless / L3 browser-use |
 | 文件 | `file.upload` | 用户上传文件 | Web UI 上传 |
 | 播客 | `podcast.apple` | Apple Podcasts | 播客 RSS 解析 |
-| 账号 | `account.bilibili` | B站账号 (Cookie) | 需登录态的 API |
 | 账号 | `account.generic` | 其他平台账号 | 平台特定 API |
+| 同步 | `sync.apple_books` | Apple Books 同步 | 外部脚本推送书籍+标注 |
+| 同步 | `sync.wechat_read` | 微信读书同步 | 外部脚本推送书籍+标注 |
+| 同步 | `sync.bilibili` | B站视频同步 | 外部脚本推送视频元数据 |
 | 记录 | `user.note` | 日常笔记 | 用户手动输入 |
 | 记录 | `system.notification` | 系统消息 | 系统通知 |
 
-**关键设计**: 没有 `video_bilibili` / `video_youtube` 等类型。B站/YouTube 视频通过 `rss.hub` 数据源发现新内容，再由流水线中的 `localize_media` 步骤处理。
+**关键设计**: 没有 `video_bilibili` / `video_youtube` 等类型。B站/YouTube 视频通过 `rss.hub` 数据源发现新内容，再由流水线中的 `localize_media` 步骤处理。`sync.*` 类型通过外部脚本获取平台数据后推送到同步 API。
 
 **组合示例**:
 | 场景 | 数据源 | 绑定的流水线模板 |

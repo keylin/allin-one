@@ -49,8 +49,10 @@
 | `api.akshare` | network | AkShare 金融数据 | 宏观经济指标 |
 | `web.scraper` | network | 网页抓取 | 内部分 L1/L2/L3 级别 |
 | `podcast.apple` | network | Apple Podcasts | 播客 RSS 解析 |
-| `account.bilibili` | network | B站账号 | 需要 Cookie/登录态 |
 | `account.generic` | network | 其他平台账号 | 需要认证的平台 |
+| `sync.apple_books` | user | Apple Books 同步 | 外部脚本推送书籍+标注 |
+| `sync.wechat_read` | user | 微信读书同步 | 外部脚本推送书籍+标注 |
+| `sync.bilibili` | user | B站视频同步 | 外部脚本推送视频元数据 |
 | `user.note` | user | 日常笔记 | 用户手动输入，通过 `/api/content/submit` 提交 |
 | `file.upload` | user | 用户上传文件 | 文本/图片/文档，通过 `/api/content/upload` 上传 |
 | `system.notification` | user | 系统消息 | 系统通知 |
@@ -62,7 +64,7 @@
 | 枚举值 | 描述 | 前缀 | 特征 |
 | :--- | :--- | :--- | :--- |
 | `network` | 网络数据 | rss, podcast, api, web, account | 有 Collector，定时采集，需要 URL/配置 |
-| `user` | 用户数据 | user, file, system | 无 Collector，用户/系统主动提交，无调度 |
+| `user` | 用户数据 | user, file, system, sync | 无 Collector，用户/系统主动提交或外部脚本推送，无调度 |
 
 ### 3.2 StepType (原子操作类型)
 
