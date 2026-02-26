@@ -11,15 +11,16 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+FOUNTAIN="$ROOT/fountain"
 
 export PATH="$HOME/.cargo/bin:$PATH"
 
 # ── version from tauri.conf.json ──────────────────────────────────────────────
-VERSION=$(python3 -c "import json,sys; print(json.load(open('$ROOT/src-tauri/tauri.conf.json'))['version'])")
+VERSION=$(python3 -c "import json,sys; print(json.load(open('$FOUNTAIN/src-tauri/tauri.conf.json'))['version'])")
 ARCH=$(uname -m)  # arm64 / x86_64
 
-APP_DIR="$ROOT/src-tauri/target/release/bundle/macos"
-DMG_DIR="$ROOT/src-tauri/target/release/bundle/dmg"
+APP_DIR="$FOUNTAIN/src-tauri/target/release/bundle/macos"
+DMG_DIR="$FOUNTAIN/src-tauri/target/release/bundle/dmg"
 DMG_OUT="$DMG_DIR/Fountain_${VERSION}_${ARCH}.dmg"
 
 # ── preflight checks ──────────────────────────────────────────────────────────
@@ -38,7 +39,7 @@ echo ""
 
 # ── build ─────────────────────────────────────────────────────────────────────
 echo "==> Installing JS dependencies..."
-cd "$ROOT"
+cd "$FOUNTAIN"
 npm install --silent
 
 echo "==> Building release .app (LTO + strip, this takes a few minutes)..."
