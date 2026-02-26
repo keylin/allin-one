@@ -379,7 +379,7 @@ function formatTime(t) {
               :key="'vp-' + content.id"
               :content-id="content.id"
               :title="content.title || '视频播放'"
-              :saved-position="content.playback_position || 0"
+              :saved-position="content.media_items?.find(m => m.media_type === 'video')?.playback_position || 0"
             />
 
             <!-- 播客音频播放器 -->
@@ -392,7 +392,7 @@ function formatTime(t) {
               :duration="itunesMeta?.duration || ''"
               :episode="itunesMeta?.episode || ''"
               :content-id="content.id"
-              :playback-position="content.playback_position || 0"
+              :playback-position="content.media_items?.find(m => m.media_type === 'audio')?.playback_position || 0"
             />
 
             <!-- AI 分析结果 -->

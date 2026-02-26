@@ -157,8 +157,8 @@ async def list_media(
             "created_at": media.created_at.isoformat() if media.created_at else None,
             "published_at": content.published_at.isoformat() if content.published_at else None,
             "collected_at": content.collected_at.isoformat() if content.collected_at else None,
-            "playback_position": content.playback_position or 0,
-            "last_played_at": content.last_played_at.isoformat() if content.last_played_at else None,
+            "playback_position": media.playback_position or 0,
+            "last_played_at": media.last_played_at.isoformat() if media.last_played_at else None,
             "is_favorited": content.is_favorited or False,
             "media_info": media_info,
         })
@@ -183,15 +183,18 @@ async def save_playback_progress(
     """保存播放进度（视频/音频共用）"""
     from app.core.time import utcnow
 
-    content = db.get(ContentItem, content_id)
-    if not content:
-        return error_response(404, "Content not found")
+    media = db.query(MediaItem).filter(
+        MediaItem.content_id == content_id,
+        MediaItem.media_type.in_(["video", "audio"]),
+    ).first()
+    if not media:
+        return error_response(404, "Media not found")
 
-    content.playback_position = max(0, body.position)
-    content.last_played_at = utcnow()
+    media.playback_position = max(0, body.position)
+    media.last_played_at = utcnow()
     db.commit()
 
-    return {"code": 0, "data": {"playback_position": content.playback_position}, "message": "ok"}
+    return {"code": 0, "data": {"playback_position": media.playback_position}, "message": "ok"}
 
 
 @router.delete("/{content_id}")

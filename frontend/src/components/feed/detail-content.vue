@@ -413,7 +413,7 @@ defineExpose({ resetViewMode })
         :duration="itunesMeta?.duration || ''"
         :episode="itunesMeta?.episode || ''"
         :content-id="item.id"
-        :playback-position="item.playback_position || 0"
+        :playback-position="item.media_items?.find(m => m.media_type === 'audio')?.playback_position || 0"
       />
     </div>
 

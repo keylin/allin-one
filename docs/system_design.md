@@ -204,8 +204,6 @@ CREATE TABLE content_items (
     chat_history    TEXT,                       -- AI 对话历史 (JSON: [{role, content}, ...])
     view_count      INTEGER DEFAULT 0,           -- 浏览次数
     last_viewed_at  DATETIME,                     -- 最后浏览时间
-    playback_position INTEGER DEFAULT 0,          -- 视频播放进度（秒）
-    last_played_at  DATETIME,                     -- 最后播放时间
     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (source_id) REFERENCES source_configs(id) ON DELETE SET NULL,
@@ -232,6 +230,8 @@ CREATE TABLE media_items (
     filename        TEXT,                       -- 本地文件名
     status          TEXT DEFAULT 'pending',     -- pending/downloaded/failed
     metadata_json   TEXT,                       -- JSON: 类型特定元数据 (thumbnail_path, duration 等)
+    playback_position INTEGER DEFAULT 0,       -- 播放进度（秒）
+    last_played_at  DATETIME,                  -- 最后播放时间
     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (content_id) REFERENCES content_items(id)
 );

@@ -106,6 +106,8 @@ def _build_media_summaries(media_items) -> list[dict]:
             local_path=mi.local_path,
             thumbnail_path=thumbnail,
             status=mi.status,
+            playback_position=mi.playback_position or 0,
+            last_played_at=mi.last_played_at,
         ).model_dump())
     return summaries
 

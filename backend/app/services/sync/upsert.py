@@ -60,10 +60,6 @@ def upsert_videos(db: Session, source: SourceConfig, videos: list[dict]) -> dict
         raw = {**video_data, "source": platform_key}
         content.raw_data = json.dumps(raw, ensure_ascii=False)
 
-        # playback_position
-        if video_data.get("playback_position", 0) > 0:
-            content.playback_position = video_data["playback_position"]
-
         # published_at
         if video_data.get("published_at"):
             try:
@@ -79,6 +75,11 @@ def upsert_videos(db: Session, source: SourceConfig, videos: list[dict]) -> dict
         # --- Upsert MediaItems (auto-detect from URL) ---
         content_url = video_data.get("url") or f"https://www.bilibili.com/video/{external_id}"
         detected = detect_media_for_content(content_url, video_data.get("extra"))
+        if not detected and video_data.get("playback_position", 0) > 0:
+            logger.warning(
+                "upsert_videos: no media detected for %s (external_id=%s), playback_position=%s will not be stored",
+                content_url, external_id, video_data["playback_position"],
+            )
 
         # Build metadata for media items
         media_meta = {}
@@ -114,6 +115,10 @@ def upsert_videos(db: Session, source: SourceConfig, videos: list[dict]) -> dict
                             pass
                     existing_meta.update(media_meta)
                     media.metadata_json = json.dumps(existing_meta, ensure_ascii=False)
+
+            # playback_position → MediaItem (video/audio only)
+            if det.media_type in ("video", "audio") and video_data.get("playback_position", 0) > 0:
+                media.playback_position = video_data["playback_position"]
 
     # Update source last_collected_at
     source.last_collected_at = utcnow()

@@ -203,9 +203,6 @@ class ContentItem(Base):
 
     view_count = Column(Integer, default=0)
     last_viewed_at = Column(DateTime, nullable=True)     # 最后浏览时间
-    playback_position = Column(Integer, default=0)       # 视频播放进度（秒）
-    last_played_at = Column(DateTime, nullable=True)     # 最后播放时间
-
     # 相似度去重
     title_hash = Column(BigInteger, nullable=True)       # SimHash 64 位指纹
     duplicate_of_id = Column(String, ForeignKey("content_items.id", ondelete="SET NULL"), nullable=True)
@@ -266,6 +263,8 @@ class MediaItem(Base):
     filename = Column(String, nullable=True)         # 本地文件名
     status = Column(String, default="pending")       # pending / downloaded / failed
     metadata_json = Column(Text, nullable=True)      # JSON: 类型特定元数据
+    playback_position = Column(Integer, default=0)   # 播放进度（秒）
+    last_played_at = Column(DateTime, nullable=True) # 最后播放时间
 
     created_at = Column(DateTime, default=_utcnow)
 
