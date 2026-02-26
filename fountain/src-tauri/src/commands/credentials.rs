@@ -671,7 +671,7 @@ pub async fn save_twitter_cookies(
         .query(&[("skip_status", "1")])
         .header(
             "authorization",
-            "Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA",
+            format!("Bearer {}", TWITTER_BEARER),
         )
         .header("cookie", format!("auth_token={}; ct0={}", auth_token, ct0))
         .header("x-csrf-token", ct0.as_str())
@@ -686,14 +686,16 @@ pub async fn save_twitter_cookies(
 
     let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
 
-    if let Some(screen_name) = json["screen_name"].as_str() {
-        credential_store::set_credential(KEY_TWITTER_SCREEN_NAME, screen_name)
-            .map_err(|e| e.to_string())?;
-    }
-    if let Some(id_str) = json["id_str"].as_str() {
-        credential_store::set_credential(KEY_TWITTER_USER_ID, id_str)
-            .map_err(|e| e.to_string())?;
-    }
+    let screen_name = json["screen_name"]
+        .as_str()
+        .ok_or("verify_credentials: missing screen_name in response")?;
+    let id_str = json["id_str"]
+        .as_str()
+        .ok_or("verify_credentials: missing id_str in response")?;
+    credential_store::set_credential(KEY_TWITTER_SCREEN_NAME, screen_name)
+        .map_err(|e| e.to_string())?;
+    credential_store::set_credential(KEY_TWITTER_USER_ID, id_str)
+        .map_err(|e| e.to_string())?;
 
     // Close login window if still open
     if let Some(w) = app.get_webview_window("twitter-login") {
@@ -726,7 +728,7 @@ pub async fn validate_twitter_cookie() -> Result<bool, String> {
         .query(&[("skip_status", "1")])
         .header(
             "authorization",
-            "Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA",
+            format!("Bearer {}", TWITTER_BEARER),
         )
         .header("cookie", format!("auth_token={}; ct0={}", auth_token, ct0))
         .header("x-csrf-token", ct0.as_str())

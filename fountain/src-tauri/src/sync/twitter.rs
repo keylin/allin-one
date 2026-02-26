@@ -8,9 +8,7 @@ use crate::config::AppSettings;
 use crate::credential_store;
 use crate::sync::api_client::ApiClient;
 
-/// Twitter web app's built-in Bearer token — embedded in x.com frontend JS,
-/// used by many open-source tools for anonymous API access.
-const TWITTER_BEARER: &str = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA";
+use crate::credential_store::TWITTER_BEARER;
 
 pub async fn run_sync(settings: &AppSettings) -> Result<u32> {
     if settings.server_url.is_empty() {

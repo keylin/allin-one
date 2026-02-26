@@ -163,11 +163,12 @@ async fn fetch_stars(
                 }
             }
 
-            // Build a flat entry using repo fields plus starred_at
+            // Build a flat entry using repo fields plus starred_at.
+            // If starred_at is missing (non-star+json response), omit the field
+            // so the backend uses ingestion time — repo.created_at is the repo
+            // creation date, not the star date, and must not be used as a proxy.
             let mut entry = repo.clone();
-            if let Some(sa) = starred_at_str.or_else(|| {
-                repo["created_at"].as_str().map(|s| s.to_string())
-            }) {
+            if let Some(sa) = starred_at_str {
                 entry["starred_at"] = Value::String(sa);
             }
             all_stars.push(entry);

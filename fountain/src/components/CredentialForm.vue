@@ -174,6 +174,7 @@ function cancelZhihuWebview() {
 // ─── GitHub Stars ─────────────────────────────────────────────────────────
 async function saveGithubToken() {
   if (!githubToken.value) return
+  isValid.value = null
   validating.value = true
   try {
     await invoke('set_credential', { key: 'github_token', value: githubToken.value })
@@ -204,7 +205,7 @@ async function openTwitterWebView() {
 
 async function saveTwitterCookies() {
   if (!twitterAuthToken.value) return
-  // ct0 may have been auto-captured by WebView; if not, user must also have it
+  isValid.value = null
   validating.value = true
   try {
     // We need ct0 — check if already stored or prompt
@@ -469,6 +470,9 @@ async function saveWechatCookies() {
       <div class="mb-4 p-3 rounded-lg border" :class="twitterCt0Captured ? 'bg-green-50 border-green-200' : 'bg-blue-50 border-blue-100'">
         <p class="text-xs font-medium mb-1" :class="twitterCt0Captured ? 'text-green-800' : 'text-blue-800'">
           {{ twitterCt0Captured ? '✓ Step 1 done — ct0 captured' : 'Step 1: Open browser and login' }}
+        </p>
+        <p v-if="twitterCt0Captured" class="text-xs text-green-700 mt-1">
+          The browser window is still open — go there now, right-click → Inspect → Application → Cookies → x.com, then copy the <code class="bg-green-100 px-0.5 rounded">auth_token</code> value into Step 2 below.
         </p>
         <p v-if="!twitterCt0Captured" class="text-xs text-blue-600 mb-2">
           Opens x.com in an in-app window. The <code class="bg-blue-100 px-0.5 rounded">ct0</code> token will be captured automatically after login.

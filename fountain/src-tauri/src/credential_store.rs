@@ -83,6 +83,8 @@ pub const KEY_DOUBAN_DBCL2: &str = "douban_dbcl2";
 pub const KEY_DOUBAN_BID: &str = "douban_bid";
 pub const KEY_DOUBAN_UID: &str = "douban_uid";
 pub const KEY_ZHIHU_Z_C0: &str = "zhihu_z_c0";
+/// Twitter web app's built-in Bearer token — embedded in x.com frontend JS.
+pub const TWITTER_BEARER: &str = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA";
 pub const KEY_GITHUB_TOKEN: &str = "github_token";
 pub const KEY_TWITTER_AUTH_TOKEN: &str = "twitter_auth_token";
 pub const KEY_TWITTER_CT0: &str = "twitter_ct0";

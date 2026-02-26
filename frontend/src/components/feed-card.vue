@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { computed } from 'vue'
 import { formatTimeShort } from '@/utils/time'
 import ContentMetaRow from '@/components/common/content-meta-row.vue'
 
@@ -11,30 +11,8 @@ const props = defineProps({
 
 const emit = defineEmits(['click', 'favorite', 'tag-click'])
 
-// --- 双击收藏（仅移动端 < 768px） ---
-let lastTapTime = 0
-const showHeartAnimation = ref(false)
-let heartTimer = null
-
 function handleCardClick() {
-  const now = Date.now()
-  const delta = now - lastTapTime
-  lastTapTime = now
-
-  if (delta < 300 && delta > 0 && window.innerWidth < 768) {
-    // 双击 → 切换收藏 + 动画
-    emit('favorite', props.item.id)
-    triggerHeartAnimation()
-    return // 第一次点击已打开详情，不再重复
-  }
   emit('click', props.item)
-}
-
-function triggerHeartAnimation() {
-  showHeartAnimation.value = true
-  if (navigator.vibrate) navigator.vibrate(50)
-  clearTimeout(heartTimer)
-  heartTimer = setTimeout(() => { showHeartAnimation.value = false }, 800)
 }
 
 
