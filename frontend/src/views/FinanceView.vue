@@ -296,12 +296,12 @@ onMounted(() => {
     <!-- Sticky header -->
     <div class="px-4 pt-3 pb-2 space-y-2.5 sticky top-0 bg-white z-10 border-b border-slate-100 shrink-0">
       <!-- Tab pills + 添加按钮 -->
-      <div class="flex items-center justify-between gap-3">
-        <div class="inline-flex items-center gap-1 p-1 bg-slate-100 rounded-xl">
+      <div class="flex items-center justify-between gap-2">
+        <div class="inline-flex items-center gap-0.5 p-1 bg-slate-100 rounded-xl">
       <button
         v-for="tab in tabs"
         :key="tab.key"
-        class="px-4 py-2 text-sm font-medium rounded-lg transition-all duration-200"
+        class="px-3 py-1.5 sm:px-4 sm:py-2 text-xs sm:text-sm font-medium rounded-lg transition-all duration-200"
         :class="activeTab === tab.key
           ? 'bg-white text-slate-800 shadow-sm'
           : 'text-slate-500 hover:text-slate-700'"
@@ -311,13 +311,13 @@ onMounted(() => {
       </button>
         </div>
         <button
-          class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors shrink-0"
+          class="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-sm font-medium text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors shrink-0"
           @click="router.push('/sources')"
         >
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
           </svg>
-          添加数据源
+          <span class="hidden sm:inline">添加数据源</span>
         </button>
       </div>
     </div>
@@ -383,49 +383,52 @@ onMounted(() => {
       </div>
 
       <!-- 控制栏 -->
-      <div v-if="selectedSourceId" class="flex flex-wrap items-center gap-3 mb-5">
-        <!-- 来源选择 -->
-        <select
-          v-model="selectedSourceId"
-          class="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm text-slate-700 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 outline-none"
-        >
-          <option v-for="opt in sourceOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-        </select>
-
-        <span v-if="selectedSource" class="text-xs text-slate-400">
-          {{ chartData.length }} / {{ allSeriesData.length }} 条数据
-        </span>
-
-        <div class="flex-1"></div>
-
-        <!-- 时间范围 pills -->
-        <div class="flex items-center gap-0.5 p-0.5 bg-slate-100 rounded-lg">
-          <button
-            v-for="r in timeRanges"
-            :key="r.key"
-            class="px-2.5 py-1 text-xs font-medium rounded-md transition-all duration-200"
-            :class="timeRange === r.key
-              ? 'bg-white text-slate-700 shadow-sm'
-              : 'text-slate-400 hover:text-slate-600'"
-            @click="timeRange = r.key"
+      <div v-if="selectedSourceId" class="mb-5 space-y-2">
+        <!-- 来源选择 + 数据量 -->
+        <div class="flex items-center gap-2">
+          <select
+            v-model="selectedSourceId"
+            class="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm text-slate-700 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 outline-none min-w-0 max-w-[180px] sm:max-w-none"
           >
-            {{ r.label }}
-          </button>
+            <option v-for="opt in sourceOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+          </select>
+
+          <span v-if="selectedSource" class="text-xs text-slate-400 shrink-0">
+            {{ chartData.length }} / {{ allSeriesData.length }} 条
+          </span>
         </div>
 
-        <!-- 对比模式 pills -->
-        <div class="flex items-center gap-0.5 p-0.5 bg-slate-100 rounded-lg">
-          <button
-            v-for="m in compareModes"
-            :key="m.key"
-            class="px-2.5 py-1 text-xs font-medium rounded-md transition-all duration-200"
-            :class="compareMode === m.key
-              ? 'bg-white text-slate-700 shadow-sm'
-              : 'text-slate-400 hover:text-slate-600'"
-            @click="compareMode = m.key"
-          >
-            {{ m.label }}
-          </button>
+        <!-- 时间范围 + 对比模式 -->
+        <div class="flex items-center justify-between gap-2 sm:justify-start">
+          <!-- 时间范围 pills -->
+          <div class="flex items-center gap-0.5 p-0.5 bg-slate-100 rounded-lg">
+            <button
+              v-for="r in timeRanges"
+              :key="r.key"
+              class="px-2 py-1 sm:px-2.5 text-xs font-medium rounded-md transition-all duration-200"
+              :class="timeRange === r.key
+                ? 'bg-white text-slate-700 shadow-sm'
+                : 'text-slate-400 hover:text-slate-600'"
+              @click="timeRange = r.key"
+            >
+              {{ r.label }}
+            </button>
+          </div>
+
+          <!-- 对比模式 pills -->
+          <div class="flex items-center gap-0.5 p-0.5 bg-slate-100 rounded-lg">
+            <button
+              v-for="m in compareModes"
+              :key="m.key"
+              class="px-2 py-1 sm:px-2.5 text-xs font-medium rounded-md transition-all duration-200"
+              :class="compareMode === m.key
+                ? 'bg-white text-slate-700 shadow-sm'
+                : 'text-slate-400 hover:text-slate-600'"
+              @click="compareMode = m.key"
+            >
+              {{ m.label }}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -460,16 +463,16 @@ onMounted(() => {
 
         <!-- 数据明细表 -->
         <div v-if="tableData.length" class="bg-white rounded-2xl border border-slate-200/60 shadow-sm overflow-hidden">
-          <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between gap-3">
-            <div class="flex items-center gap-3">
+          <div class="px-4 py-3 sm:px-5 sm:py-4 border-b border-slate-100 flex items-center justify-between gap-2 sm:gap-3">
+            <div class="flex items-center gap-2 sm:gap-3">
               <h3 class="text-sm font-semibold text-slate-700">数据明细</h3>
               <span class="text-xs text-slate-400">
                 共 {{ tableData.length }} 条<template v-if="!tableCollapsed"> · 第 {{ tablePage }}/{{ tableTotalPages }} 页</template>
               </span>
             </div>
             <div class="flex items-center gap-2">
-              <!-- 日期跳转 -->
-              <div class="inline-flex items-center gap-1">
+              <!-- 日期跳转 (大屏显示) -->
+              <div class="hidden sm:inline-flex items-center gap-1">
                 <input
                   v-model="jumpDate"
                   type="date"
@@ -502,26 +505,26 @@ onMounted(() => {
             <table class="w-full">
               <thead>
                 <tr class="border-b border-slate-100">
-                  <th class="px-5 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">日期</th>
-                  <th class="px-5 py-3 text-right text-xs font-medium text-slate-400 uppercase tracking-wider">
+                  <th class="px-3 py-2.5 sm:px-5 sm:py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider">日期</th>
+                  <th class="px-3 py-2.5 sm:px-5 sm:py-3 text-right text-xs font-medium text-slate-400 uppercase tracking-wider">
                     {{ chartCategory === 'stock' ? '收盘' : chartCategory === 'fund' && tableData[0]?.unit_nav !== undefined ? '净值' : '值' }}
                   </th>
-                  <th class="px-5 py-3 text-right text-xs font-medium text-slate-400 uppercase tracking-wider">
+                  <th class="px-3 py-2.5 sm:px-5 sm:py-3 text-right text-xs font-medium text-slate-400 uppercase tracking-wider">
                     <span class="inline-flex items-center gap-1">
                       环比
-                      <span class="text-[10px] text-slate-300 font-normal normal-case">(MoM)</span>
+                      <span class="hidden sm:inline text-[10px] text-slate-300 font-normal normal-case">(MoM)</span>
                     </span>
                   </th>
-                  <th class="px-5 py-3 text-right text-xs font-medium text-slate-400 uppercase tracking-wider">
+                  <th class="px-3 py-2.5 sm:px-5 sm:py-3 text-right text-xs font-medium text-slate-400 uppercase tracking-wider">
                     <span class="inline-flex items-center gap-1">
                       同比
-                      <span class="text-[10px] text-slate-300 font-normal normal-case">(YoY)</span>
+                      <span class="hidden sm:inline text-[10px] text-slate-300 font-normal normal-case">(YoY)</span>
                     </span>
                   </th>
-                  <th v-if="chartCategory === 'stock'" class="px-5 py-3 text-right text-xs font-medium text-slate-400 uppercase tracking-wider">开盘</th>
-                  <th v-if="chartCategory === 'stock'" class="px-5 py-3 text-right text-xs font-medium text-slate-400 uppercase tracking-wider">最高</th>
-                  <th v-if="chartCategory === 'stock'" class="px-5 py-3 text-right text-xs font-medium text-slate-400 uppercase tracking-wider">最低</th>
-                  <th class="px-5 py-3 text-center text-xs font-medium text-slate-400 uppercase tracking-wider">分析</th>
+                  <th v-if="chartCategory === 'stock'" class="hidden sm:table-cell px-3 py-2.5 sm:px-5 sm:py-3 text-right text-xs font-medium text-slate-400 uppercase tracking-wider">开盘</th>
+                  <th v-if="chartCategory === 'stock'" class="hidden sm:table-cell px-3 py-2.5 sm:px-5 sm:py-3 text-right text-xs font-medium text-slate-400 uppercase tracking-wider">最高</th>
+                  <th v-if="chartCategory === 'stock'" class="hidden sm:table-cell px-3 py-2.5 sm:px-5 sm:py-3 text-right text-xs font-medium text-slate-400 uppercase tracking-wider">最低</th>
+                  <th class="px-3 py-2.5 sm:px-5 sm:py-3 text-center text-xs font-medium text-slate-400 uppercase tracking-wider">分析</th>
                 </tr>
               </thead>
               <tbody>
@@ -532,9 +535,9 @@ onMounted(() => {
                   class="border-b border-slate-50 hover:bg-slate-50/50 transition-colors duration-300"
                   :class="highlightDate === point.date ? 'bg-indigo-50/70 ring-1 ring-inset ring-indigo-200' : ''"
                 >
-                  <td class="px-5 py-3 text-xs text-slate-600 font-medium">{{ point.date }}</td>
-                  <td class="px-5 py-3 text-xs text-slate-700 text-right font-mono">{{ formatValue(point) }}</td>
-                  <td class="px-5 py-3 text-xs text-right font-mono">
+                  <td class="px-3 py-2.5 sm:px-5 sm:py-3 text-xs text-slate-600 font-medium">{{ point.date }}</td>
+                  <td class="px-3 py-2.5 sm:px-5 sm:py-3 text-xs text-slate-700 text-right font-mono">{{ formatValue(point) }}</td>
+                  <td class="px-3 py-2.5 sm:px-5 sm:py-3 text-xs text-right font-mono">
                     <span v-if="formatPct(point._momPct) !== null"
                       :class="point._momPct > 0 ? 'text-red-500' : point._momPct < 0 ? 'text-emerald-500' : 'text-slate-400'"
                     >
@@ -542,7 +545,7 @@ onMounted(() => {
                     </span>
                     <span v-else class="text-slate-300">-</span>
                   </td>
-                  <td class="px-5 py-3 text-xs text-right font-mono">
+                  <td class="px-3 py-2.5 sm:px-5 sm:py-3 text-xs text-right font-mono">
                     <span v-if="formatPct(point._yoyPct) !== null"
                       :class="point._yoyPct > 0 ? 'text-red-500' : point._yoyPct < 0 ? 'text-emerald-500' : 'text-slate-400'"
                     >
@@ -550,10 +553,10 @@ onMounted(() => {
                     </span>
                     <span v-else class="text-slate-300">-</span>
                   </td>
-                  <td v-if="chartCategory === 'stock'" class="px-5 py-3 text-xs text-slate-500 text-right font-mono">{{ point.open != null ? Number(point.open).toFixed(2) : '-' }}</td>
-                  <td v-if="chartCategory === 'stock'" class="px-5 py-3 text-xs text-slate-500 text-right font-mono">{{ point.high != null ? Number(point.high).toFixed(2) : '-' }}</td>
-                  <td v-if="chartCategory === 'stock'" class="px-5 py-3 text-xs text-slate-500 text-right font-mono">{{ point.low != null ? Number(point.low).toFixed(2) : '-' }}</td>
-                  <td class="px-5 py-3 text-center">
+                  <td v-if="chartCategory === 'stock'" class="hidden sm:table-cell px-3 py-2.5 sm:px-5 sm:py-3 text-xs text-slate-500 text-right font-mono">{{ point.open != null ? Number(point.open).toFixed(2) : '-' }}</td>
+                  <td v-if="chartCategory === 'stock'" class="hidden sm:table-cell px-3 py-2.5 sm:px-5 sm:py-3 text-xs text-slate-500 text-right font-mono">{{ point.high != null ? Number(point.high).toFixed(2) : '-' }}</td>
+                  <td v-if="chartCategory === 'stock'" class="hidden sm:table-cell px-3 py-2.5 sm:px-5 sm:py-3 text-xs text-slate-500 text-right font-mono">{{ point.low != null ? Number(point.low).toFixed(2) : '-' }}</td>
+                  <td class="px-3 py-2.5 sm:px-5 sm:py-3 text-center">
                     <button
                       v-if="point.analysis_id"
                       class="text-xs text-indigo-500 hover:text-indigo-700 font-medium transition-colors"
@@ -569,7 +572,7 @@ onMounted(() => {
           </div>
 
           <!-- 分页器 (仅展开模式且超过一页时显示) -->
-          <div v-if="!tableCollapsed && tableTotalPages > 1" class="px-5 py-3 border-t border-slate-100 flex items-center justify-between">
+          <div v-if="!tableCollapsed && tableTotalPages > 1" class="px-4 py-3 sm:px-5 border-t border-slate-100 flex items-center justify-between">
             <span class="text-xs text-slate-400">
               第 {{ (tablePage - 1) * TABLE_PAGE_SIZE + 1 }}-{{ Math.min(tablePage * TABLE_PAGE_SIZE, tableData.length) }} 条
             </span>

@@ -12,9 +12,25 @@ export function deleteEbook(contentId) {
   return api.delete(`/ebook/${contentId}`)
 }
 
-// Annotations (read-only)
-export function listAnnotations(contentId) {
-  return api.get(`/ebook/${contentId}/annotations`)
+// Annotations
+export function listAnnotations(contentId, params = {}) {
+  return api.get(`/ebook/${contentId}/annotations`, { params })
+}
+
+export function listAllAnnotations(params = {}) {
+  return api.get('/ebook/annotations', { params })
+}
+
+export function createAnnotation(contentId, data) {
+  return api.post(`/ebook/${contentId}/annotations`, data)
+}
+
+export function updateAnnotation(contentId, annId, data) {
+  return api.put(`/ebook/${contentId}/annotations/${annId}`, data)
+}
+
+export function deleteAnnotation(contentId, annId) {
+  return api.delete(`/ebook/${contentId}/annotations/${annId}`)
 }
 
 // Cross-book annotations

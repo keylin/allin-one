@@ -12,8 +12,8 @@ export function updateCredential(id, data) {
   return api.put(`/credentials/${id}`, data)
 }
 
-export function deleteCredential(id) {
-  return api.delete(`/credentials/${id}`)
+export function deleteCredential(id, { force = false } = {}) {
+  return api.delete(`/credentials/${id}`, { params: { force } })
 }
 
 export function listCredentialOptions(params = {}) {

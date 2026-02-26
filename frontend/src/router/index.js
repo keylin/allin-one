@@ -15,6 +15,8 @@ const routes = [
   { path: '/videos', redirect: '/media' },
   { path: '/video-download', redirect: '/media' },
   { path: '/ebook', component: () => import('@/views/EbookView.vue') },
+  { path: '/ebook/:id', component: () => import('@/views/ebook-detail-view.vue') },
+  { path: '/annotations', redirect: '/reading' },
   { path: '/sync', component: () => import('@/views/SyncView.vue') },
   { path: '/reading', component: () => import('@/views/ReadingView.vue') },
   { path: '/finance', component: () => import('@/views/FinanceView.vue') },

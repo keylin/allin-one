@@ -22,6 +22,21 @@ const hasMore = ref(true)
 const sentinelRef = ref(null)
 let observer = null
 
+// --- 移动端工具栏自动收起 ---
+const scrollContainerRef = ref(null)
+const toolbarCollapsed = ref(false)
+let lastScrollTop = 0
+const SCROLL_THRESHOLD = 8
+
+function handleScroll() {
+  const el = scrollContainerRef.value
+  if (!el || window.innerWidth >= 768) return
+  const st = el.scrollTop
+  if (Math.abs(st - lastScrollTop) < SCROLL_THRESHOLD) return
+  toolbarCollapsed.value = st > lastScrollTop && st > 40
+  lastScrollTop = st
+}
+
 // --- 筛选 ---
 const searchQuery = ref(route.query.q || '')
 const activeMediaType = ref(route.query.media_type || '')
@@ -36,6 +51,8 @@ const mediaTypes = [
   { value: '', label: '全部' },
   { value: 'video', label: '视频' },
   { value: 'audio', label: '播客' },
+  { value: 'image', label: '图片' },
+  { value: 'ebook', label: '电子书' },
   { value: 'article', label: '文章' },
 ]
 
@@ -70,6 +87,9 @@ function hasVideo(item) {
 function hasAudio(item) {
   return item.media_items?.some(m => m.media_type === 'audio')
 }
+function hasImage(item) {
+  return item.media_items?.some(m => m.media_type === 'image')
+}
 function hasThumbnail(item) {
   return item.has_thumbnail === true
 }
@@ -96,12 +116,36 @@ function formatDuration(seconds) {
   return `${m}:${String(s).padStart(2, '0')}`
 }
 
-// --- 统计 pills（基于当前已加载内容） ---
-const videoCount = computed(() => items.value.filter(i => hasVideo(i)).length)
-const audioCount = computed(() => items.value.filter(i => hasAudio(i) && !hasVideo(i)).length)
-const articleCount = computed(() => items.value.filter(i => !hasVideo(i) && !hasAudio(i)).length)
+// --- Tab 计数（并行轻量请求） ---
+const tabCounts = ref({ video: null, audio: null, image: null, ebook: null, article: null })
+
+async function fetchTabCounts() {
+  const base = { page: 1, page_size: 1, is_favorited: true }
+  if (searchQuery.value.trim()) base.q = searchQuery.value.trim()
+  if (filterSourceId.value) base.source_id = filterSourceId.value
+  Object.assign(base, getDateRange())
+
+  try {
+    const [v, a, img, eb, art] = await Promise.all([
+      listContent({ ...base, has_video: true }),
+      listContent({ ...base, has_audio: true }),
+      listContent({ ...base, has_image: true }),
+      listContent({ ...base, has_ebook: true }),
+      listContent({ ...base, has_video: false, has_audio: false, has_image: false, has_ebook: false }),
+    ])
+    tabCounts.value = {
+      video: v.code === 0 ? v.total : null,
+      audio: a.code === 0 ? a.total : null,
+      image: img.code === 0 ? img.total : null,
+      ebook: eb.code === 0 ? eb.total : null,
+      article: art.code === 0 ? art.total : null,
+    }
+  } catch { /* non-fatal */ }
+}
 
 // --- 筛选状态 ---
+const selectArrowStyle = "appearance:none; background-image:url(\"data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e\"); background-repeat:no-repeat; background-position:right 0.3rem center; background-size:1.2em 1.2em;"
+
 const hasActiveFilters = computed(() =>
   !!(searchQuery.value || activeMediaType.value || filterSourceId.value || dateRange.value)
 )
@@ -190,7 +234,9 @@ async function fetchItems(reset = false) {
     if (searchQuery.value.trim()) params.q = searchQuery.value.trim()
     if (activeMediaType.value === 'video') params.has_video = true
     if (activeMediaType.value === 'audio') params.has_audio = true
-    if (activeMediaType.value === 'article') { params.has_video = false; params.has_audio = false }
+    if (activeMediaType.value === 'image') params.has_image = true
+    if (activeMediaType.value === 'ebook') params.has_ebook = true
+    if (activeMediaType.value === 'article') { params.has_video = false; params.has_audio = false; params.has_image = false; params.has_ebook = false }
     if (filterSourceId.value) params.source_id = filterSourceId.value
     if (!reset && items.value.length > 0) {
       params.cursor_id = items.value[items.value.length - 1].id
@@ -221,7 +267,10 @@ function loadMore() {
 // --- 筛选联动 ---
 watch(searchQuery, () => {
   clearTimeout(searchTimer)
-  searchTimer = setTimeout(() => fetchItems(true), 300)
+  searchTimer = setTimeout(() => { fetchItems(true); fetchTabCounts() }, 300)
+})
+watch([() => filterSourceId.value, () => dateRange.value], () => {
+  fetchTabCounts()
 })
 watch([() => activeMediaType.value, () => filterSourceId.value, () => dateRange.value, currentSort], () => {
   fetchItems(true)
@@ -243,6 +292,15 @@ async function handleFavorite(id) {
           if (idx < items.value.length - 1) selectedId.value = items.value[idx + 1].id
           else if (idx > 0) selectedId.value = items.value[idx - 1].id
           else closeModal()
+        }
+        // 乐观递减 Tab 计数
+        const removedItem = items.value.find(i => i.id === id)
+        if (removedItem) {
+          if (hasVideo(removedItem) && tabCounts.value.video != null) tabCounts.value.video = Math.max(0, tabCounts.value.video - 1)
+          else if (hasAudio(removedItem) && tabCounts.value.audio != null) tabCounts.value.audio = Math.max(0, tabCounts.value.audio - 1)
+          else if (hasImage(removedItem) && tabCounts.value.image != null) tabCounts.value.image = Math.max(0, tabCounts.value.image - 1)
+          else if (removedItem.content_type === 'ebook' && tabCounts.value.ebook != null) tabCounts.value.ebook = Math.max(0, tabCounts.value.ebook - 1)
+          else if (tabCounts.value.article != null) tabCounts.value.article = Math.max(0, tabCounts.value.article - 1)
         }
         items.value = items.value.filter(i => i.id !== id)
         totalCount.value = Math.max(0, totalCount.value - 1)
@@ -282,6 +340,7 @@ async function handleBatchUnfavorite() {
   items.value = items.value.filter(i => !ids.includes(i.id))
   totalCount.value = Math.max(0, totalCount.value - ids.length)
   selectedIds.value = []
+  fetchTabCounts()
   toast.success(`已取消 ${ids.length} 条收藏`)
 }
 
@@ -335,17 +394,20 @@ function setupObserver() {
 
 onMounted(async () => {
   fetchItems(true)
+  fetchTabCounts()
   try {
     const res = await listSources({ page_size: 100 })
     if (res.code === 0) sources.value = res.data
   } catch { /* ignore */ }
   nextTick(() => setupObserver())
   document.addEventListener('keydown', handleKeydown)
+  scrollContainerRef.value?.addEventListener('scroll', handleScroll, { passive: true })
 })
 
 onUnmounted(() => {
   clearTimeout(searchTimer)
   document.removeEventListener('keydown', handleKeydown)
+  scrollContainerRef.value?.removeEventListener('scroll', handleScroll)
   if (observer) observer.disconnect()
 })
 </script>
@@ -358,55 +420,11 @@ onUnmounted(() => {
          ══════════════════════════════════════════════ -->
     <div class="sticky top-0 z-10 bg-white/95 backdrop-blur-sm border-b border-slate-100 shrink-0">
 
-      <!-- ── 标题行 ── -->
-      <div class="flex items-start justify-between px-4 pt-3.5 pb-0 md:px-5">
-        <div class="flex-1 min-w-0">
-          <!-- 标题 + 总数 -->
-          <div class="flex items-center gap-2">
-            <div class="w-6 h-6 bg-amber-50 rounded-lg flex items-center justify-center shrink-0">
-              <svg class="w-3.5 h-3.5 text-amber-400" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>
-              </svg>
-            </div>
-            <h1 class="text-base font-bold text-slate-900 tracking-tight">收藏</h1>
-            <span v-if="!loading && totalCount > 0" class="text-xs text-slate-400">{{ totalCount }} 条</span>
-          </div>
-
-          <!-- 统计 pills（桌面端，有内容后显示） -->
-          <div v-if="!loading && items.length > 0" class="hidden md:flex items-center gap-1.5 mt-2 mb-0.5">
-            <span v-if="videoCount > 0" class="inline-flex items-center gap-1 px-2 py-0.5 bg-violet-50 text-violet-600 text-[11px] font-medium rounded-md">
-              <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/>
-              </svg>
-              {{ videoCount }} 视频
-            </span>
-            <span v-if="audioCount > 0" class="inline-flex items-center gap-1 px-2 py-0.5 bg-rose-50 text-rose-600 text-[11px] font-medium rounded-md">
-              <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"/>
-              </svg>
-              {{ audioCount }} 播客
-            </span>
-            <span v-if="articleCount > 0" class="inline-flex items-center gap-1 px-2 py-0.5 bg-sky-50 text-sky-600 text-[11px] font-medium rounded-md">
-              <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-              </svg>
-              {{ articleCount }} 文章
-            </span>
-          </div>
-        </div>
-
-        <!-- 全选/管理按钮 -->
-        <button
-          v-if="!loading && items.length > 0"
-          class="shrink-0 ml-3 mt-0.5 text-xs text-slate-500 hover:text-indigo-600 px-2.5 py-1.5 rounded-lg hover:bg-indigo-50 transition-all duration-200 font-medium"
-          @click="toggleSelectAll"
-        >
-          {{ selectedIds.length === items.length && items.length > 0 ? '取消全选' : '全选' }}
-        </button>
-      </div>
-
-      <!-- ── 搜索框 ── -->
-      <div class="px-4 pt-2.5 md:px-5">
+      <!-- ── 移动端搜索框（仅移动端独占一行） ── -->
+      <div
+        class="px-4 pt-2.5 md:hidden transition-all duration-300 ease-in-out overflow-hidden"
+        :class="toolbarCollapsed ? 'max-h-0 !pt-0 opacity-0' : 'max-h-20 opacity-100'"
+      >
         <div class="relative">
           <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/>
@@ -429,30 +447,60 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- ── 筛选工具栏 ── -->
-      <div class="flex items-center gap-1.5 px-4 pt-2 pb-2.5 md:px-5 overflow-x-auto scrollbar-hide">
+      <!-- ── 筛选工具栏（移动端单行，桌面端与搜索框合并） ── -->
+      <div
+        class="flex items-center gap-1.5 px-4 pt-2 pb-2.5 md:px-5 overflow-x-auto scrollbar-hide transition-all duration-300 ease-in-out md:!max-h-none md:!opacity-100 md:!pt-2.5 md:!pb-2.5"
+        :class="toolbarCollapsed ? 'max-h-0 !pt-0 !pb-0 opacity-0 !overflow-hidden' : 'max-h-16 opacity-100'"
+      >
+        <!-- 桌面端搜索框（工具栏最前面） -->
+        <div class="hidden md:block relative flex-shrink-0 w-48 lg:w-56">
+          <svg class="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/>
+          </svg>
+          <input
+            v-model="searchQuery"
+            type="text"
+            placeholder="搜索..."
+            class="w-full pl-8 pr-7 py-1 bg-slate-50 rounded-lg border border-slate-200 text-xs text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 focus:bg-white transition-all duration-200"
+          />
+          <button
+            v-if="searchQuery"
+            class="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-200 flex items-center justify-center transition-colors"
+            @click="searchQuery = ''"
+          >
+            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+
         <!-- 媒体类型 tabs -->
         <div class="flex items-center gap-1 flex-shrink-0">
           <button
             v-for="mt in mediaTypes"
             :key="mt.value"
-            class="px-2.5 py-1 text-xs font-medium rounded-lg border transition-all duration-200 whitespace-nowrap"
+            class="px-2.5 py-1 text-xs font-medium rounded-lg border transition-all duration-200 whitespace-nowrap inline-flex items-center gap-1"
             :class="activeMediaType === mt.value
               ? 'bg-indigo-50 border-indigo-300 text-indigo-700'
               : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300 hover:text-slate-700'"
             @click="activeMediaType = mt.value"
-          >{{ mt.label }}</button>
+          >
+            {{ mt.label }}
+            <span
+              v-if="mt.value ? tabCounts[mt.value] != null : (!loading && totalCount > 0)"
+              class="text-[10px] tabular-nums"
+              :class="activeMediaType === mt.value ? 'text-indigo-500' : 'text-slate-400'"
+            >{{ mt.value ? tabCounts[mt.value] : totalCount }}</span>
+          </button>
         </div>
-
-        <div class="h-4 w-px bg-slate-200 flex-shrink-0 mx-0.5"/>
 
         <!-- 来源 -->
         <select
           v-if="sources.length > 0"
           v-model="filterSourceId"
-          class="flex-shrink-0 pl-2.5 pr-6 py-1 text-xs font-medium border rounded-lg outline-none transition-all duration-200 cursor-pointer"
+          class="flex-shrink-0 md:ml-auto pl-2.5 pr-6 py-1 text-xs font-medium border rounded-lg outline-none transition-all duration-200 cursor-pointer"
           :class="filterSourceId ? 'border-indigo-300 text-indigo-700 bg-indigo-50' : 'border-slate-200 text-slate-500 bg-white'"
-          style="appearance:none; background-image:url(\"data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e\"); background-repeat:no-repeat; background-position:right 0.3rem center; background-size:1.2em 1.2em;"
+          :style="selectArrowStyle"
         >
           <option value="">来源</option>
           <option v-for="s in sources" :key="s.id" :value="String(s.id)">{{ s.name }}</option>
@@ -463,7 +511,7 @@ onUnmounted(() => {
           v-model="dateRange"
           class="flex-shrink-0 pl-2.5 pr-6 py-1 text-xs font-medium border rounded-lg outline-none transition-all duration-200 cursor-pointer"
           :class="dateRange ? 'border-indigo-300 text-indigo-700 bg-indigo-50' : 'border-slate-200 text-slate-500 bg-white'"
-          style="appearance:none; background-image:url(\"data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e\"); background-repeat:no-repeat; background-position:right 0.3rem center; background-size:1.2em 1.2em;"
+          :style="selectArrowStyle"
         >
           <option v-for="opt in dateRangeOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
         </select>
@@ -473,7 +521,7 @@ onUnmounted(() => {
           v-model="currentSort"
           class="flex-shrink-0 pl-2.5 pr-6 py-1 text-xs font-medium border rounded-lg outline-none transition-all duration-200 cursor-pointer"
           :class="sortBy !== 'favorited_at' ? 'border-indigo-300 text-indigo-700 bg-indigo-50' : 'border-slate-200 text-slate-500 bg-white'"
-          style="appearance:none; background-image:url(\"data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e\"); background-repeat:no-repeat; background-position:right 0.3rem center; background-size:1.2em 1.2em;"
+          :style="selectArrowStyle"
         >
           <option v-for="opt in sortOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
         </select>
@@ -481,7 +529,7 @@ onUnmounted(() => {
         <!-- 清除筛选 -->
         <button
           v-if="hasActiveFilters"
-          class="flex-shrink-0 px-2.5 py-1 text-xs text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition-colors font-medium ml-auto whitespace-nowrap"
+          class="flex-shrink-0 px-2.5 py-1 text-xs text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition-colors font-medium whitespace-nowrap"
           @click="clearFilters"
         >清除</button>
       </div>
@@ -490,7 +538,7 @@ onUnmounted(() => {
     <!-- ══════════════════════════════════════════════
          内容区（可滚动）
          ══════════════════════════════════════════════ -->
-    <div class="flex-1 overflow-y-auto overscroll-contain">
+    <div ref="scrollContainerRef" class="flex-1 overflow-y-auto overscroll-contain">
       <div class="px-3 py-4 md:px-5 md:py-5">
 
         <!-- ── 骨架屏 ── -->
@@ -593,7 +641,7 @@ onUnmounted(() => {
             >
               <!-- 选中复选框 -->
               <div
-                class="absolute top-2 left-2 z-10 transition-all duration-150"
+                class="hidden md:flex absolute top-2 right-2 z-10 transition-all duration-150"
                 :class="showBatchBar || selectedIds.includes(item.id) ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'"
                 @click.stop="toggleSelect(item.id)"
               >
@@ -666,34 +714,25 @@ onUnmounted(() => {
                         </svg>
                         {{ item.view_count }}
                       </span>
-                      <span v-if="item.favorited_at" class="flex items-center gap-0.5 text-amber-400">
-                        <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
-                          <path d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>
-                        </svg>
-                        {{ formatTimeShort(item.favorited_at) }}
-                      </span>
                     </div>
                   </div>
                 </div>
               </template>
 
-              <!-- ════ 文章卡片（固定高度，三层布局） ════ -->
+              <!-- ════ 文章卡片（自适应高度） ════ -->
               <template v-else>
-                <div class="flex flex-col h-[200px] md:h-[210px]">
-                  <!-- 头部：来源 + 时间 + 收藏星标 -->
-                  <div class="flex items-center justify-between px-3.5 pt-3 pb-0 flex-shrink-0">
+                <div class="flex flex-col">
+                  <!-- 头部：来源 + 时间 -->
+                  <div class="flex items-center justify-between px-3.5 pt-3 pb-0">
                     <div class="flex items-center gap-1.5 min-w-0 text-[11px] text-slate-400">
                       <span v-if="item.source_name" class="text-slate-500 font-medium truncate max-w-[90px]">{{ item.source_name }}</span>
                       <span v-if="item.source_name && (item.published_at || item.collected_at)" class="text-slate-200 shrink-0">&middot;</span>
                       <span class="shrink-0 whitespace-nowrap">{{ formatTimeShort(item.published_at || item.collected_at) }}</span>
                     </div>
-                    <svg v-if="item.favorited_at" class="w-3.5 h-3.5 text-amber-400 shrink-0 ml-2" fill="currentColor" viewBox="0 0 24 24">
-                      <path d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>
-                    </svg>
                   </div>
 
-                  <!-- 中部：标题 + 摘要（flex-1，超出截断） -->
-                  <div class="flex-1 min-h-0 overflow-hidden px-3.5 pt-2">
+                  <!-- 中部：标题 + 摘要 -->
+                  <div class="px-3.5 pt-2">
                     <h4 class="text-[13px] font-semibold text-slate-800 line-clamp-2 leading-snug">
                       {{ item.title || '未知标题' }}
                     </h4>
@@ -703,7 +742,7 @@ onUnmounted(() => {
                   </div>
 
                   <!-- 底部：tags + 浏览数 -->
-                  <div class="flex items-center gap-1.5 px-3.5 pb-3 pt-2 border-t border-slate-50 flex-shrink-0">
+                  <div class="flex items-center gap-1.5 px-3.5 pb-3 pt-1.5">
                     <div class="flex items-center gap-1 flex-1 min-w-0 overflow-hidden">
                       <template v-if="item.tags && item.tags.length > 0">
                         <span
@@ -766,7 +805,7 @@ onUnmounted(() => {
       leave-from-class="translate-y-0"
       leave-to-class="translate-y-full"
     >
-      <div v-if="showBatchBar" class="shrink-0 bg-white border-t border-slate-200 shadow-lg px-4 py-3">
+      <div v-if="showBatchBar" class="hidden md:block shrink-0 bg-white border-t border-slate-200 shadow-lg px-4 py-3">
         <div class="flex items-center gap-2 max-w-4xl mx-auto">
           <div class="flex items-center gap-1.5 text-sm font-medium text-slate-700">
             <div class="w-5 h-5 bg-indigo-500 rounded-full flex items-center justify-center shrink-0">

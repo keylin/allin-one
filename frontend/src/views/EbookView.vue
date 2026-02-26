@@ -1,10 +1,11 @@
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { listEbooks, deleteEbook, getEbookFilters, getEbookSyncStatus, listAnnotations } from '@/api/ebook'
+import { listEbooks, deleteEbook, getEbookFilters, getEbookSyncStatus } from '@/api/ebook'
 import { isExternalSource, getSourceConfig } from '@/config/external-sources'
 import { formatTimeShort } from '@/utils/time'
 import EbookMetadataModal from '@/components/ebook-metadata-modal.vue'
+import BookAnnotationSidebar from '@/components/book-annotation-sidebar.vue'
 
 const router = useRouter()
 
@@ -14,6 +15,7 @@ const books = ref([])
 const totalCount = ref(0)
 const searchQuery = ref('')
 const sortBy = ref('created_at')
+const viewMode = ref('grid')
 const contextMenuBook = ref(null)
 const deleteConfirmId = ref(null)
 
@@ -30,26 +32,9 @@ const syncStatus = ref(null)
 const metadataBookId = ref(null)
 const metadataVisible = ref(false)
 
-// Annotation detail modal
-const annotationBook = ref(null)
-const bookAnnotations = ref([])
-const loadingAnnotations = ref(false)
-
 let searchTimer = null
 let longPressTimer = null
 let deleteConfirmTimer = null
-
-const colorMap = {
-  yellow: 'bg-amber-400',
-  green: 'bg-emerald-400',
-  blue: 'bg-blue-400',
-  pink: 'bg-pink-400',
-  purple: 'bg-violet-400',
-}
-
-function annotationColor(color) {
-  return colorMap[color] || 'bg-amber-400'
-}
 
 // Fetch books
 async function fetchBooks() {
@@ -150,38 +135,29 @@ function closeContextMenu() {
   deleteConfirmId.value = null
 }
 
-// Open book → show annotations
+// Open book → open sidebar
+const sidebarBook = ref(null)
+const sidebarVisible = ref(false)
+
 function openBook(book, fromMenu = false) {
   if (!fromMenu && contextMenuBook.value) return // Don't open if context menu is showing
-  // External source: show detail panel
-  if (isExternalSource(book.source)) {
-    externalDetailBook.value = book
-    return
-  }
-  showBookAnnotations(book)
+  sidebarBook.value = book
+  sidebarVisible.value = true
 }
 
-async function showBookAnnotations(book) {
-  annotationBook.value = book
-  loadingAnnotations.value = true
-  bookAnnotations.value = []
-  try {
-    const res = await listAnnotations(book.content_id)
-    if (res.code === 0) bookAnnotations.value = res.data
-  } catch (e) {
-    console.error('Failed to fetch book annotations:', e)
-  } finally {
-    loadingAnnotations.value = false
-  }
+function closeSidebar() {
+  sidebarVisible.value = false
+  sidebarBook.value = null
 }
 
-function closeAnnotations() {
-  annotationBook.value = null
-  bookAnnotations.value = []
+function showBookAnnotations(book) {
+  openBook(book)
 }
 
-// External source detail panel (Apple Books, 微信读书 etc.)
-const externalDetailBook = ref(null)
+function handleSidebarOpenMetadata(book) {
+  metadataBookId.value = book.content_id
+  metadataVisible.value = true
+}
 
 // Search debounce
 watch(searchQuery, () => {
@@ -245,12 +221,37 @@ function formatTime(iso) {
 
         <div class="flex-1" />
 
+        <!-- View mode toggle -->
+        <div class="flex items-center bg-slate-100 rounded-lg p-0.5">
+          <button
+            @click="viewMode = 'grid'"
+            class="p-1.5 rounded-md transition-all"
+            :class="viewMode === 'grid' ? 'bg-white text-slate-700 shadow-sm' : 'text-slate-400 hover:text-slate-600'"
+            title="网格视图"
+          >
+            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" /><rect x="3" y="14" width="7" height="7" /><rect x="14" y="14" width="7" height="7" />
+            </svg>
+          </button>
+          <button
+            @click="viewMode = 'list'"
+            class="p-1.5 rounded-md transition-all"
+            :class="viewMode === 'list' ? 'bg-white text-slate-700 shadow-sm' : 'text-slate-400 hover:text-slate-600'"
+            title="列表视图"
+          >
+            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
+            </svg>
+          </button>
+        </div>
+
         <select
           v-model="sortBy"
           class="text-xs text-slate-600 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 outline-none cursor-pointer transition-all"
         >
           <option value="created_at">添加时间</option>
           <option value="title">书名</option>
+          <option value="annotation_count">标注数量</option>
         </select>
       </div>
 
@@ -318,7 +319,7 @@ function formatTime(iso) {
         </div>
 
         <!-- Book grid -->
-        <div v-else class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-4">
+        <div v-else-if="viewMode === 'grid'" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-4">
           <div
             v-for="book in books"
             :key="book.content_id"
@@ -410,12 +411,114 @@ function formatTime(iso) {
                   class="px-1.5 py-0.5 text-[10px] font-medium bg-indigo-50 text-indigo-600 rounded"
                 >{{ s }}</span>
               </div>
-              <div v-if="book.created_at" class="mt-0.5 text-[10px] text-slate-300">
-                {{ formatTime(book.created_at) }}
+              <div class="mt-0.5 flex items-center gap-1 text-[10px] text-slate-300">
+                <span v-if="book.created_at">{{ formatTime(book.created_at) }}</span>
+                <template v-if="book.annotation_count > 0">
+                  <span v-if="book.created_at" class="text-slate-200">·</span>
+                  <span class="text-amber-500/70">{{ book.annotation_count }} 条标注</span>
+                </template>
               </div>
             </div>
           </div>
         </div>
+
+        <!-- Book table -->
+        <table v-else class="w-full text-left">
+          <thead>
+            <tr class="text-[11px] font-medium text-slate-400 uppercase tracking-wider border-b border-slate-200">
+              <th class="pb-2 pl-3 pr-2 font-medium cursor-pointer hover:text-slate-600 transition-colors" @click="sortBy = 'title'">
+                <span class="inline-flex items-center gap-0.5">书名<svg v-if="sortBy === 'title'" class="w-3 h-3 text-indigo-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6" /></svg></span>
+              </th>
+              <th class="pb-2 px-2 font-medium hidden sm:table-cell">作者</th>
+              <th class="pb-2 px-2 font-medium hidden md:table-cell">来源</th>
+              <th class="pb-2 px-2 font-medium hidden lg:table-cell">分类</th>
+              <th class="pb-2 px-2 font-medium text-center w-16 cursor-pointer hover:text-slate-600 transition-colors" @click="sortBy = 'annotation_count'">
+                <span class="inline-flex items-center justify-center gap-0.5">标注<svg v-if="sortBy === 'annotation_count'" class="w-3 h-3 text-indigo-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6" /></svg></span>
+              </th>
+              <th class="pb-2 px-2 font-medium hidden sm:table-cell w-24 cursor-pointer hover:text-slate-600 transition-colors" @click="sortBy = 'created_at'">
+                <span class="inline-flex items-center gap-0.5">时间<svg v-if="sortBy === 'created_at'" class="w-3 h-3 text-indigo-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6" /></svg></span>
+              </th>
+              <th class="pb-2 pl-2 pr-3 font-medium w-20"></th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            <tr
+              v-for="book in books"
+              :key="book.content_id"
+              class="group cursor-pointer transition-colors hover:bg-slate-50/80 select-none"
+              @click="openBook(book)"
+              @pointerdown="onPointerDown(book, $event)"
+              @pointerup="onPointerUp"
+              @pointercancel="onPointerCancel"
+              @contextmenu.prevent="contextMenuBook = book"
+            >
+              <!-- 书名 -->
+              <td class="py-2.5 pl-3 pr-2">
+                <span class="text-sm font-medium text-slate-800 line-clamp-1">{{ book.title || '未知书名' }}</span>
+              </td>
+              <!-- 作者 -->
+              <td class="py-2.5 px-2 hidden sm:table-cell">
+                <span class="text-xs text-slate-500 truncate block max-w-[120px]">{{ book.author || '—' }}</span>
+              </td>
+              <!-- 来源 -->
+              <td class="py-2.5 px-2 hidden md:table-cell">
+                <span v-if="isExternalSource(book.source)" class="inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium bg-slate-100 text-slate-500 rounded">
+                  {{ getSourceConfig(book.source)?.label || book.source }}
+                </span>
+                <span v-else-if="book.format" class="inline-flex items-center px-1.5 py-0.5 text-[10px] font-medium bg-slate-100 text-slate-500 rounded uppercase">
+                  {{ book.format }}
+                </span>
+                <span v-else class="text-xs text-slate-300">—</span>
+              </td>
+              <!-- 分类 -->
+              <td class="py-2.5 px-2 hidden lg:table-cell">
+                <div class="flex items-center gap-1">
+                  <span
+                    v-for="s in (book.subjects || []).slice(0, 2)"
+                    :key="s"
+                    class="px-1.5 py-0.5 text-[10px] font-medium bg-indigo-50 text-indigo-600 rounded"
+                  >{{ s }}</span>
+                  <span v-if="!book.subjects?.length" class="text-xs text-slate-300">—</span>
+                </div>
+              </td>
+              <!-- 标注 -->
+              <td class="py-2.5 px-2 text-center">
+                <span v-if="book.annotation_count > 0" class="text-xs font-medium text-amber-500/80 tabular-nums">{{ book.annotation_count }}</span>
+                <span v-else class="text-xs text-slate-300">—</span>
+              </td>
+              <!-- 时间 -->
+              <td class="py-2.5 px-2 hidden sm:table-cell">
+                <span class="text-[11px] text-slate-400 tabular-nums whitespace-nowrap">{{ formatTime(book.created_at) }}</span>
+              </td>
+              <!-- 操作 -->
+              <td class="py-2.5 pl-2 pr-3">
+                <div class="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button
+                    @click="openMetadata(book, $event)"
+                    class="p-1 text-slate-300 hover:text-indigo-500 rounded-md hover:bg-indigo-50 transition-all"
+                    title="编辑信息"
+                  >
+                    <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" />
+                    </svg>
+                  </button>
+                  <button
+                    @click="handleDeleteClick(book.content_id, $event)"
+                    class="p-1 rounded-md transition-all"
+                    :class="deleteConfirmId === book.content_id
+                      ? 'text-rose-600 bg-rose-50'
+                      : 'text-slate-300 hover:text-rose-500 hover:bg-rose-50'"
+                    :title="deleteConfirmId === book.content_id ? '确认删除？' : '删除'"
+                  >
+                    <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                    </svg>
+                  </button>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </div>
 
@@ -449,7 +552,7 @@ function formatTime(iso) {
                 {{ getSourceConfig(contextMenuBook.source)?.openLabel || '打开' }}
               </a>
               <button
-                @click="showBookAnnotations(contextMenuBook); closeContextMenu()"
+                @click="openBook(contextMenuBook, true); closeContextMenu()"
                 class="w-full text-left px-4 py-3 text-sm text-slate-700 hover:bg-slate-50 active:bg-slate-100 flex items-center gap-3"
               >
                 <svg class="w-4 h-4 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -490,128 +593,13 @@ function formatTime(iso) {
       </Transition>
     </Teleport>
 
-    <!-- Annotations detail modal -->
-    <Teleport to="body">
-      <Transition
-        enter-active-class="transition-opacity duration-150"
-        enter-from-class="opacity-0"
-        enter-to-class="opacity-100"
-        leave-active-class="transition-opacity duration-100"
-        leave-from-class="opacity-100"
-        leave-to-class="opacity-0"
-      >
-        <div v-if="annotationBook" class="fixed inset-0 z-50 flex items-end sm:items-center justify-center" @click.self="closeAnnotations">
-          <div class="absolute inset-0 bg-black/30" @click="closeAnnotations" />
-          <div class="relative z-10 bg-white rounded-t-2xl sm:rounded-2xl w-full sm:w-[28rem] shadow-2xl overflow-hidden pb-safe max-h-[80vh] flex flex-col">
-            <!-- Header -->
-            <div class="px-5 pt-5 pb-3 border-b border-slate-100 shrink-0">
-              <h3 class="text-lg font-bold text-slate-900 leading-snug line-clamp-2">{{ annotationBook.title }}</h3>
-              <p v-if="annotationBook.author" class="text-sm text-slate-500 mt-0.5">{{ annotationBook.author }}</p>
-            </div>
-            <!-- Content -->
-            <div class="flex-1 overflow-y-auto">
-              <div v-if="loadingAnnotations" class="flex items-center justify-center py-12">
-                <svg class="w-6 h-6 animate-spin text-slate-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-                </svg>
-              </div>
-              <div v-else-if="bookAnnotations.length === 0" class="text-center py-12">
-                <p class="text-sm text-slate-400">暂无标注</p>
-              </div>
-              <div v-else class="divide-y divide-slate-100">
-                <div
-                  v-for="ann in bookAnnotations"
-                  :key="ann.id"
-                  class="flex gap-3 px-5 py-3.5"
-                >
-                  <div class="w-1 shrink-0 rounded-full self-stretch" :class="annotationColor(ann.color)" />
-                  <div class="flex-1 min-w-0">
-                    <p v-if="ann.selected_text" class="text-sm text-slate-700 leading-relaxed">
-                      {{ ann.selected_text }}
-                    </p>
-                    <p v-if="ann.note" class="text-xs text-slate-500 mt-1.5 italic">
-                      {{ ann.note }}
-                    </p>
-                    <p class="text-[10px] text-slate-300 mt-1.5">{{ formatTimeShort(ann.created_at) }}</p>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <!-- Close -->
-            <button
-              @click="closeAnnotations"
-              class="w-full py-3 text-sm text-slate-500 font-medium border-t border-slate-100 hover:bg-slate-50 active:bg-slate-100 shrink-0"
-            >
-              关闭
-            </button>
-          </div>
-        </div>
-      </Transition>
-    </Teleport>
-
-    <!-- External Source Detail Panel (Apple Books / 微信读书 etc.) -->
-    <Teleport to="body">
-      <Transition
-        enter-active-class="transition-opacity duration-150"
-        enter-from-class="opacity-0"
-        enter-to-class="opacity-100"
-        leave-active-class="transition-opacity duration-100"
-        leave-from-class="opacity-100"
-        leave-to-class="opacity-0"
-      >
-        <div v-if="externalDetailBook" class="fixed inset-0 z-50 flex items-end sm:items-center justify-center" @click.self="externalDetailBook = null">
-          <div class="absolute inset-0 bg-black/30" @click="externalDetailBook = null" />
-          <div class="relative z-10 bg-white rounded-t-2xl sm:rounded-2xl w-full sm:w-96 shadow-2xl overflow-hidden pb-safe max-h-[80vh] flex flex-col">
-            <!-- Header -->
-            <div class="px-5 pt-5 pb-3">
-              <h3 class="text-lg font-bold text-slate-900 leading-snug line-clamp-2">{{ externalDetailBook.title }}</h3>
-              <p v-if="externalDetailBook.author" class="text-sm text-slate-500 mt-0.5">{{ externalDetailBook.author }}</p>
-              <div class="flex items-center gap-2 mt-2">
-                <span class="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium bg-slate-100 text-slate-600 rounded-full">
-                  <svg v-if="externalDetailBook.source === 'apple_books'" class="w-2.5 h-2.5" viewBox="0 0 24 24" fill="currentColor"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
-                  {{ getSourceConfig(externalDetailBook.source)?.label || externalDetailBook.source }}
-                </span>
-                <span v-if="externalDetailBook.progress > 0" class="text-xs text-indigo-500 font-medium">
-                  {{ Math.round((externalDetailBook.progress || 0) * 100) }}%
-                </span>
-              </div>
-              <!-- Progress bar -->
-              <div v-if="externalDetailBook.progress > 0" class="mt-2 h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                <div class="h-full bg-indigo-500 rounded-full" :style="{ width: Math.round((externalDetailBook.progress || 0) * 100) + '%' }" />
-              </div>
-            </div>
-            <!-- Actions -->
-            <div class="px-5 pb-5 space-y-2">
-              <a
-                :href="getSourceConfig(externalDetailBook.source)?.deepLink(externalDetailBook.external_id)"
-                class="flex items-center justify-center gap-2 w-full px-4 py-2.5 text-sm font-medium text-white bg-indigo-600 rounded-xl hover:bg-indigo-700 active:scale-95 transition-all duration-150 shadow-sm"
-              >
-                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" />
-                </svg>
-                {{ getSourceConfig(externalDetailBook.source)?.openLabel || '打开' }}
-              </a>
-              <button
-                @click="showBookAnnotations(externalDetailBook); externalDetailBook = null"
-                class="flex items-center justify-center gap-2 w-full px-4 py-2.5 text-sm font-medium text-indigo-600 bg-indigo-50 rounded-xl hover:bg-indigo-100 transition-colors"
-              >
-                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-                </svg>
-                查看标注
-              </button>
-            </div>
-            <!-- Close -->
-            <button
-              @click="externalDetailBook = null"
-              class="w-full py-3 text-sm text-slate-500 font-medium border-t border-slate-100 hover:bg-slate-50 active:bg-slate-100"
-            >
-              关闭
-            </button>
-          </div>
-        </div>
-      </Transition>
-    </Teleport>
+    <!-- Annotation Sidebar -->
+    <BookAnnotationSidebar
+      :book="sidebarBook"
+      :visible="sidebarVisible"
+      @close="closeSidebar"
+      @open-metadata="handleSidebarOpenMetadata"
+    />
 
     <!-- Metadata modal -->
     <EbookMetadataModal

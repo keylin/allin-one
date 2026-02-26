@@ -1,40 +1,67 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
-import { listEbooks, listRecentAnnotations, listAnnotations } from '@/api/ebook'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
+import { listEbooks, listAllAnnotations } from '@/api/ebook'
 import { isExternalSource, getSourceConfig } from '@/config/external-sources'
 import { formatTimeShort } from '@/utils/time'
+import { colorOptions, colorMap } from '@/config/annotation-colors'
+import AnnotationCard from '@/components/annotation-card.vue'
 
 const router = useRouter()
+const route = useRoute()
 
 const loading = ref(true)
 const books = ref([])
-const recentAnnotations = ref([])
 const sortBy = ref('updated_at')
+const bookViewMode = ref('table')
+const selectedBookId = ref('')
 
-// Annotation detail modal
-const annotationBook = ref(null)
-const bookAnnotations = ref([])
-const loadingAnnotations = ref(false)
+// ===== Annotations state =====
+const annotations = ref([])
+const annotationsTotalCount = ref(0)
+const annotationsLoading = ref(false)
+const annotationsLoadingMore = ref(false)
+const annotationsPage = ref(1)
+const annotationsPageSize = 20
 
-// Hero: last read book (has progress > 0 and last_read_at)
-const lastReadBook = computed(() => {
-  return books.value.find(b => b.progress > 0 && b.last_read_at)
-})
+const searchQuery = ref(route.query.q || '')
+const filterContentId = ref(route.query.book || '')
+const filterColor = ref(route.query.color || '')
+const filterType = ref(route.query.type || '')
+const annotationsSortBy = ref(route.query.sort || 'created_at')
+
+let searchTimer = null
+
+
 
 // Grid books: sorted per sortBy
 const sortedBooks = computed(() => {
   const list = [...books.value]
   if (sortBy.value === 'updated_at') {
-    // already default from API
     return list
   } else if (sortBy.value === 'progress') {
     return list.sort((a, b) => (b.progress || 0) - (a.progress || 0))
   } else if (sortBy.value === 'title') {
     return list.sort((a, b) => (a.title || '').localeCompare(b.title || '', 'zh'))
+  } else if (sortBy.value === 'annotation_count') {
+    return list.sort((a, b) => (b.annotation_count || 0) - (a.annotation_count || 0))
+  } else if (sortBy.value === 'last_read_at') {
+    return list.sort((a, b) => {
+      const ta = a.last_read_at || ''
+      const tb = b.last_read_at || ''
+      return tb.localeCompare(ta)
+    })
   }
   return list
 })
+
+const selectedBookTitle = computed(() => {
+  if (!selectedBookId.value) return ''
+  const b = books.value.find(b => b.content_id === selectedBookId.value)
+  return b ? b.title : ''
+})
+
+const hasMore = computed(() => annotations.value.length < annotationsTotalCount.value)
 
 async function fetchBooks() {
   try {
@@ -45,70 +72,144 @@ async function fetchBooks() {
   }
 }
 
-async function fetchAnnotationsData() {
+function syncQueryParams() {
+  const query = {}
+  if (searchQuery.value) query.q = searchQuery.value
+  if (filterContentId.value) query.book = filterContentId.value
+  if (filterColor.value) query.color = filterColor.value
+  if (filterType.value) query.type = filterType.value
+  if (annotationsSortBy.value !== 'created_at') query.sort = annotationsSortBy.value
+  router.replace({ query }).catch(() => {})
+}
+
+async function fetchAnnotations(append = false) {
+  if (append) {
+    annotationsLoadingMore.value = true
+  } else {
+    annotationsLoading.value = true
+    annotationsPage.value = 1
+  }
+
   try {
-    const res = await listRecentAnnotations(10)
-    if (res.code === 0) recentAnnotations.value = res.data
+    const params = {
+      page: annotationsPage.value,
+      page_size: annotationsPageSize,
+      sort_by: annotationsSortBy.value,
+      sort_order: 'desc',
+    }
+    if (searchQuery.value.trim()) params.search = searchQuery.value.trim()
+    if (filterContentId.value) params.content_id = filterContentId.value
+    if (filterColor.value) params.color = filterColor.value
+    if (filterType.value) params.type = filterType.value
+
+    const res = await listAllAnnotations(params)
+    if (res.code === 0) {
+      if (append) {
+        annotations.value = [...annotations.value, ...res.data]
+      } else {
+        annotations.value = res.data
+      }
+      annotationsTotalCount.value = res.total
+    }
   } catch (e) {
     console.error('Failed to fetch annotations:', e)
+  } finally {
+    annotationsLoading.value = false
+    annotationsLoadingMore.value = false
   }
 }
 
+function loadMore() {
+  if (annotationsLoadingMore.value) return
+  annotationsPage.value++
+  fetchAnnotations(true)
+}
+
+// Infinite scroll observer
+const sentinelRef = ref(null)
+let observer = null
+
+function ensureObserver() {
+  if (!observer) {
+    observer = new IntersectionObserver((entries) => {
+      if (entries[0].isIntersecting && hasMore.value && !annotationsLoadingMore.value) {
+        loadMore()
+      }
+    }, { rootMargin: '200px' })
+  }
+}
+
+watch(sentinelRef, (el, oldEl) => {
+  ensureObserver()
+  if (oldEl) observer.unobserve(oldEl)
+  if (el) observer.observe(el)
+})
+
+function goToBook(contentId) {
+  router.push(`/ebook/${contentId}`)
+}
+
+function selectBook(book) {
+  if (selectedBookId.value === book.content_id) {
+    // Deselect: show all annotations
+    selectedBookId.value = ''
+    filterContentId.value = ''
+  } else {
+    // Select: filter annotations to this book
+    selectedBookId.value = book.content_id
+    filterContentId.value = book.content_id
+  }
+}
+
+function clearFilters() {
+  searchQuery.value = ''
+  filterContentId.value = ''
+  selectedBookId.value = ''
+  filterColor.value = ''
+  filterType.value = ''
+}
+
 function openBook(book) {
-  // External source: open in native app
   const srcCfg = getSourceConfig(book.source)
   if (srcCfg && book.external_id) {
     window.open(srcCfg.deepLink(book.external_id), '_self')
     return
   }
-  // Show annotations for this book
-  showBookAnnotations(book)
-}
-
-async function showBookAnnotations(book) {
-  annotationBook.value = book
-  loadingAnnotations.value = true
-  bookAnnotations.value = []
-  try {
-    const res = await listAnnotations(book.content_id)
-    if (res.code === 0) bookAnnotations.value = res.data
-  } catch (e) {
-    console.error('Failed to fetch book annotations:', e)
-  } finally {
-    loadingAnnotations.value = false
-  }
-}
-
-function closeAnnotations() {
-  annotationBook.value = null
-  bookAnnotations.value = []
+  router.push(`/ebook/${book.content_id}`)
 }
 
 function formatProgress(p) {
   return Math.round((p || 0) * 100)
 }
 
-const colorMap = {
-  yellow: 'bg-amber-400',
-  green: 'bg-emerald-400',
-  blue: 'bg-blue-400',
-  pink: 'bg-pink-400',
-  purple: 'bg-violet-400',
-}
+// Watchers
+watch(searchQuery, () => {
+  clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => {
+    syncQueryParams()
+    fetchAnnotations()
+  }, 300)
+})
 
-function annotationColor(color) {
-  return colorMap[color] || 'bg-amber-400'
-}
+watch([filterContentId, filterColor, filterType, annotationsSortBy], () => {
+  syncQueryParams()
+  fetchAnnotations()
+})
 
 onMounted(async () => {
   loading.value = true
-  await Promise.all([fetchBooks(), fetchAnnotationsData()])
+  await fetchBooks()
   loading.value = false
+  fetchAnnotations()
+})
+
+onUnmounted(() => {
+  if (observer) observer.disconnect()
 })
 </script>
 
 <template>
-  <div class="flex flex-col h-full overflow-y-auto">
+  <div class="flex flex-col h-full overflow-y-auto lg:overflow-hidden">
     <!-- Loading -->
     <div v-if="loading" class="flex items-center justify-center py-24">
       <svg class="w-8 h-8 animate-spin text-slate-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -117,98 +218,56 @@ onMounted(async () => {
     </div>
 
     <template v-else>
-      <div class="px-4 md:px-6 lg:px-8 py-5 space-y-8 max-w-6xl mx-auto w-full">
+      <div class="px-4 md:px-6 lg:px-8 py-5 w-full h-full lg:flex lg:gap-6">
 
-        <!-- ===== Section A: 最近在读 Hero ===== -->
-        <section v-if="lastReadBook" class="bg-white rounded-2xl border border-slate-200/60 overflow-hidden shadow-sm">
-          <div class="flex flex-col sm:flex-row">
-            <!-- Cover -->
-            <div
-              class="sm:w-40 md:w-48 shrink-0 aspect-[2/3] sm:aspect-auto bg-gradient-to-br from-slate-100 to-slate-200 relative cursor-pointer"
-              @click="openBook(lastReadBook)"
-            >
-              <img
-                v-if="lastReadBook.cover_url"
-                :src="lastReadBook.cover_url"
-                :alt="lastReadBook.title"
-                class="absolute inset-0 w-full h-full object-cover"
-              />
-              <div v-else class="absolute inset-0 flex items-center justify-center p-4">
-                <svg class="w-12 h-12 text-slate-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                  <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
-                </svg>
-              </div>
-            </div>
-            <!-- Info -->
-            <div class="flex-1 p-5 sm:p-6 flex flex-col justify-center gap-3">
-              <div>
-                <p class="text-xs font-medium text-indigo-500 uppercase tracking-wider mb-1.5">最近在读</p>
-                <h2 class="text-lg sm:text-xl font-bold text-slate-900 tracking-tight leading-snug line-clamp-2">
-                  {{ lastReadBook.title }}
-                </h2>
-                <p v-if="lastReadBook.author" class="text-sm text-slate-500 mt-1">{{ lastReadBook.author }}</p>
-              </div>
-              <!-- Progress -->
-              <div class="space-y-1.5">
-                <div class="flex items-center gap-3">
-                  <div class="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
-                    <div
-                      class="h-full bg-indigo-500 rounded-full transition-all"
-                      :style="{ width: formatProgress(lastReadBook.progress) + '%' }"
-                    />
-                  </div>
-                  <span class="text-sm font-semibold text-slate-700 tabular-nums">{{ formatProgress(lastReadBook.progress) }}%</span>
-                </div>
-                <div class="flex items-center gap-2 text-xs text-slate-400">
-                  <span v-if="lastReadBook.section_title">{{ lastReadBook.section_title }}</span>
-                  <span v-if="lastReadBook.section_title && lastReadBook.last_read_at" class="text-slate-200">·</span>
-                  <span v-if="lastReadBook.last_read_at">{{ formatTimeShort(lastReadBook.last_read_at) }}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <!-- Empty hero: no books with progress -->
-        <section v-else class="bg-white rounded-2xl border border-slate-200/60 p-8 sm:p-12 text-center shadow-sm">
-          <div class="w-16 h-16 mx-auto mb-4 bg-slate-100 rounded-2xl flex items-center justify-center">
-            <svg class="w-8 h-8 text-slate-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" /><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
-            </svg>
-          </div>
-          <p class="text-base font-medium text-slate-700 mb-1">还没有阅读记录</p>
-          <p class="text-sm text-slate-400 mb-5">同步书籍后即可在这里查看阅读进度</p>
-          <button
-            @click="router.push('/ebook')"
-            class="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-indigo-600 bg-indigo-50 rounded-xl hover:bg-indigo-100 transition-colors"
-          >
-            前往图书管理
-            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M5 12h14M12 5l7 7-7 7" />
-            </svg>
-          </button>
-        </section>
-
-        <!-- ===== Section B: All Books Grid ===== -->
-        <section v-if="books.length > 0">
+        <!-- ===== Left Column: Books ===== -->
+        <section v-if="books.length > 0" class="lg:w-[38%] lg:shrink-0 lg:overflow-y-auto lg:pr-2 mb-8 lg:mb-0">
           <div class="flex items-center justify-between mb-4">
             <h3 class="text-base font-bold text-slate-900 tracking-tight">全部书籍</h3>
-            <select
-              v-model="sortBy"
-              class="text-xs text-slate-500 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 outline-none cursor-pointer transition-all"
-            >
-              <option value="updated_at">最近阅读</option>
-              <option value="progress">阅读进度</option>
-              <option value="title">书名</option>
-            </select>
+            <div class="flex items-center gap-2">
+              <!-- View toggle -->
+              <div class="flex items-center bg-slate-100 rounded-lg p-0.5">
+                <button
+                  @click="bookViewMode = 'grid'"
+                  :class="['p-1.5 rounded-md transition-all', bookViewMode === 'grid' ? 'bg-white text-slate-700 shadow-sm' : 'text-slate-400 hover:text-slate-600']"
+                  title="网格视图"
+                >
+                  <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" /><rect x="3" y="14" width="7" height="7" /><rect x="14" y="14" width="7" height="7" />
+                  </svg>
+                </button>
+                <button
+                  @click="bookViewMode = 'table'"
+                  :class="['p-1.5 rounded-md transition-all', bookViewMode === 'table' ? 'bg-white text-slate-700 shadow-sm' : 'text-slate-400 hover:text-slate-600']"
+                  title="表格视图"
+                >
+                  <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
+                  </svg>
+                </button>
+              </div>
+              <!-- Sort -->
+              <select
+                v-model="sortBy"
+                class="text-xs text-slate-500 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 outline-none cursor-pointer transition-all"
+              >
+                <option value="updated_at">最近更新</option>
+                <option value="last_read_at">阅读时间</option>
+                <option value="annotation_count">标注数量</option>
+                <option value="progress">阅读进度</option>
+                <option value="title">书名</option>
+              </select>
+            </div>
           </div>
 
-          <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+          <!-- Grid View -->
+          <div v-if="bookViewMode === 'grid'" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-2 xl:grid-cols-3 gap-4">
             <div
               v-for="book in sortedBooks"
               :key="book.content_id"
-              class="group relative bg-white rounded-xl border border-slate-200/60 overflow-hidden cursor-pointer transition-all duration-200 hover:border-indigo-300 hover:shadow-md"
-              @click="openBook(book)"
+              class="group relative bg-white rounded-xl border overflow-hidden cursor-pointer transition-all duration-200 hover:shadow-md"
+              :class="selectedBookId === book.content_id ? 'border-indigo-400 ring-2 ring-indigo-100 shadow-md' : 'border-slate-200/60 hover:border-indigo-300'"
+              @click="selectBook(book)"
             >
               <!-- Cover -->
               <div class="aspect-[2/3] bg-gradient-to-br from-slate-100 to-slate-200 relative overflow-hidden">
@@ -226,13 +285,11 @@ onMounted(async () => {
                   <span class="text-xs text-slate-400 text-center line-clamp-3 leading-tight">{{ book.title }}</span>
                 </div>
 
-                <!-- Hover overlay -->
-                <div class="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-all duration-300 flex items-center justify-center">
-                  <div class="w-12 h-12 bg-white/95 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transform scale-75 group-hover:scale-100 transition-all duration-300 shadow-xl">
-                    <svg class="w-5 h-5 text-indigo-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
-                    </svg>
-                  </div>
+                <!-- Selected check -->
+                <div v-if="selectedBookId === book.content_id" class="absolute top-2 right-2 w-6 h-6 bg-indigo-500 rounded-full flex items-center justify-center shadow-lg z-10">
+                  <svg class="w-3.5 h-3.5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                    <path d="M20 6 9 17l-5-5" />
+                  </svg>
                 </div>
 
                 <!-- External source badge -->
@@ -252,7 +309,11 @@ onMounted(async () => {
                   {{ book.title || '未知书名' }}
                 </h4>
                 <div class="mt-1 flex items-center gap-1 text-[11px] text-slate-400">
-                  <template v-if="book.progress > 0">
+                  <template v-if="book.annotation_count > 0">
+                    <span class="shrink-0 font-medium text-amber-500/80">{{ book.annotation_count }} 标注</span>
+                    <span class="text-slate-200 shrink-0">·</span>
+                  </template>
+                  <template v-else-if="book.progress > 0">
                     <span class="shrink-0 font-medium text-indigo-500/80">{{ formatProgress(book.progress) }}%</span>
                     <span class="text-slate-200 shrink-0">·</span>
                   </template>
@@ -262,34 +323,181 @@ onMounted(async () => {
               </div>
             </div>
           </div>
+
+          <!-- Table View -->
+          <div v-else class="bg-white rounded-xl border border-slate-200/60 overflow-hidden shadow-sm">
+            <div
+              v-for="book in sortedBooks"
+              :key="book.content_id"
+              class="flex items-center gap-3 px-3 py-2.5 cursor-pointer transition-all duration-150 hover:bg-slate-50 border-b border-slate-100 last:border-b-0"
+              :class="selectedBookId === book.content_id ? 'bg-indigo-50/60 hover:bg-indigo-50' : ''"
+              @click="selectBook(book)"
+            >
+              <!-- Mini cover -->
+              <div class="w-9 h-12 shrink-0 rounded-md overflow-hidden bg-gradient-to-br from-slate-100 to-slate-200 border border-slate-200/60">
+                <img
+                  v-if="book.cover_url"
+                  :src="book.cover_url"
+                  :alt="book.title"
+                  class="w-full h-full object-cover"
+                  loading="lazy"
+                />
+                <div v-else class="w-full h-full flex items-center justify-center">
+                  <svg class="w-4 h-4 text-slate-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" /><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+                  </svg>
+                </div>
+              </div>
+              <!-- Info -->
+              <div class="flex-1 min-w-0">
+                <h4 class="text-sm font-medium text-slate-800 truncate">{{ book.title || '未知书名' }}</h4>
+                <div class="flex items-center gap-1.5 mt-0.5 text-xs text-slate-400">
+                  <span class="truncate">{{ book.author || '未知作者' }}</span>
+                </div>
+              </div>
+              <!-- Stats -->
+              <div class="shrink-0 flex items-center gap-3 text-[11px] text-slate-400">
+                <span v-if="book.annotation_count > 0" class="text-amber-500/80 font-medium tabular-nums">{{ book.annotation_count }} 标注</span>
+                <span v-if="book.progress > 0" class="text-indigo-500/80 font-medium tabular-nums">{{ formatProgress(book.progress) }}%</span>
+                <span v-if="book.last_read_at" class="tabular-nums hidden sm:inline">{{ formatTimeShort(book.last_read_at) }}</span>
+              </div>
+              <!-- Selected indicator -->
+              <div v-if="selectedBookId === book.content_id" class="w-5 h-5 bg-indigo-500 rounded-full flex items-center justify-center shrink-0">
+                <svg class="w-3 h-3 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                  <path d="M20 6 9 17l-5-5" />
+                </svg>
+              </div>
+            </div>
+          </div>
         </section>
 
-        <!-- ===== Section C: Recent Annotations ===== -->
-        <section v-if="recentAnnotations.length > 0">
-          <h3 class="text-base font-bold text-slate-900 tracking-tight mb-4">最近标注</h3>
-          <div class="bg-white rounded-2xl border border-slate-200/60 divide-y divide-slate-100 overflow-hidden shadow-sm">
-            <div
-              v-for="ann in recentAnnotations"
-              :key="ann.id"
-              class="flex gap-3 px-4 py-3.5 hover:bg-slate-50/80 cursor-pointer transition-colors"
-              @click="showBookAnnotations({ content_id: ann.content_id, title: ann.book_title, author: ann.book_author, cover_url: ann.cover_url })"
+        <!-- ===== Right Column: Annotations ===== -->
+        <section class="lg:flex-1 lg:min-w-0 lg:overflow-y-auto">
+          <!-- Header -->
+          <div class="flex items-center gap-2 mb-3">
+            <h3 class="text-base font-bold text-slate-900 tracking-tight">
+              <template v-if="selectedBookId">{{ selectedBookTitle }}</template>
+              <template v-else>全部标注</template>
+            </h3>
+            <span class="text-xs text-slate-400 tabular-nums">{{ annotationsTotalCount }} 条</span>
+            <button
+              v-if="selectedBookId"
+              @click="selectedBookId = ''; filterContentId = ''"
+              class="text-xs text-indigo-500 hover:text-indigo-700 transition-colors"
             >
-              <!-- Color bar -->
-              <div class="w-1 shrink-0 rounded-full self-stretch" :class="annotationColor(ann.color)" />
-              <!-- Content -->
-              <div class="flex-1 min-w-0">
-                <p class="text-xs text-slate-400 mb-1 truncate">
-                  {{ ann.book_title }}
-                  <span v-if="ann.book_author" class="text-slate-300">· {{ ann.book_author }}</span>
-                </p>
-                <p v-if="ann.selected_text" class="text-sm text-slate-700 leading-relaxed line-clamp-3">
-                  {{ ann.selected_text }}
-                </p>
-                <p v-if="ann.note" class="text-xs text-slate-500 mt-1 line-clamp-1 italic">
-                  {{ ann.note }}
-                </p>
-                <p class="text-[10px] text-slate-300 mt-1.5">{{ formatTimeShort(ann.created_at) }}</p>
+              查看全部
+            </button>
+            <div class="flex-1" />
+            <select
+              v-model="annotationsSortBy"
+              class="text-xs text-slate-600 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 outline-none cursor-pointer transition-all"
+            >
+              <option value="created_at">创建时间</option>
+              <option value="updated_at">更新时间</option>
+            </select>
+          </div>
+
+          <!-- Search & Filters -->
+          <div class="bg-white rounded-2xl border border-slate-200/60 shadow-sm overflow-hidden">
+            <div class="px-4 pt-3 pb-2.5 space-y-2 border-b border-slate-100">
+              <!-- Search -->
+              <div class="relative">
+                <svg class="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" />
+                </svg>
+                <input
+                  v-model="searchQuery"
+                  placeholder="搜索标注内容或笔记..."
+                  class="w-full bg-slate-50 rounded-lg pl-8 pr-3 py-1.5 text-sm text-slate-700 placeholder-slate-400 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 focus:bg-white transition-all"
+                />
               </div>
+
+              <!-- Filters row -->
+              <div class="flex items-center gap-2 flex-wrap pb-0.5">
+                <!-- Book filter -->
+                <select
+                  v-model="filterContentId"
+                  class="text-xs text-slate-600 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 outline-none cursor-pointer transition-all focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 max-w-[160px]"
+                >
+                  <option value="">全部书籍</option>
+                  <option v-for="b in books" :key="b.content_id" :value="b.content_id">{{ b.title }}</option>
+                </select>
+
+                <!-- Color chips -->
+                <div class="flex items-center gap-1.5">
+                  <button
+                    v-for="c in colorOptions"
+                    :key="c"
+                    @click="filterColor = filterColor === c ? '' : c"
+                    class="rounded-full transition-all duration-150"
+                    :class="[
+                      colorMap[c],
+                      filterColor === c ? 'ring-2 ring-offset-1 ring-slate-400 scale-110' : 'opacity-40 hover:opacity-80',
+                    ]"
+                    :style="{ width: '16px', height: '16px' }"
+                  />
+                </div>
+
+                <!-- Type filter -->
+                <select
+                  v-model="filterType"
+                  class="text-xs text-slate-600 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 outline-none cursor-pointer transition-all focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400"
+                >
+                  <option value="">全部类型</option>
+                  <option value="highlight">划线</option>
+                  <option value="note">笔记</option>
+                </select>
+
+                <button
+                  v-if="searchQuery || filterContentId || filterColor || filterType"
+                  @click="clearFilters"
+                  class="text-[11px] text-slate-400 hover:text-slate-600 transition-colors ml-auto"
+                >
+                  清除筛选
+                </button>
+              </div>
+            </div>
+
+            <!-- Annotations content -->
+            <div class="px-4 py-4">
+              <!-- Loading -->
+              <div v-if="annotationsLoading" class="flex items-center justify-center py-16">
+                <svg class="w-8 h-8 animate-spin text-slate-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                </svg>
+              </div>
+
+              <!-- Empty -->
+              <div v-else-if="annotations.length === 0" class="text-center py-16">
+                <div class="w-14 h-14 mx-auto mb-3 bg-slate-100 rounded-2xl flex items-center justify-center">
+                  <svg class="w-7 h-7 text-slate-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                  </svg>
+                </div>
+                <p class="text-sm text-slate-500 font-medium mb-1">暂无标注</p>
+                <p class="text-xs text-slate-400">在书籍详情页中添加标注</p>
+              </div>
+
+              <!-- List -->
+              <template v-else>
+                <div class="divide-y divide-slate-100">
+                  <AnnotationCard
+                    v-for="ann in annotations"
+                    :key="ann.id"
+                    :annotation="ann"
+                    :show-book-info="true"
+                    :editable="false"
+                    @click-book="goToBook"
+                  />
+                </div>
+
+                <!-- Infinite scroll sentinel -->
+                <div ref="sentinelRef" class="flex justify-center py-4">
+                  <svg v-if="annotationsLoadingMore" class="w-5 h-5 animate-spin text-slate-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                  </svg>
+                </div>
+              </template>
             </div>
           </div>
         </section>
@@ -297,63 +505,5 @@ onMounted(async () => {
       </div>
     </template>
 
-    <!-- Annotations detail modal -->
-    <Teleport to="body">
-      <Transition
-        enter-active-class="transition-opacity duration-150"
-        enter-from-class="opacity-0"
-        enter-to-class="opacity-100"
-        leave-active-class="transition-opacity duration-100"
-        leave-from-class="opacity-100"
-        leave-to-class="opacity-0"
-      >
-        <div v-if="annotationBook" class="fixed inset-0 z-50 flex items-end sm:items-center justify-center" @click.self="closeAnnotations">
-          <div class="absolute inset-0 bg-black/30" @click="closeAnnotations" />
-          <div class="relative z-10 bg-white rounded-t-2xl sm:rounded-2xl w-full sm:w-[28rem] shadow-2xl overflow-hidden pb-safe max-h-[80vh] flex flex-col">
-            <!-- Header -->
-            <div class="px-5 pt-5 pb-3 border-b border-slate-100 shrink-0">
-              <h3 class="text-lg font-bold text-slate-900 leading-snug line-clamp-2">{{ annotationBook.title }}</h3>
-              <p v-if="annotationBook.author" class="text-sm text-slate-500 mt-0.5">{{ annotationBook.author }}</p>
-            </div>
-            <!-- Content -->
-            <div class="flex-1 overflow-y-auto">
-              <div v-if="loadingAnnotations" class="flex items-center justify-center py-12">
-                <svg class="w-6 h-6 animate-spin text-slate-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-                </svg>
-              </div>
-              <div v-else-if="bookAnnotations.length === 0" class="text-center py-12">
-                <p class="text-sm text-slate-400">暂无标注</p>
-              </div>
-              <div v-else class="divide-y divide-slate-100">
-                <div
-                  v-for="ann in bookAnnotations"
-                  :key="ann.id"
-                  class="flex gap-3 px-5 py-3.5"
-                >
-                  <div class="w-1 shrink-0 rounded-full self-stretch" :class="annotationColor(ann.color)" />
-                  <div class="flex-1 min-w-0">
-                    <p v-if="ann.selected_text" class="text-sm text-slate-700 leading-relaxed">
-                      {{ ann.selected_text }}
-                    </p>
-                    <p v-if="ann.note" class="text-xs text-slate-500 mt-1.5 italic">
-                      {{ ann.note }}
-                    </p>
-                    <p class="text-[10px] text-slate-300 mt-1.5">{{ formatTimeShort(ann.created_at) }}</p>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <!-- Close -->
-            <button
-              @click="closeAnnotations"
-              class="w-full py-3 text-sm text-slate-500 font-medium border-t border-slate-100 hover:bg-slate-50 active:bg-slate-100 shrink-0"
-            >
-              关闭
-            </button>
-          </div>
-        </div>
-      </Transition>
-    </Teleport>
   </div>
 </template>

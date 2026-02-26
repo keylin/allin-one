@@ -2,7 +2,6 @@
 import { ref, computed, watch, toRef, onMounted } from 'vue'
 import { listTemplates } from '@/api/pipeline-templates'
 import { useScrollLock } from '@/composables/useScrollLock'
-import { listCredentialOptions } from '@/api/credentials'
 import FinancePresetPicker from '@/components/finance-preset-picker.vue'
 import FinanceAlertConfig from '@/components/finance-alert-config.vue'
 
@@ -24,7 +23,6 @@ const sourceTypeGroups = [
       { value: 'api.akshare', label: 'AkShare' },
       { value: 'web.scraper', label: '网页抓取' },
       { value: 'podcast.apple', label: 'Apple Podcasts' },
-      { value: 'account.bilibili', label: 'B站账号' },
       { value: 'account.generic', label: '其他账号' },
     ]
   },
@@ -54,10 +52,6 @@ const aksharePresetSelected = ref(false)
 const akshareUserParams = ref([])
 const akshareAlerts = ref([])
 
-// B站凭证下拉
-const biliCredentials = ref([])
-
-
 function getDefaultForm() {
   return {
     name: '',
@@ -84,8 +78,6 @@ function getDefaultConfig(sourceType) {
       return { item_selector: '', title_selector: '', link_selector: 'a', link_attr: 'href', author_selector: '', use_browserless: false }
     case 'api.akshare':
       return { indicator: '', category: '', params: '', title_field: '', id_fields: '', date_field: '', value_field: '', max_history: 120 }
-    case 'account.bilibili':
-      return { cookie: '', type: 'dynamic', media_id: '', max_items: 20 }
     case 'account.generic':
       return { api_url: '', method: 'GET', headers: '', items_path: '', title_field: 'title', url_field: 'url', id_field: 'id' }
     case 'podcast.apple':
@@ -167,7 +159,7 @@ function serializeConfig() {
 }
 
 // 有结构化配置的类型
-const hasStructuredConfig = computed(() => ['rss.hub', 'rss.standard', 'podcast.apple', 'web.scraper', 'api.akshare', 'account.bilibili', 'account.generic'].includes(form.value.source_type))
+const hasStructuredConfig = computed(() => ['rss.hub', 'rss.standard', 'podcast.apple', 'web.scraper', 'api.akshare', 'account.generic'].includes(form.value.source_type))
 
 // 无额外配置的类型
 const noConfigTypes = ['file.upload', 'user.note', 'system.notification']
@@ -197,11 +189,6 @@ watch(() => props.visible, async (val) => {
       akshareUserParams.value = []
       akshareAlerts.value = []
     }
-    // 加载 B站凭证下拉
-    try {
-      const res = await listCredentialOptions({ platform: 'bilibili' })
-      if (res.code === 0) biliCredentials.value = res.data
-    } catch { /* ignore */ }
   } else {
     aksharePresetSelected.value = false
     akshareUserParams.value = []
@@ -518,51 +505,6 @@ const sectionClass = 'space-y-4 p-4 bg-slate-50/50 rounded-xl border border-slat
             <!-- Alert config -->
             <FinanceAlertConfig v-model="akshareAlerts" />
           </template>
-        </div>
-
-        <!-- Bilibili -->
-        <div v-else-if="form.source_type === 'account.bilibili'" :class="sectionClass">
-          <h4 class="text-sm font-semibold text-slate-800">B站账号配置</h4>
-
-          <!-- 凭证选择 -->
-          <div>
-            <label :class="labelClass">关联凭证</label>
-            <select v-model="form.credential_id" :class="selectClass">
-              <option value="">不使用凭证（手动填写 Cookie）</option>
-              <option v-for="c in biliCredentials" :key="c.id" :value="c.id">
-                {{ c.display_name }}
-                <template v-if="c.status !== 'active'"> ({{ c.status }})</template>
-              </option>
-            </select>
-            <p class="mt-1.5 text-xs text-slate-400">
-              <router-link to="/settings" class="text-indigo-500 hover:text-indigo-600 hover:underline transition-colors">前往设置管理凭证</router-link>
-            </p>
-          </div>
-
-          <!-- 手动 Cookie 输入（当未选凭证时显示） -->
-          <div v-if="!form.credential_id">
-            <label :class="labelClass">Cookie</label>
-            <input v-model="configForm.cookie" type="text" :class="inputClass" placeholder="SESSDATA=xxx; bili_jct=xxx" />
-            <p class="mt-1.5 text-xs text-slate-400">建议在设置页通过扫码授权自动获取</p>
-          </div>
-
-          <!-- 采集参数 -->
-          <div>
-            <label :class="labelClass">采集类型</label>
-            <select v-model="configForm.type" :class="selectClass">
-              <option value="dynamic">动态</option>
-              <option value="favorites">收藏夹</option>
-              <option value="history">历史记录</option>
-            </select>
-          </div>
-          <div v-if="configForm.type === 'favorites'">
-            <label :class="labelClass">收藏夹 ID</label>
-            <input v-model="configForm.media_id" type="text" :class="inputClass" placeholder="收藏夹 media_id" />
-          </div>
-          <div>
-            <label :class="labelClass">最大条目数</label>
-            <input v-model.number="configForm.max_items" type="number" min="1" max="100" :class="inputClass" />
-          </div>
         </div>
 
         <!-- Generic Account -->

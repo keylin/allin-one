@@ -23,7 +23,11 @@ const loadingMore = ref(false)
 const page = ref(1)
 const pageSize = 20
 const hasMore = ref(true)
-const activeMediaType = ref(route.query.has_video === '1' ? 'video' : route.query.has_audio === '1' ? 'audio' : '')
+const activeMediaType = ref(
+  route.query.has_video === '1' ? 'video' :
+  route.query.has_audio === '1' ? 'audio' :
+  route.query.has_ebook === '1' ? 'ebook' : ''
+)
 const sortBy = ref(route.query.sort_by || 'published_at')
 
 // 搜索 & 筛选
@@ -106,6 +110,7 @@ const mediaTypes = [
   { value: '', label: '全部' },
   { value: 'video', label: '有视频' },
   { value: 'audio', label: '有音频' },
+  { value: 'ebook', label: '电子书' },
 ]
 
 const sortOptions = [
@@ -222,6 +227,7 @@ function syncQueryParams() {
   if (filterStatus.value) query.status = filterStatus.value
   if (activeMediaType.value === 'video') query.has_video = '1'
   if (activeMediaType.value === 'audio') query.has_audio = '1'
+  if (activeMediaType.value === 'ebook') query.has_ebook = '1'
   if (sortBy.value !== 'published_at') query.sort_by = sortBy.value
   if (showFavoritesOnly.value) query.favorites = '1'
   if (!showUnreadOnly.value) query.unread = '0'
@@ -248,6 +254,7 @@ async function fetchItems(reset = false) {
     }
     if (activeMediaType.value === 'video') params.has_video = true
     if (activeMediaType.value === 'audio') params.has_audio = true
+    if (activeMediaType.value === 'ebook') params.has_ebook = true
     if (searchQuery.value.trim()) params.q = searchQuery.value.trim()
     if (filterSources.value.length) params.source_id = filterSources.value.join(',')
     if (filterStatus.value) params.status = filterStatus.value
@@ -508,6 +515,7 @@ async function handleMarkAllRead() {
     if (filterStatus.value) params.status = filterStatus.value
     if (activeMediaType.value === 'video') params.has_video = true
     if (activeMediaType.value === 'audio') params.has_audio = true
+    if (activeMediaType.value === 'ebook') params.has_ebook = true
     if (searchQuery.value.trim()) params.q = searchQuery.value.trim()
     const dp = getDateParams()
     if (dp.date_from) params.date_from = dp.date_from
@@ -1010,7 +1018,7 @@ onUnmounted(() => {
           </div>
 
           <!-- 媒体类型 Tab（桌面端） -->
-          <div class="hidden md:flex items-center gap-0.5 bg-slate-100 rounded-xl p-0.5">
+          <div class="flex items-center gap-0.5 bg-slate-100 rounded-xl p-0.5 overflow-x-auto scrollbar-hide">
             <button
               v-for="mt in mediaTypes"
               :key="mt.value"

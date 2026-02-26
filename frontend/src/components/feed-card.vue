@@ -43,6 +43,7 @@ const mediaIcons = {
   video: 'M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z',
   audio: 'M19.114 5.636a9 9 0 010 12.728M16.463 8.288a5.25 5.25 0 010 7.424M6.75 8.25l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z',
   image: 'M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z',
+  ebook: 'M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25',
   mixed: 'M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z',
 }
 
@@ -51,6 +52,7 @@ const mediaColors = {
   video: 'text-violet-500',
   audio: 'text-rose-500',
   image: 'text-emerald-500',
+  ebook: 'text-amber-500',
   mixed: 'text-indigo-500',
 }
 
@@ -61,9 +63,11 @@ const relTime = computed(() => {
 
 const summaryText = computed(() => props.item.summary_text || '')
 const tags = computed(() => props.item.tags?.slice(0, 2) || [])
-// 从 media_items 派生媒体类型
+// 从 content_type（后端派生）或 media_items 推断媒体类型
 const derivedMediaType = computed(() => {
+  if (props.item.content_type) return props.item.content_type
   const items = props.item.media_items || []
+  if (items.some(m => m.media_type === 'ebook')) return 'ebook'
   if (items.some(m => m.media_type === 'video')) return 'video'
   if (items.some(m => m.media_type === 'audio')) return 'audio'
   if (items.some(m => m.media_type === 'image')) return 'image'

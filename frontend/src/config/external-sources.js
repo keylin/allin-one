@@ -14,9 +14,15 @@ export const EXTERNAL_SOURCES = {
   },
   wechat_read: {
     label: '微信读书',
-    deepLink: (externalId) => `weread://book/${externalId}`,
+    deepLink: (externalId) => `https://weread.qq.com/web/reader/${externalId}`,
     openLabel: '在微信读书中打开',
     icon: 'wechat',
+  },
+  bilibili: {
+    label: 'Bilibili',
+    deepLink: (externalId) => `https://www.bilibili.com/video/${externalId}`,
+    openLabel: '在 Bilibili 中打开',
+    icon: 'bilibili',
   },
 }
 
