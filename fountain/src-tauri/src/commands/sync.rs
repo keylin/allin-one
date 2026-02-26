@@ -1,0 +1,350 @@
+use crate::config::{AppSettings, SyncPlatformStatus, SyncState};
+use crate::sync;
+use crate::sync::apple_books::BookManifestEntry;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use tauri::{command, AppHandle, Emitter};
+use tauri_plugin_notification::NotificationExt;
+use tauri_plugin_store::StoreExt;
+
+const SETTINGS_STORE: &str = "settings.json";
+const SETTINGS_KEY: &str = "app_settings";
+const SYNC_STATE_KEY: &str = "sync_state";
+const APPLE_BOOKS_MANIFEST_KEY: &str = "apple_books_manifest";
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum Platform {
+    AppleBooks,
+    WechatRead,
+    Bilibili,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SyncResult {
+    pub platform: Platform,
+    pub success: bool,
+    pub message: String,
+    pub items_synced: u32,
+}
+
+/// Trigger sync for all enabled platforms
+#[command]
+pub async fn sync_now(app: AppHandle) -> Result<Vec<SyncResult>, String> {
+    let settings = load_settings(&app)?;
+    let mut results = Vec::new();
+
+    if settings.apple_books_enabled {
+        let r = run_apple_books_sync(&app, &settings).await;
+        results.push(r);
+    }
+    if settings.wechat_read_enabled {
+        let r = run_wechat_read_sync(&app, &settings).await;
+        results.push(r);
+    }
+    if settings.bilibili_enabled {
+        let r = run_bilibili_sync(&app, &settings).await;
+        results.push(r);
+    }
+
+    Ok(results)
+}
+
+/// Trigger sync for a specific platform
+#[command]
+pub async fn sync_platform(app: AppHandle, platform: Platform) -> Result<SyncResult, String> {
+    let settings = load_settings(&app)?;
+    match platform {
+        Platform::AppleBooks => Ok(run_apple_books_sync(&app, &settings).await),
+        Platform::WechatRead => Ok(run_wechat_read_sync(&app, &settings).await),
+        Platform::Bilibili => Ok(run_bilibili_sync(&app, &settings).await),
+    }
+}
+
+/// Get current sync state
+#[command]
+pub fn get_sync_status(app: AppHandle) -> Result<SyncState, String> {
+    let store = app
+        .store(SETTINGS_STORE)
+        .map_err(|e| e.to_string())?;
+
+    let state = store
+        .get(SYNC_STATE_KEY)
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+
+    Ok(state)
+}
+
+fn load_settings(app: &AppHandle) -> Result<AppSettings, String> {
+    let store = app
+        .store(SETTINGS_STORE)
+        .map_err(|e| e.to_string())?;
+
+    Ok(store
+        .get(SETTINGS_KEY)
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default())
+}
+
+
+pub(crate) async fn run_apple_books_sync(app: &AppHandle, settings: &AppSettings) -> SyncResult {
+    update_platform_status(app, Platform::AppleBooks, SyncPlatformStatus::Syncing);
+
+    let manifest = load_apple_books_manifest(app);
+    let result = sync::apple_books::run_sync(settings, &manifest).await;
+    match result {
+        Ok((count, updated_manifest)) => {
+            save_apple_books_manifest(app, &updated_manifest);
+            update_platform_success(app, Platform::AppleBooks, count);
+            if count > 0 && settings.notifications_enabled {
+                let _ = app
+                    .notification()
+                    .builder()
+                    .title("Apple Books Synced")
+                    .body(format!("{} books synced successfully", count))
+                    .show();
+            }
+            SyncResult {
+                platform: Platform::AppleBooks,
+                success: true,
+                message: if count > 0 {
+                    format!("Synced {} books", count)
+                } else {
+                    "No changes detected".to_string()
+                },
+                items_synced: count,
+            }
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            update_platform_error(app, Platform::AppleBooks, msg.clone());
+            if settings.notifications_enabled {
+                let _ = app
+                    .notification()
+                    .builder()
+                    .title("Apple Books Sync Failed")
+                    .body(&msg)
+                    .show();
+            }
+            SyncResult {
+                platform: Platform::AppleBooks,
+                success: false,
+                message: msg,
+                items_synced: 0,
+            }
+        }
+    }
+}
+
+fn load_apple_books_manifest(app: &AppHandle) -> HashMap<String, BookManifestEntry> {
+    app.store(SETTINGS_STORE)
+        .ok()
+        .and_then(|store| store.get(APPLE_BOOKS_MANIFEST_KEY))
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default()
+}
+
+fn save_apple_books_manifest(app: &AppHandle, manifest: &HashMap<String, BookManifestEntry>) {
+    if let Ok(store) = app.store(SETTINGS_STORE) {
+        if let Ok(val) = serde_json::to_value(manifest) {
+            store.set(APPLE_BOOKS_MANIFEST_KEY, val);
+            let _ = store.save();
+        }
+    }
+}
+
+pub(crate) async fn run_wechat_read_sync(app: &AppHandle, settings: &AppSettings) -> SyncResult {
+    update_platform_status(app, Platform::WechatRead, SyncPlatformStatus::Syncing);
+
+    let result = sync::wechat_read::run_sync(settings).await;
+    match result {
+        Ok(count) => {
+            update_platform_success(app, Platform::WechatRead, count);
+            if settings.notifications_enabled {
+                let _ = app.notification()
+                    .builder()
+                    .title("微信读书已同步")
+                    .body(format!("成功同步 {} 本书", count))
+                    .show();
+            }
+            SyncResult {
+                platform: Platform::WechatRead,
+                success: true,
+                message: format!("Synced {} books", count),
+                items_synced: count,
+            }
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            let needs_auth = msg.contains("401") || msg.contains("expired") || msg.contains("auth");
+            if needs_auth {
+                update_platform_status(app, Platform::WechatRead, SyncPlatformStatus::NeedsAuth);
+                if settings.notifications_enabled {
+                    let _ = app.notification()
+                        .builder()
+                        .title("微信读书登录已过期")
+                        .body("请重新扫码登录")
+                        .show();
+                }
+            } else {
+                update_platform_error(app, Platform::WechatRead, msg.clone());
+                if settings.notifications_enabled {
+                    let _ = app.notification()
+                        .builder()
+                        .title("微信读书同步失败")
+                        .body(&msg)
+                        .show();
+                }
+            }
+            SyncResult {
+                platform: Platform::WechatRead,
+                success: false,
+                message: msg,
+                items_synced: 0,
+            }
+        }
+    }
+}
+
+pub(crate) async fn run_bilibili_sync(app: &AppHandle, settings: &AppSettings) -> SyncResult {
+    update_platform_status(app, Platform::Bilibili, SyncPlatformStatus::Syncing);
+
+    let result = sync::bilibili::run_sync(settings).await;
+    match result {
+        Ok(count) => {
+            update_platform_success(app, Platform::Bilibili, count);
+            if settings.notifications_enabled {
+                let _ = app.notification()
+                    .builder()
+                    .title("Bilibili Synced")
+                    .body(format!("{} videos synced successfully", count))
+                    .show();
+            }
+            SyncResult {
+                platform: Platform::Bilibili,
+                success: true,
+                message: format!("Synced {} videos", count),
+                items_synced: count,
+            }
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            let needs_auth = msg.contains("401") || msg.contains("expired") || msg.contains("not_login");
+            if needs_auth {
+                update_platform_status(app, Platform::Bilibili, SyncPlatformStatus::NeedsAuth);
+                if settings.notifications_enabled {
+                    let _ = app.notification()
+                        .builder()
+                        .title("Bilibili 登录已过期")
+                        .body("请重新扫码登录")
+                        .show();
+                }
+            } else {
+                update_platform_error(app, Platform::Bilibili, msg.clone());
+                if settings.notifications_enabled {
+                    let _ = app.notification()
+                        .builder()
+                        .title("Bilibili Sync Failed")
+                        .body(&msg)
+                        .show();
+                }
+            }
+            SyncResult {
+                platform: Platform::Bilibili,
+                success: false,
+                message: msg,
+                items_synced: 0,
+            }
+        }
+    }
+}
+
+fn update_platform_status(app: &AppHandle, platform: Platform, status: SyncPlatformStatus) {
+    if let Ok(store) = app.store(SETTINGS_STORE) {
+        let mut state: SyncState = store
+            .get(SYNC_STATE_KEY)
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
+
+        match platform {
+            Platform::AppleBooks => state.apple_books_status = status,
+            Platform::WechatRead => state.wechat_read_status = status,
+            Platform::Bilibili => state.bilibili_status = status,
+        }
+
+        if let Ok(val) = serde_json::to_value(&state) {
+            store.set(SYNC_STATE_KEY, val);
+            let _ = store.save();
+        }
+        // Emit event to frontend
+        let _ = app.emit("sync-status-changed", &state);
+    }
+}
+
+fn update_platform_success(app: &AppHandle, platform: Platform, count: u32) {
+    if let Ok(store) = app.store(SETTINGS_STORE) {
+        let mut state: SyncState = store
+            .get(SYNC_STATE_KEY)
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
+
+        let now = chrono::Utc::now().to_rfc3339();
+        match platform {
+            Platform::AppleBooks => {
+                state.apple_books_status = SyncPlatformStatus::Success;
+                state.apple_books_last_sync = Some(now);
+                state.apple_books_book_count = count;
+                state.apple_books_error = None;
+            }
+            Platform::WechatRead => {
+                state.wechat_read_status = SyncPlatformStatus::Success;
+                state.wechat_read_last_sync = Some(now);
+                state.wechat_read_book_count = count;
+                state.wechat_read_error = None;
+            }
+            Platform::Bilibili => {
+                state.bilibili_status = SyncPlatformStatus::Success;
+                state.bilibili_last_sync = Some(now);
+                state.bilibili_video_count = count;
+                state.bilibili_error = None;
+            }
+        }
+
+        if let Ok(val) = serde_json::to_value(&state) {
+            store.set(SYNC_STATE_KEY, val);
+            let _ = store.save();
+        }
+        let _ = app.emit("sync-status-changed", &state);
+    }
+}
+
+fn update_platform_error(app: &AppHandle, platform: Platform, error: String) {
+    if let Ok(store) = app.store(SETTINGS_STORE) {
+        let mut state: SyncState = store
+            .get(SYNC_STATE_KEY)
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
+
+        match platform {
+            Platform::AppleBooks => {
+                state.apple_books_status = SyncPlatformStatus::Error;
+                state.apple_books_error = Some(error);
+            }
+            Platform::WechatRead => {
+                state.wechat_read_status = SyncPlatformStatus::Error;
+                state.wechat_read_error = Some(error);
+            }
+            Platform::Bilibili => {
+                state.bilibili_status = SyncPlatformStatus::Error;
+                state.bilibili_error = Some(error);
+            }
+        }
+
+        if let Ok(val) = serde_json::to_value(&state) {
+            store.set(SYNC_STATE_KEY, val);
+            let _ = store.save();
+        }
+        let _ = app.emit("sync-status-changed", &state);
+    }
+}

@@ -1,0 +1,12 @@
+node_modules/
+dist/
+src-tauri/target/
+.env
+*.cred
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/

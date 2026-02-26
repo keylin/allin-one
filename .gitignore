@@ -63,3 +63,6 @@ backend/static/
 backend/alembic/versions_sqlite_backup/
 .pids/
 .cache/
+
+# Fountain (Tauri desktop app)
+fountain/src-tauri/target/
