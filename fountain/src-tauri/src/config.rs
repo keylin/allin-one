@@ -22,6 +22,10 @@ pub struct AppSettings {
     pub kindle_clippings_path: Option<String>,
     pub safari_bookmarks_path: Option<String>,
     pub chrome_bookmarks_path: Option<String>,
+    pub douban_enabled: bool,
+    pub douban_interval_hours: u32,
+    pub zhihu_enabled: bool,
+    pub zhihu_interval_hours: u32,
 }
 
 impl Default for AppSettings {
@@ -46,6 +50,10 @@ impl Default for AppSettings {
             kindle_clippings_path: None,
             safari_bookmarks_path: None,
             chrome_bookmarks_path: None,
+            douban_enabled: false,
+            douban_interval_hours: 24,
+            zhihu_enabled: false,
+            zhihu_interval_hours: 12,
         }
     }
 }
@@ -77,6 +85,15 @@ pub struct SyncState {
     pub kindle_error: Option<String>,
     pub safari_bookmarks_error: Option<String>,
     pub chrome_bookmarks_error: Option<String>,
+    pub douban_last_sync: Option<String>,
+    pub zhihu_last_sync: Option<String>,
+    pub douban_book_count: u32,
+    pub douban_movie_count: u32,
+    pub zhihu_item_count: u32,
+    pub douban_status: SyncPlatformStatus,
+    pub zhihu_status: SyncPlatformStatus,
+    pub douban_error: Option<String>,
+    pub zhihu_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -116,6 +133,15 @@ impl Default for SyncState {
             kindle_error: None,
             safari_bookmarks_error: None,
             chrome_bookmarks_error: None,
+            douban_last_sync: None,
+            zhihu_last_sync: None,
+            douban_book_count: 0,
+            douban_movie_count: 0,
+            zhihu_item_count: 0,
+            douban_status: SyncPlatformStatus::Idle,
+            zhihu_status: SyncPlatformStatus::Idle,
+            douban_error: None,
+            zhihu_error: None,
         }
     }
 }

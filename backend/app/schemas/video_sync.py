@@ -16,6 +16,8 @@ class SyncVideo(BaseModel):
     published_at: Optional[str] = None  # ISO datetime
     is_favorited: bool = False
     playback_position: int = 0          # 播放进度（秒）
+    rating: Optional[float] = None      # 豆瓣评分 0-10
+    comment: Optional[str] = None      # 短评
     extra: Optional[dict] = None        # 平台扩展字段（view/like/coin 等）
 
     model_config = {"populate_by_name": True}

@@ -21,6 +21,8 @@ pub enum Platform {
     Kindle,
     SafariBookmarks,
     ChromeBookmarks,
+    Douban,
+    Zhihu,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -61,6 +63,14 @@ pub async fn sync_now(app: AppHandle) -> Result<Vec<SyncResult>, String> {
         let r = run_chrome_bookmarks_sync(&app, &settings).await;
         results.push(r);
     }
+    if settings.douban_enabled {
+        let r = run_douban_sync(&app, &settings).await;
+        results.push(r);
+    }
+    if settings.zhihu_enabled {
+        let r = run_zhihu_sync(&app, &settings).await;
+        results.push(r);
+    }
 
     Ok(results)
 }
@@ -76,6 +86,8 @@ pub async fn sync_platform(app: AppHandle, platform: Platform) -> Result<SyncRes
         Platform::Kindle => Ok(run_kindle_sync(&app, &settings).await),
         Platform::SafariBookmarks => Ok(run_safari_bookmarks_sync(&app, &settings).await),
         Platform::ChromeBookmarks => Ok(run_chrome_bookmarks_sync(&app, &settings).await),
+        Platform::Douban => Ok(run_douban_sync(&app, &settings).await),
+        Platform::Zhihu => Ok(run_zhihu_sync(&app, &settings).await),
     }
 }
 
@@ -441,6 +453,144 @@ pub(crate) async fn run_chrome_bookmarks_sync(
     }
 }
 
+pub(crate) async fn run_douban_sync(app: &AppHandle, settings: &AppSettings) -> SyncResult {
+    update_platform_status(app, Platform::Douban, SyncPlatformStatus::Syncing);
+
+    let result = sync::douban::run_sync(settings).await;
+    match result {
+        Ok((book_count, movie_count)) => {
+            let total = book_count + movie_count;
+            // Inline update because douban has two separate counts
+            if let Ok(store) = app.store(SETTINGS_STORE) {
+                let mut state: SyncState = store
+                    .get(SYNC_STATE_KEY)
+                    .and_then(|v| serde_json::from_value(v).ok())
+                    .unwrap_or_default();
+                let now = chrono::Utc::now().to_rfc3339();
+                state.douban_status = SyncPlatformStatus::Success;
+                state.douban_last_sync = Some(now);
+                state.douban_book_count = book_count;
+                state.douban_movie_count = movie_count;
+                state.douban_error = None;
+                if let Ok(val) = serde_json::to_value(&state) {
+                    store.set(SYNC_STATE_KEY, val);
+                    let _ = store.save();
+                }
+                let _ = app.emit("sync-status-changed", &state);
+            }
+            if total > 0 && settings.notifications_enabled {
+                let _ = app
+                    .notification()
+                    .builder()
+                    .title("豆瓣已同步")
+                    .body(format!("书单 {} 本，影单 {} 部", book_count, movie_count))
+                    .show();
+            }
+            SyncResult {
+                platform: Platform::Douban,
+                success: true,
+                message: if total > 0 {
+                    format!("Synced {} books, {} movies", book_count, movie_count)
+                } else {
+                    "No changes detected".to_string()
+                },
+                items_synced: total,
+            }
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            let needs_auth = msg.contains("auth expired") || msg.contains("401") || msg.contains("403");
+            if needs_auth {
+                update_platform_status(app, Platform::Douban, SyncPlatformStatus::NeedsAuth);
+                if settings.notifications_enabled {
+                    let _ = app
+                        .notification()
+                        .builder()
+                        .title("豆瓣登录已过期")
+                        .body("请重新登录豆瓣")
+                        .show();
+                }
+            } else {
+                update_platform_error(app, Platform::Douban, msg.clone());
+                if settings.notifications_enabled {
+                    let _ = app
+                        .notification()
+                        .builder()
+                        .title("豆瓣同步失败")
+                        .body(&msg)
+                        .show();
+                }
+            }
+            SyncResult {
+                platform: Platform::Douban,
+                success: false,
+                message: msg,
+                items_synced: 0,
+            }
+        }
+    }
+}
+
+pub(crate) async fn run_zhihu_sync(app: &AppHandle, settings: &AppSettings) -> SyncResult {
+    update_platform_status(app, Platform::Zhihu, SyncPlatformStatus::Syncing);
+
+    let result = sync::zhihu::run_sync(settings).await;
+    match result {
+        Ok(count) => {
+            update_platform_success(app, Platform::Zhihu, count);
+            if count > 0 && settings.notifications_enabled {
+                let _ = app
+                    .notification()
+                    .builder()
+                    .title("知乎收藏已同步")
+                    .body(format!("成功同步 {} 条收藏", count))
+                    .show();
+            }
+            SyncResult {
+                platform: Platform::Zhihu,
+                success: true,
+                message: if count > 0 {
+                    format!("Synced {} items", count)
+                } else {
+                    "No new favorites".to_string()
+                },
+                items_synced: count,
+            }
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            let needs_auth = msg.contains("auth expired") || msg.contains("401") || msg.contains("403");
+            if needs_auth {
+                update_platform_status(app, Platform::Zhihu, SyncPlatformStatus::NeedsAuth);
+                if settings.notifications_enabled {
+                    let _ = app
+                        .notification()
+                        .builder()
+                        .title("知乎登录已过期")
+                        .body("请重新登录知乎")
+                        .show();
+                }
+            } else {
+                update_platform_error(app, Platform::Zhihu, msg.clone());
+                if settings.notifications_enabled {
+                    let _ = app
+                        .notification()
+                        .builder()
+                        .title("知乎同步失败")
+                        .body(&msg)
+                        .show();
+                }
+            }
+            SyncResult {
+                platform: Platform::Zhihu,
+                success: false,
+                message: msg,
+                items_synced: 0,
+            }
+        }
+    }
+}
+
 fn update_platform_status(app: &AppHandle, platform: Platform, status: SyncPlatformStatus) {
     if let Ok(store) = app.store(SETTINGS_STORE) {
         let mut state: SyncState = store
@@ -455,6 +605,8 @@ fn update_platform_status(app: &AppHandle, platform: Platform, status: SyncPlatf
             Platform::Kindle => state.kindle_status = status,
             Platform::SafariBookmarks => state.safari_bookmarks_status = status,
             Platform::ChromeBookmarks => state.chrome_bookmarks_status = status,
+            Platform::Douban => state.douban_status = status,
+            Platform::Zhihu => state.zhihu_status = status,
         }
 
         if let Ok(val) = serde_json::to_value(&state) {
@@ -510,6 +662,18 @@ fn update_platform_success(app: &AppHandle, platform: Platform, count: u32) {
                 state.chrome_bookmarks_last_sync = Some(now);
                 state.chrome_bookmarks_count = count;
                 state.chrome_bookmarks_error = None;
+            }
+            Platform::Douban => {
+                // Douban has separate book/movie counts; handled inline in run_douban_sync
+                state.douban_status = SyncPlatformStatus::Success;
+                state.douban_last_sync = Some(now);
+                state.douban_error = None;
+            }
+            Platform::Zhihu => {
+                state.zhihu_status = SyncPlatformStatus::Success;
+                state.zhihu_last_sync = Some(now);
+                state.zhihu_item_count = count;
+                state.zhihu_error = None;
             }
         }
 

@@ -311,6 +311,237 @@ pub fn close_wechat_webview(app: tauri::AppHandle) {
     }
 }
 
+// ─── Douban WebView login ──────────────────────────────────────────────────
+
+/// Initialization script for the Douban login WebView.
+/// Polls document.cookie every 1.5 s; when dbcl2 is visible (not HttpOnly),
+/// invokes the Rust command to capture the cookies.
+const DOUBAN_INIT_SCRIPT: &str = r#"
+(function () {
+  'use strict';
+  var _timer = setInterval(function () {
+    try {
+      var c = document.cookie || '';
+      if (c.indexOf('dbcl2=') >= 0) {
+        clearInterval(_timer);
+        if (window.__TAURI__ && window.__TAURI__.core) {
+          window.__TAURI__.core.invoke('capture_douban_cookies', { cookies: c })
+            .catch(function (e) { console.error('[Fountain] Douban cookie capture failed:', e); });
+        }
+      }
+    } catch (e) {}
+  }, 1500);
+})();
+"#;
+
+#[command]
+pub async fn open_douban_webview(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(existing) = app.get_webview_window("douban-login") {
+        let _ = existing.close();
+        tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+    }
+
+    let url = "https://www.douban.com"
+        .parse::<url::Url>()
+        .map_err(|e| e.to_string())?;
+
+    WebviewWindowBuilder::new(&app, "douban-login", WebviewUrl::External(url))
+        .title("豆瓣 — Login")
+        .inner_size(960.0, 680.0)
+        .center()
+        .initialization_script(DOUBAN_INIT_SCRIPT)
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[command]
+pub async fn capture_douban_cookies(cookies: String, app: tauri::AppHandle) -> Result<(), String> {
+    let mut dbcl2: Option<String> = None;
+    let mut bid: Option<String> = None;
+
+    for part in cookies.split(';') {
+        let part = part.trim();
+        if let Some((name, value)) = part.split_once('=') {
+            match name.trim() {
+                "dbcl2" => dbcl2 = Some(value.trim().to_string()),
+                "bid" => bid = Some(value.trim().to_string()),
+                _ => {}
+            }
+        }
+    }
+
+    let Some(dbcl2_val) = dbcl2 else {
+        return Ok(()); // dbcl2 not yet visible, keep waiting
+    };
+
+    // Extract UID from dbcl2 (format: "uid:hash" — may have surrounding quotes)
+    let uid = dbcl2_val
+        .trim_matches('"')
+        .split(':')
+        .next()
+        .unwrap_or("")
+        .to_string();
+
+    credential_store::set_credential(KEY_DOUBAN_DBCL2, &dbcl2_val).map_err(|e| e.to_string())?;
+    if let Some(bid_val) = bid {
+        credential_store::set_credential(KEY_DOUBAN_BID, &bid_val).map_err(|e| e.to_string())?;
+    }
+    if !uid.is_empty() {
+        credential_store::set_credential(KEY_DOUBAN_UID, &uid).map_err(|e| e.to_string())?;
+    }
+
+    if let Some(w) = app.get_webview_window("douban-login") {
+        let _ = w.close();
+    }
+
+    app.emit("douban-cookies-captured", ())
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[command]
+pub async fn validate_douban_cookie() -> Result<bool, String> {
+    let dbcl2 = credential_store::get_credential(KEY_DOUBAN_DBCL2)
+        .map_err(|e| e.to_string())?;
+    let Some(dbcl2) = dbcl2 else {
+        return Ok(false);
+    };
+    if dbcl2.is_empty() {
+        return Ok(false);
+    }
+
+    let uid = dbcl2
+        .trim_matches('"')
+        .split(':')
+        .next()
+        .unwrap_or("")
+        .to_string();
+    if uid.is_empty() {
+        return Ok(false);
+    }
+
+    let bid = credential_store::get_credential(KEY_DOUBAN_BID)
+        .unwrap_or(None)
+        .unwrap_or_default();
+    let cookie = if bid.is_empty() {
+        format!("dbcl2={}", dbcl2)
+    } else {
+        format!("dbcl2={}; bid={}", dbcl2, bid)
+    };
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!(
+            "https://www.douban.com/j/people/{}/collect?type=book&status=done&start=0&count=1",
+            uid
+        ))
+        .header("Cookie", cookie)
+        .header("User-Agent", "Mozilla/5.0")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(resp.status().is_success())
+}
+
+// ─── Zhihu WebView login ───────────────────────────────────────────────────
+
+const ZHIHU_INIT_SCRIPT: &str = r#"
+(function () {
+  'use strict';
+  var _timer = setInterval(function () {
+    try {
+      var c = document.cookie || '';
+      if (c.indexOf('z_c0=') >= 0) {
+        clearInterval(_timer);
+        if (window.__TAURI__ && window.__TAURI__.core) {
+          window.__TAURI__.core.invoke('capture_zhihu_cookies', { cookies: c })
+            .catch(function (e) { console.error('[Fountain] Zhihu cookie capture failed:', e); });
+        }
+      }
+    } catch (e) {}
+  }, 1500);
+})();
+"#;
+
+#[command]
+pub async fn open_zhihu_webview(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(existing) = app.get_webview_window("zhihu-login") {
+        let _ = existing.close();
+        tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+    }
+
+    let url = "https://www.zhihu.com"
+        .parse::<url::Url>()
+        .map_err(|e| e.to_string())?;
+
+    WebviewWindowBuilder::new(&app, "zhihu-login", WebviewUrl::External(url))
+        .title("知乎 — Login")
+        .inner_size(960.0, 680.0)
+        .center()
+        .initialization_script(ZHIHU_INIT_SCRIPT)
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[command]
+pub async fn capture_zhihu_cookies(cookies: String, app: tauri::AppHandle) -> Result<(), String> {
+    let mut z_c0: Option<String> = None;
+
+    for part in cookies.split(';') {
+        let part = part.trim();
+        if let Some((name, value)) = part.split_once('=') {
+            if name.trim() == "z_c0" {
+                z_c0 = Some(value.trim().to_string());
+                break;
+            }
+        }
+    }
+
+    let Some(z_c0_val) = z_c0 else {
+        return Ok(()); // z_c0 not yet visible
+    };
+
+    credential_store::set_credential(KEY_ZHIHU_Z_C0, &z_c0_val).map_err(|e| e.to_string())?;
+
+    if let Some(w) = app.get_webview_window("zhihu-login") {
+        let _ = w.close();
+    }
+
+    app.emit("zhihu-cookies-captured", ())
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[command]
+pub async fn validate_zhihu_cookie() -> Result<bool, String> {
+    let z_c0 = credential_store::get_credential(KEY_ZHIHU_Z_C0)
+        .map_err(|e| e.to_string())?;
+    let Some(z_c0) = z_c0 else {
+        return Ok(false);
+    };
+    if z_c0.is_empty() {
+        return Ok(false);
+    }
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get("https://www.zhihu.com/api/v4/me")
+        .header("Cookie", format!("z_c0={}", z_c0))
+        .header("User-Agent", "Mozilla/5.0")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(resp.status().is_success())
+}
+
 fn save_bilibili_cookies(set_cookie_headers: &[String]) -> Result<(), String> {
     let mut sessdata = None;
     let mut bili_jct = None;

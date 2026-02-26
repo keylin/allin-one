@@ -500,6 +500,25 @@ context = {
 
 ## 4. 抓取引擎设计
 
+### 4.0 两种数据接入模式
+
+系统支持两种互补的数据接入模式，适用于不同类型的数据源：
+
+| 维度 | Collect（采集）| Fountain（同步）|
+|------|--------------|----------------|
+| 数据位置 | 公网可访问 | 用户本地文件 / 平台私有数据 |
+| 认证要求 | 无 / 服务端 API Key | 用户登录态（cookies/token） |
+| 数据性质 | 公开内容 | 个人私有数据 |
+| 时机控制 | 服务端定时调度 | 用户在 Fountain 客户端手动触发 |
+| 实现方式 | `BaseCollector` 子类 + `COLLECTOR_MAP` | Rust 同步器 + HTTP Sync API |
+| SourceCategory | `network` | `user` |
+
+**决策规则**（新增数据源时参考）：
+- 公网可访问且无需用户登录 → **Collect**
+- 需要用户 cookies/token 且无法服务端长期保存 → **Fountain**
+- 数据在用户本地（文件、系统数据库）→ **Fountain**
+- 用户直接创建内容（笔记）→ 直接 POST API（`user.note` 类型，不经 Collector）
+
 ### 4.1 Collector 接口
 
 ```python
@@ -526,7 +545,7 @@ class BaseCollector(ABC):
 
 注意:
 - 没有 BilibiliVideoCollector / YouTubeVideoCollector。视频下载由流水线中的 `localize_media` 步骤 (yt-dlp) 处理, 不是 Collector 的职责。
-- `sync.*` 类型（Apple Books、微信读书、B站视频）无 Collector，由外部脚本通过同步 API 推送数据（见 §4.4）。
+- `sync.*` 类型（apple_books / wechat_read / bilibili / kindle / safari_bookmarks / chrome_bookmarks）均属于 **Fountain 模式**，无 Collector 实现，不参与定时调度。数据由 Fountain 桌面客户端采集后通过 Sync API 三步协议推送（见 §4.4）。
 
 ### 4.3 三级抓取策略实现
 

@@ -28,6 +28,8 @@
 | **FFmpeg** | 音视频处理工具，用于转码、音频提取等。 |
 | **DeepSeek** | 默认 LLM 服务提供商，兼容 OpenAI API 格式。 |
 | **AkShare** | 金融数据接口库，用于获取宏观经济数据。 |
+| **Fountain 模式** | 数据由 Tauri 桌面客户端主动读取本地数据或调用平台 API 后推送给后端，适用于个人私有数据（阅读历史、标注、书签）。 |
+| **Collect 模式** | 后端 Procrastinate worker 定时拉取公网数据，由 Collector 实现，适用于 RSS/网页/API 等公开内容。 |
 
 ## 3. 枚举变量
 
@@ -63,8 +65,8 @@
 
 | 枚举值 | 描述 | 前缀 | 特征 |
 | :--- | :--- | :--- | :--- |
-| `network` | 网络数据 | rss, podcast, api, web, account | 有 Collector，定时采集，需要 URL/配置 |
-| `user` | 用户数据 | user, file, system, sync | 无 Collector，用户/系统主动提交或外部脚本推送，无调度 |
+| `network` | 网络数据 | rss, podcast, api, web, account | 有 Collector，定时采集，需要 URL/配置（Collect 模式） |
+| `user` | 用户数据 | user, file, system, sync | 无 Collector，用户/系统主动提交，无调度。`sync.*` 类型走 Fountain 三步同步协议；`user.note` 直接 POST API |
 
 ### 3.2 StepType (原子操作类型)
 
@@ -214,3 +216,23 @@ MediaType 现在仅用于 `MediaItem`（媒体项），不再是 ContentItem 或
 | 监控政府公告页 | `web.scraper` | `{"scrape_level": "L2", "selectors": {...}}` | 文章分析 |
 | 跟踪宏观数据 | `api.akshare` | `{"indicator": "macro_china_cpi"}` | 金融数据分析 |
 | 纯采集不处理 | `rss.standard` | URL: any-feed.xml | (不绑定模板) |
+
+以下为 Fountain 模式场景（数据源 `sync.*`，无需配置流水线模板，数据由 Fountain 客户端推送）：
+
+### 场景 4：B 站个人观看历史同步
+- **数据源类型**：`sync.bilibili`（SourceCategory.USER）
+- **接入模式**：Fountain — 在 Fountain 客户端配置 SESSDATA，点击同步
+- **API 流程**：`POST /api/video/sync/setup` → `GET /api/video/sync/status` → `POST /api/video/sync`
+- **流水线模板**：媒体下载（仅收藏的视频触发 localize_media）
+
+### 场景 5：Apple Books 阅读标注同步
+- **数据源类型**：`sync.apple_books`（SourceCategory.USER）
+- **接入模式**：Fountain — Rust 同步器读取 macOS BKLibrary SQLite
+- **API 流程**：`POST /api/ebook/sync/setup` → `GET /api/ebook/sync/status` → `POST /api/ebook/sync`
+- **流水线模板**：无（标注写入 book_annotations 表）
+
+### 场景 6：微信读书同步
+- **数据源类型**：`sync.wechat_read`（SourceCategory.USER）
+- **接入模式**：Fountain — 在 Fountain 客户端配置微信 cookies
+- **API 流程**：同上三步协议（共用 ebook sync API）
+- **流水线模板**：无（标注写入 book_annotations 表）

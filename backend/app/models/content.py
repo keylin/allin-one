@@ -53,6 +53,9 @@ class SourceType(str, Enum):
     SYNC_KINDLE = "sync.kindle"                    # Kindle 标注同步（My Clippings.txt）
     SYNC_SAFARI_BOOKMARKS = "sync.safari_bookmarks"  # Safari 书签同步
     SYNC_CHROME_BOOKMARKS = "sync.chrome_bookmarks"  # Chrome 书签同步
+    SYNC_DOUBAN_BOOKS  = "sync.douban_books"       # 豆瓣书单同步
+    SYNC_DOUBAN_MOVIES = "sync.douban_movies"      # 豆瓣影单同步
+    SYNC_ZHIHU         = "sync.zhihu"              # 知乎收藏夹同步
     # 用户记录
     USER_NOTE = "user.note"          # 日常笔记
     SYSTEM_NOTIFICATION = "system.notification"  # 系统消息

@@ -62,6 +62,11 @@ Allin-One 是 AI 驱动的个人思维训练系统。它从海量信息源中自
 
 ### 2.2 数据源管理 (Sources)
 
+> **数据接入模式说明**
+> - **Collect 数据源**：在后台自动定时采集，用户只需配置 URL 和调度间隔。
+> - **Fountain 数据源**（`sync.*` 类型）：需要在 Fountain 桌面客户端中配置凭证并手动触发同步，
+>   后端通过 `/api/{ebook|video|bookmark}/sync` 三步 API 接收推送数据。
+
 **数据源管理操作**
 - **新增**: 支持多种类型的数据源创建 (详见 2.2.1)
 - **修改**: 编辑数据源配置 (URL、名称、采集频率等)
@@ -76,20 +81,23 @@ Allin-One 是 AI 驱动的个人思维训练系统。它从海量信息源中自
 
 数据源只描述「信息从哪来」，不涉及处理逻辑。处理方式由绑定的流水线模板决定。
 
-| 类别 | 类型代码 | 描述 | 采集方式 |
-|------|----------|------|----------|
-| RSS | `rss.hub` | RSSHub 生成的订阅源 | RSSHub 服务 (B站/微博/YouTube 等都走这个) |
-| RSS | `rss.standard` | 标准 RSS/Atom 订阅源 | feedparser 直接解析 |
-| 数据 | `api.akshare` | AkShare 宏观经济数据 | AkShare API |
-| 网页 | `web.scraper` | 网页抓取 | L1 HTTP / L2 Browserless / L3 browser-use |
-| 文件 | `file.upload` | 用户上传文件 | Web UI 上传 |
-| 播客 | `podcast.apple` | Apple Podcasts | 播客 RSS 解析 |
-| 账号 | `account.generic` | 其他平台账号 | 平台特定 API |
-| 同步 | `sync.apple_books` | Apple Books 同步 | 外部脚本推送书籍+标注 |
-| 同步 | `sync.wechat_read` | 微信读书同步 | 外部脚本推送书籍+标注 |
-| 同步 | `sync.bilibili` | B站视频同步 | 外部脚本推送视频元数据 |
-| 记录 | `user.note` | 日常笔记 | 用户手动输入 |
-| 记录 | `system.notification` | 系统消息 | 系统通知 |
+| 类别 | 类型代码 | 描述 | 采集方式 | 接入模式 |
+|------|----------|------|----------|---------|
+| RSS | `rss.hub` | RSSHub 生成的订阅源 | RSSHub 服务 (B站/微博/YouTube 等都走这个) | Collect |
+| RSS | `rss.standard` | 标准 RSS/Atom 订阅源 | feedparser 直接解析 | Collect |
+| 数据 | `api.akshare` | AkShare 宏观经济数据 | AkShare API | Collect |
+| 网页 | `web.scraper` | 网页抓取 | L1 HTTP / L2 Browserless / L3 browser-use | Collect |
+| 文件 | `file.upload` | 用户上传文件 | Web UI 上传 | Collect |
+| 播客 | `podcast.apple` | Apple Podcasts | 播客 RSS 解析 | Collect |
+| 账号 | `account.generic` | 其他平台账号 | 平台特定 API | Collect |
+| 同步 | `sync.apple_books` | Apple Books 同步 | Fountain 客户端读取本地 SQLite 推送 | Fountain |
+| 同步 | `sync.wechat_read` | 微信读书同步 | Fountain 客户端调用微信 API 推送 | Fountain |
+| 同步 | `sync.bilibili` | B站视频同步 | Fountain 客户端调用 B站 API 推送 | Fountain |
+| 同步 | `sync.kindle` | Kindle 标注同步 | Fountain 客户端读取 My Clippings.txt 推送 | Fountain |
+| 同步 | `sync.safari_bookmarks` | Safari 书签同步 | Fountain 客户端读取本地书签库推送 | Fountain |
+| 同步 | `sync.chrome_bookmarks` | Chrome 书签同步 | Fountain 客户端读取本地书签文件推送 | Fountain |
+| 记录 | `user.note` | 日常笔记 | 用户手动输入 | 直接 POST API |
+| 记录 | `system.notification` | 系统消息 | 系统通知 | 系统生成 |
 
 **关键设计**: 没有 `video_bilibili` / `video_youtube` 等类型。B站/YouTube 视频通过 `rss.hub` 数据源发现新内容，再由流水线中的 `localize_media` 步骤处理。`sync.*` 类型通过外部脚本获取平台数据后推送到同步 API。
 
