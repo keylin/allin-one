@@ -70,7 +70,7 @@ pub async fn run_sync(settings: &AppSettings) -> Result<u32> {
         bail!("Bilibili auth expired — not logged in");
     }
     let uid = nav["data"]["mid"].as_i64().unwrap_or(0);
-    let uid_str = uid.to_string();
+    let _uid_str = uid.to_string();
 
     // Three-step protocol
     let source_id = api_client
