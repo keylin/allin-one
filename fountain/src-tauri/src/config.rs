@@ -1,18 +1,27 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AppSettings {
     pub server_url: String,
     pub api_key: String,
     pub apple_books_enabled: bool,
     pub wechat_read_enabled: bool,
     pub bilibili_enabled: bool,
+    pub kindle_enabled: bool,
+    pub safari_bookmarks_enabled: bool,
+    pub chrome_bookmarks_enabled: bool,
     pub apple_books_interval_hours: u32,
     pub wechat_read_interval_hours: u32,
     pub bilibili_interval_hours: u32,
+    pub kindle_interval_hours: u32,
+    pub bookmarks_interval_hours: u32,
     pub autostart: bool,
     pub notifications_enabled: bool,
     pub apple_books_db_path: Option<String>,
+    pub kindle_clippings_path: Option<String>,
+    pub safari_bookmarks_path: Option<String>,
+    pub chrome_bookmarks_path: Option<String>,
 }
 
 impl Default for AppSettings {
@@ -23,30 +32,51 @@ impl Default for AppSettings {
             apple_books_enabled: true,
             wechat_read_enabled: false,
             bilibili_enabled: false,
+            kindle_enabled: false,
+            safari_bookmarks_enabled: false,
+            chrome_bookmarks_enabled: false,
             apple_books_interval_hours: 6,
             wechat_read_interval_hours: 12,
             bilibili_interval_hours: 6,
+            kindle_interval_hours: 24,
+            bookmarks_interval_hours: 6,
             autostart: false,
             notifications_enabled: true,
             apple_books_db_path: None,
+            kindle_clippings_path: None,
+            safari_bookmarks_path: None,
+            chrome_bookmarks_path: None,
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SyncState {
     pub apple_books_last_sync: Option<String>,
     pub wechat_read_last_sync: Option<String>,
     pub bilibili_last_sync: Option<String>,
+    pub kindle_last_sync: Option<String>,
+    pub safari_bookmarks_last_sync: Option<String>,
+    pub chrome_bookmarks_last_sync: Option<String>,
     pub apple_books_book_count: u32,
     pub wechat_read_book_count: u32,
     pub bilibili_video_count: u32,
+    pub kindle_book_count: u32,
+    pub safari_bookmarks_count: u32,
+    pub chrome_bookmarks_count: u32,
     pub apple_books_status: SyncPlatformStatus,
     pub wechat_read_status: SyncPlatformStatus,
     pub bilibili_status: SyncPlatformStatus,
+    pub kindle_status: SyncPlatformStatus,
+    pub safari_bookmarks_status: SyncPlatformStatus,
+    pub chrome_bookmarks_status: SyncPlatformStatus,
     pub apple_books_error: Option<String>,
     pub wechat_read_error: Option<String>,
     pub bilibili_error: Option<String>,
+    pub kindle_error: Option<String>,
+    pub safari_bookmarks_error: Option<String>,
+    pub chrome_bookmarks_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -65,15 +95,27 @@ impl Default for SyncState {
             apple_books_last_sync: None,
             wechat_read_last_sync: None,
             bilibili_last_sync: None,
+            kindle_last_sync: None,
+            safari_bookmarks_last_sync: None,
+            chrome_bookmarks_last_sync: None,
             apple_books_book_count: 0,
             wechat_read_book_count: 0,
             bilibili_video_count: 0,
+            kindle_book_count: 0,
+            safari_bookmarks_count: 0,
+            chrome_bookmarks_count: 0,
             apple_books_status: SyncPlatformStatus::Idle,
             wechat_read_status: SyncPlatformStatus::Idle,
             bilibili_status: SyncPlatformStatus::Idle,
+            kindle_status: SyncPlatformStatus::Idle,
+            safari_bookmarks_status: SyncPlatformStatus::Idle,
+            chrome_bookmarks_status: SyncPlatformStatus::Idle,
             apple_books_error: None,
             wechat_read_error: None,
             bilibili_error: None,
+            kindle_error: None,
+            safari_bookmarks_error: None,
+            chrome_bookmarks_error: None,
         }
     }
 }

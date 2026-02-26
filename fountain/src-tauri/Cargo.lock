@@ -1179,6 +1179,7 @@ dependencies = [
  "chrono",
  "env_logger",
  "log",
+ "plist",
  "qrcodegen",
  "reqwest 0.12.28",
  "rusqlite",

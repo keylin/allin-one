@@ -8,21 +8,36 @@ export const useSyncStore = defineStore('sync', () => {
     apple_books_last_sync: null,
     wechat_read_last_sync: null,
     bilibili_last_sync: null,
+    kindle_last_sync: null,
+    safari_bookmarks_last_sync: null,
+    chrome_bookmarks_last_sync: null,
     apple_books_book_count: 0,
     wechat_read_book_count: 0,
     bilibili_video_count: 0,
+    kindle_book_count: 0,
+    safari_bookmarks_count: 0,
+    chrome_bookmarks_count: 0,
     apple_books_status: 'idle',
     wechat_read_status: 'idle',
     bilibili_status: 'idle',
+    kindle_status: 'idle',
+    safari_bookmarks_status: 'idle',
+    chrome_bookmarks_status: 'idle',
     apple_books_error: null,
     wechat_read_error: null,
     bilibili_error: null,
+    kindle_error: null,
+    safari_bookmarks_error: null,
+    chrome_bookmarks_error: null,
   })
 
   const isSyncing = computed(() =>
     status.value.apple_books_status === 'syncing' ||
     status.value.wechat_read_status === 'syncing' ||
-    status.value.bilibili_status === 'syncing'
+    status.value.bilibili_status === 'syncing' ||
+    status.value.kindle_status === 'syncing' ||
+    status.value.safari_bookmarks_status === 'syncing' ||
+    status.value.chrome_bookmarks_status === 'syncing'
   )
 
   async function loadStatus() {

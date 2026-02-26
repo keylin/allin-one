@@ -225,6 +225,90 @@ function onCredSaved() {
           </div>
         </section>
 
+        <!-- Kindle section -->
+        <section>
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-xs font-semibold text-gray-500 uppercase tracking-wide">📖 Kindle</h2>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" v-model="settings.kindle_enabled" class="w-4 h-4 accent-blue-600" />
+              <span class="text-sm text-gray-600">Enabled</span>
+            </label>
+          </div>
+          <div v-if="settings.kindle_enabled" class="space-y-2">
+            <div class="flex items-center gap-3">
+              <label class="text-sm text-gray-600 whitespace-nowrap">Sync every</label>
+              <input
+                v-model.number="settings.kindle_interval_hours"
+                type="number" min="1" max="168"
+                class="w-20 px-2 py-1 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+              />
+              <span class="text-sm text-gray-500">hours</span>
+            </div>
+            <div>
+              <label class="block text-xs text-gray-500 mb-1">Clippings file path (optional)</label>
+              <input
+                v-model="settings.kindle_clippings_path"
+                type="text"
+                placeholder="Auto-detect from connected Kindle"
+                class="w-full px-2 py-1 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+              />
+            </div>
+            <p class="text-xs text-gray-400">
+              Reads highlights from My Clippings.txt. Connect your Kindle or set path above.
+            </p>
+          </div>
+        </section>
+
+        <!-- Safari Bookmarks section -->
+        <section>
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-xs font-semibold text-gray-500 uppercase tracking-wide">🧭 Safari Bookmarks</h2>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" v-model="settings.safari_bookmarks_enabled" class="w-4 h-4 accent-blue-600" />
+              <span class="text-sm text-gray-600">Enabled</span>
+            </label>
+          </div>
+          <div v-if="settings.safari_bookmarks_enabled" class="space-y-2">
+            <div class="flex items-center gap-3">
+              <label class="text-sm text-gray-600 whitespace-nowrap">Sync every</label>
+              <input
+                v-model.number="settings.bookmarks_interval_hours"
+                type="number" min="1" max="168"
+                class="w-20 px-2 py-1 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+              />
+              <span class="text-sm text-gray-500">hours</span>
+            </div>
+            <p class="text-xs text-gray-400">
+              Reads from ~/Library/Safari/Bookmarks.plist (no auth required)
+            </p>
+          </div>
+        </section>
+
+        <!-- Chrome Bookmarks section -->
+        <section>
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-xs font-semibold text-gray-500 uppercase tracking-wide">🌐 Chrome Bookmarks</h2>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" v-model="settings.chrome_bookmarks_enabled" class="w-4 h-4 accent-blue-600" />
+              <span class="text-sm text-gray-600">Enabled</span>
+            </label>
+          </div>
+          <div v-if="settings.chrome_bookmarks_enabled" class="space-y-2">
+            <p class="text-xs text-gray-400">
+              Auto-detects Chrome, Brave, or Edge. Shares interval with Safari bookmarks.
+            </p>
+            <div>
+              <label class="block text-xs text-gray-500 mb-1">Custom bookmarks path (optional)</label>
+              <input
+                v-model="settings.chrome_bookmarks_path"
+                type="text"
+                placeholder="Auto-detect Chrome/Brave/Edge"
+                class="w-full px-2 py-1 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+              />
+            </div>
+          </div>
+        </section>
+
         <!-- General section -->
         <section>
           <h2 class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">General</h2>

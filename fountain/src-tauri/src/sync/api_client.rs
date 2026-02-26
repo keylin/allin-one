@@ -164,4 +164,67 @@ impl ApiClient {
 
         Ok(resp.json().await?)
     }
+
+    /// Setup bookmark sync source. `source_type` must be "sync.safari_bookmarks"
+    /// or "sync.chrome_bookmarks". Returns the source UUID string from the backend.
+    pub async fn bookmark_setup(&self, source_type: &str) -> Result<String> {
+        let url = format!("{}/api/bookmark/sync/setup", self.base_url);
+        let resp = self
+            .client
+            .post(&url)
+            .headers(self.auth_headers())
+            .query(&[("source_type", source_type)])
+            .send()
+            .await
+            .context("bookmark setup request failed")?;
+
+        if !resp.status().is_success() {
+            bail!("bookmark setup error: {}", resp.status());
+        }
+
+        let data: Value = resp.json().await?;
+        data["data"]["source_id"]
+            .as_str()
+            .map(|s| s.to_string())
+            .context("Missing source_id in bookmark setup response")
+    }
+
+    pub async fn bookmark_status(&self, source_id: &str) -> Result<Option<String>> {
+        let url = format!("{}/api/bookmark/sync/status", self.base_url);
+        let resp = self
+            .client
+            .get(&url)
+            .headers(self.auth_headers())
+            .query(&[("source_id", source_id)])
+            .send()
+            .await
+            .context("bookmark status request failed")?;
+
+        if !resp.status().is_success() {
+            bail!("bookmark status error: {}", resp.status());
+        }
+
+        let data: Value = resp.json().await?;
+        Ok(data["data"]["last_sync_at"].as_str().map(|s| s.to_string()))
+    }
+
+    pub async fn bookmark_sync(&self, payload: Value) -> Result<Value> {
+        let url = format!("{}/api/bookmark/sync", self.base_url);
+        let resp = self
+            .client
+            .post(&url)
+            .headers(self.auth_headers())
+            .json(&payload)
+            .send()
+            .await
+            .context("bookmark sync request failed")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            bail!("bookmark sync error {}: {}", status, body);
+        }
+
+        Ok(resp.json().await?)
+    }
 }

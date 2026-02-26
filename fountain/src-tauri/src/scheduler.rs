@@ -26,6 +26,9 @@ impl Scheduler {
         let mut apple_books_last: Option<std::time::Instant> = None;
         let mut wechat_read_last: Option<std::time::Instant> = None;
         let mut bilibili_last: Option<std::time::Instant> = None;
+        let mut kindle_last: Option<std::time::Instant> = None;
+        let mut safari_bookmarks_last: Option<std::time::Instant> = None;
+        let mut chrome_bookmarks_last: Option<std::time::Instant> = None;
 
         loop {
             tokio::select! {
@@ -101,6 +104,75 @@ impl Scheduler {
                                 log::error!("Scheduled: Bilibili failed: {}", result.message);
                             }
                             bilibili_last = Some(std::time::Instant::now());
+                        }
+                    }
+
+                    if settings.kindle_enabled {
+                        let secs = settings.kindle_interval_hours as u64 * 3600;
+                        let due = kindle_last
+                            .map(|last| now.duration_since(last).as_secs() >= secs)
+                            .unwrap_or(true);
+                        if due {
+                            info!("Scheduled: Kindle sync starting");
+                            let result = crate::commands::sync::run_kindle_sync(
+                                &self.app_handle,
+                                &settings,
+                            )
+                            .await;
+                            if result.success {
+                                info!("Scheduled: Kindle done ({} books)", result.items_synced);
+                            } else {
+                                log::error!("Scheduled: Kindle failed: {}", result.message);
+                            }
+                            kindle_last = Some(std::time::Instant::now());
+                        }
+                    }
+
+                    if settings.safari_bookmarks_enabled {
+                        let secs = settings.bookmarks_interval_hours as u64 * 3600;
+                        let due = safari_bookmarks_last
+                            .map(|last| now.duration_since(last).as_secs() >= secs)
+                            .unwrap_or(true);
+                        if due {
+                            info!("Scheduled: Safari bookmarks sync starting");
+                            let result = crate::commands::sync::run_safari_bookmarks_sync(
+                                &self.app_handle,
+                                &settings,
+                            )
+                            .await;
+                            if result.success {
+                                info!(
+                                    "Scheduled: Safari bookmarks done ({} bookmarks)",
+                                    result.items_synced
+                                );
+                            } else {
+                                log::error!("Scheduled: Safari bookmarks failed: {}", result.message);
+                            }
+                            safari_bookmarks_last = Some(std::time::Instant::now());
+                        }
+                    }
+
+                    if settings.chrome_bookmarks_enabled {
+                        let secs = settings.bookmarks_interval_hours as u64 * 3600;
+                        let due = chrome_bookmarks_last
+                            .map(|last| now.duration_since(last).as_secs() >= secs)
+                            .unwrap_or(true);
+                        if due {
+                            info!("Scheduled: Chrome bookmarks sync starting");
+                            let result = crate::commands::sync::run_chrome_bookmarks_sync(
+                                &self.app_handle,
+                                &settings,
+                            )
+                            .await;
+                            if result.success {
+                                info!(
+                                    "Scheduled: Chrome bookmarks done ({} bookmarks)",
+                                    result.items_synced
+                                );
+                            } else {
+                                log::error!("Scheduled: Chrome bookmarks failed: {}", result.message);
+                            }
+                            chrome_bookmarks_last = Some(std::time::Instant::now());
                         }
                     }
                 }

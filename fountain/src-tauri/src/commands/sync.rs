@@ -18,6 +18,9 @@ pub enum Platform {
     AppleBooks,
     WechatRead,
     Bilibili,
+    Kindle,
+    SafariBookmarks,
+    ChromeBookmarks,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -46,6 +49,18 @@ pub async fn sync_now(app: AppHandle) -> Result<Vec<SyncResult>, String> {
         let r = run_bilibili_sync(&app, &settings).await;
         results.push(r);
     }
+    if settings.kindle_enabled {
+        let r = run_kindle_sync(&app, &settings).await;
+        results.push(r);
+    }
+    if settings.safari_bookmarks_enabled {
+        let r = run_safari_bookmarks_sync(&app, &settings).await;
+        results.push(r);
+    }
+    if settings.chrome_bookmarks_enabled {
+        let r = run_chrome_bookmarks_sync(&app, &settings).await;
+        results.push(r);
+    }
 
     Ok(results)
 }
@@ -58,6 +73,9 @@ pub async fn sync_platform(app: AppHandle, platform: Platform) -> Result<SyncRes
         Platform::AppleBooks => Ok(run_apple_books_sync(&app, &settings).await),
         Platform::WechatRead => Ok(run_wechat_read_sync(&app, &settings).await),
         Platform::Bilibili => Ok(run_bilibili_sync(&app, &settings).await),
+        Platform::Kindle => Ok(run_kindle_sync(&app, &settings).await),
+        Platform::SafariBookmarks => Ok(run_safari_bookmarks_sync(&app, &settings).await),
+        Platform::ChromeBookmarks => Ok(run_chrome_bookmarks_sync(&app, &settings).await),
     }
 }
 
@@ -274,6 +292,155 @@ pub(crate) async fn run_bilibili_sync(app: &AppHandle, settings: &AppSettings) -
     }
 }
 
+pub(crate) async fn run_kindle_sync(app: &AppHandle, settings: &AppSettings) -> SyncResult {
+    update_platform_status(app, Platform::Kindle, SyncPlatformStatus::Syncing);
+
+    let result = sync::kindle::run_sync(settings).await;
+    match result {
+        Ok(count) => {
+            update_platform_success(app, Platform::Kindle, count);
+            if count > 0 && settings.notifications_enabled {
+                let _ = app
+                    .notification()
+                    .builder()
+                    .title("Kindle Synced")
+                    .body(format!("{} books synced successfully", count))
+                    .show();
+            }
+            SyncResult {
+                platform: Platform::Kindle,
+                success: true,
+                message: if count > 0 {
+                    format!("Synced {} books", count)
+                } else {
+                    "No new highlights".to_string()
+                },
+                items_synced: count,
+            }
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            update_platform_error(app, Platform::Kindle, msg.clone());
+            if settings.notifications_enabled {
+                let _ = app
+                    .notification()
+                    .builder()
+                    .title("Kindle Sync Failed")
+                    .body(&msg)
+                    .show();
+            }
+            SyncResult {
+                platform: Platform::Kindle,
+                success: false,
+                message: msg,
+                items_synced: 0,
+            }
+        }
+    }
+}
+
+pub(crate) async fn run_safari_bookmarks_sync(
+    app: &AppHandle,
+    settings: &AppSettings,
+) -> SyncResult {
+    update_platform_status(app, Platform::SafariBookmarks, SyncPlatformStatus::Syncing);
+
+    let result =
+        sync::browser_bookmarks::run_sync(settings, sync::browser_bookmarks::Browser::Safari).await;
+    match result {
+        Ok(count) => {
+            update_platform_success(app, Platform::SafariBookmarks, count);
+            if count > 0 && settings.notifications_enabled {
+                let _ = app
+                    .notification()
+                    .builder()
+                    .title("Safari Bookmarks Synced")
+                    .body(format!("{} bookmarks synced", count))
+                    .show();
+            }
+            SyncResult {
+                platform: Platform::SafariBookmarks,
+                success: true,
+                message: if count > 0 {
+                    format!("Synced {} bookmarks", count)
+                } else {
+                    "No new bookmarks".to_string()
+                },
+                items_synced: count,
+            }
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            update_platform_error(app, Platform::SafariBookmarks, msg.clone());
+            if settings.notifications_enabled {
+                let _ = app
+                    .notification()
+                    .builder()
+                    .title("Safari Bookmarks Sync Failed")
+                    .body(&msg)
+                    .show();
+            }
+            SyncResult {
+                platform: Platform::SafariBookmarks,
+                success: false,
+                message: msg,
+                items_synced: 0,
+            }
+        }
+    }
+}
+
+pub(crate) async fn run_chrome_bookmarks_sync(
+    app: &AppHandle,
+    settings: &AppSettings,
+) -> SyncResult {
+    update_platform_status(app, Platform::ChromeBookmarks, SyncPlatformStatus::Syncing);
+
+    let result =
+        sync::browser_bookmarks::run_sync(settings, sync::browser_bookmarks::Browser::Chrome).await;
+    match result {
+        Ok(count) => {
+            update_platform_success(app, Platform::ChromeBookmarks, count);
+            if count > 0 && settings.notifications_enabled {
+                let _ = app
+                    .notification()
+                    .builder()
+                    .title("Chrome Bookmarks Synced")
+                    .body(format!("{} bookmarks synced", count))
+                    .show();
+            }
+            SyncResult {
+                platform: Platform::ChromeBookmarks,
+                success: true,
+                message: if count > 0 {
+                    format!("Synced {} bookmarks", count)
+                } else {
+                    "No new bookmarks".to_string()
+                },
+                items_synced: count,
+            }
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            update_platform_error(app, Platform::ChromeBookmarks, msg.clone());
+            if settings.notifications_enabled {
+                let _ = app
+                    .notification()
+                    .builder()
+                    .title("Chrome Bookmarks Sync Failed")
+                    .body(&msg)
+                    .show();
+            }
+            SyncResult {
+                platform: Platform::ChromeBookmarks,
+                success: false,
+                message: msg,
+                items_synced: 0,
+            }
+        }
+    }
+}
+
 fn update_platform_status(app: &AppHandle, platform: Platform, status: SyncPlatformStatus) {
     if let Ok(store) = app.store(SETTINGS_STORE) {
         let mut state: SyncState = store
@@ -285,6 +452,9 @@ fn update_platform_status(app: &AppHandle, platform: Platform, status: SyncPlatf
             Platform::AppleBooks => state.apple_books_status = status,
             Platform::WechatRead => state.wechat_read_status = status,
             Platform::Bilibili => state.bilibili_status = status,
+            Platform::Kindle => state.kindle_status = status,
+            Platform::SafariBookmarks => state.safari_bookmarks_status = status,
+            Platform::ChromeBookmarks => state.chrome_bookmarks_status = status,
         }
 
         if let Ok(val) = serde_json::to_value(&state) {
@@ -323,6 +493,24 @@ fn update_platform_success(app: &AppHandle, platform: Platform, count: u32) {
                 state.bilibili_video_count = count;
                 state.bilibili_error = None;
             }
+            Platform::Kindle => {
+                state.kindle_status = SyncPlatformStatus::Success;
+                state.kindle_last_sync = Some(now);
+                state.kindle_book_count = count;
+                state.kindle_error = None;
+            }
+            Platform::SafariBookmarks => {
+                state.safari_bookmarks_status = SyncPlatformStatus::Success;
+                state.safari_bookmarks_last_sync = Some(now);
+                state.safari_bookmarks_count = count;
+                state.safari_bookmarks_error = None;
+            }
+            Platform::ChromeBookmarks => {
+                state.chrome_bookmarks_status = SyncPlatformStatus::Success;
+                state.chrome_bookmarks_last_sync = Some(now);
+                state.chrome_bookmarks_count = count;
+                state.chrome_bookmarks_error = None;
+            }
         }
 
         if let Ok(val) = serde_json::to_value(&state) {
@@ -355,6 +543,18 @@ pub(crate) fn reset_stale_sync_state(app: &AppHandle) {
             state.bilibili_status = SyncPlatformStatus::Idle;
             changed = true;
         }
+        if state.kindle_status == SyncPlatformStatus::Syncing {
+            state.kindle_status = SyncPlatformStatus::Idle;
+            changed = true;
+        }
+        if state.safari_bookmarks_status == SyncPlatformStatus::Syncing {
+            state.safari_bookmarks_status = SyncPlatformStatus::Idle;
+            changed = true;
+        }
+        if state.chrome_bookmarks_status == SyncPlatformStatus::Syncing {
+            state.chrome_bookmarks_status = SyncPlatformStatus::Idle;
+            changed = true;
+        }
 
         if changed {
             if let Ok(val) = serde_json::to_value(&state) {
@@ -385,6 +585,18 @@ fn update_platform_error(app: &AppHandle, platform: Platform, error: String) {
             Platform::Bilibili => {
                 state.bilibili_status = SyncPlatformStatus::Error;
                 state.bilibili_error = Some(error);
+            }
+            Platform::Kindle => {
+                state.kindle_status = SyncPlatformStatus::Error;
+                state.kindle_error = Some(error);
+            }
+            Platform::SafariBookmarks => {
+                state.safari_bookmarks_status = SyncPlatformStatus::Error;
+                state.safari_bookmarks_error = Some(error);
+            }
+            Platform::ChromeBookmarks => {
+                state.chrome_bookmarks_status = SyncPlatformStatus::Error;
+                state.chrome_bookmarks_error = Some(error);
             }
         }
 

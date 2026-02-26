@@ -269,3 +269,63 @@ def upsert_ebooks(db: Session, source: SourceConfig, books: list[dict]) -> dict:
         "updated_annotations": updated_annotations,
         "deleted_annotations": deleted_annotations,
     }
+
+
+def upsert_bookmarks(db: Session, source: SourceConfig, bookmarks: list[dict]) -> dict:
+    """批量 upsert 书签数据，返回统计
+
+    bookmarks 条目格式同 BookmarkSyncRequest.bookmarks (dict 化后)
+    返回: {"new_bookmarks": int, "updated_bookmarks": int}
+    """
+    new_bookmarks = 0
+    updated_bookmarks = 0
+
+    for bm in bookmarks:
+        url = bm.get("url", "").strip()
+        if not url:
+            continue
+
+        content = db.query(ContentItem).filter(
+            ContentItem.source_id == source.id,
+            ContentItem.url == url,
+        ).first()
+
+        is_new = content is None
+        if is_new:
+            content = ContentItem(
+                id=uuid.uuid4().hex,
+                source_id=source.id,
+                external_id=uuid.uuid5(uuid.NAMESPACE_URL, url).hex,
+                title=bm.get("title") or url,
+                url=url,
+                status=ContentStatus.READY.value,
+            )
+            db.add(content)
+            new_bookmarks += 1
+        else:
+            if bm.get("title"):
+                content.title = bm["title"]
+            content.updated_at = utcnow()
+            updated_bookmarks += 1
+
+        raw = {
+            "url": url,
+            "title": bm.get("title") or url,
+            "folder": bm.get("folder"),
+            "added_at": bm.get("added_at"),
+        }
+        content.raw_data = json.dumps(raw, ensure_ascii=False)
+
+        if bm.get("added_at"):
+            try:
+                from datetime import datetime
+                content.published_at = datetime.fromisoformat(
+                    bm["added_at"].replace("Z", "+00:00")
+                ).replace(tzinfo=None)
+            except (ValueError, AttributeError):
+                pass
+
+    source.last_collected_at = utcnow()
+    db.commit()
+
+    return {"new_bookmarks": new_bookmarks, "updated_bookmarks": updated_bookmarks}

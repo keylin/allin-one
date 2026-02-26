@@ -47,9 +47,12 @@ class SourceType(str, Enum):
     # 播客
     PODCAST_APPLE = "podcast.apple"  # Apple Podcasts
     # 同步
-    SYNC_APPLE_BOOKS = "sync.apple_books"  # Apple Books 同步
-    SYNC_WECHAT_READ = "sync.wechat_read"  # 微信读书同步
-    SYNC_BILIBILI = "sync.bilibili"        # B站视频同步
+    SYNC_APPLE_BOOKS = "sync.apple_books"          # Apple Books 同步
+    SYNC_WECHAT_READ = "sync.wechat_read"          # 微信读书同步
+    SYNC_BILIBILI = "sync.bilibili"                # B站视频同步
+    SYNC_KINDLE = "sync.kindle"                    # Kindle 标注同步（My Clippings.txt）
+    SYNC_SAFARI_BOOKMARKS = "sync.safari_bookmarks"  # Safari 书签同步
+    SYNC_CHROME_BOOKMARKS = "sync.chrome_bookmarks"  # Chrome 书签同步
     # 用户记录
     USER_NOTE = "user.note"          # 日常笔记
     SYSTEM_NOTIFICATION = "system.notification"  # 系统消息

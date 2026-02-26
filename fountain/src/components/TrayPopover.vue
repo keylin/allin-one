@@ -201,8 +201,47 @@ const settings = computed(() => settingsStore.settings)
             @sync="syncOne('bilibili')"
             @fix-auth="openCredForm('bilibili')"
           />
+          <SyncStatus
+            v-if="settings.kindle_enabled"
+            icon="📖"
+            name="Kindle"
+            platform="kindle"
+            :status="s.kindle_status"
+            :last-sync="s.kindle_last_sync"
+            :item-count="s.kindle_book_count"
+            item-label="books"
+            :error="s.kindle_error"
+            :enabled="!!settings.server_url"
+            @sync="syncOne('kindle')"
+          />
+          <SyncStatus
+            v-if="settings.safari_bookmarks_enabled"
+            icon="🧭"
+            name="Safari Bookmarks"
+            platform="safari_bookmarks"
+            :status="s.safari_bookmarks_status"
+            :last-sync="s.safari_bookmarks_last_sync"
+            :item-count="s.safari_bookmarks_count"
+            item-label="bookmarks"
+            :error="s.safari_bookmarks_error"
+            :enabled="!!settings.server_url"
+            @sync="syncOne('safari_bookmarks')"
+          />
+          <SyncStatus
+            v-if="settings.chrome_bookmarks_enabled"
+            icon="🌐"
+            name="Chrome Bookmarks"
+            platform="chrome_bookmarks"
+            :status="s.chrome_bookmarks_status"
+            :last-sync="s.chrome_bookmarks_last_sync"
+            :item-count="s.chrome_bookmarks_count"
+            item-label="bookmarks"
+            :error="s.chrome_bookmarks_error"
+            :enabled="!!settings.server_url"
+            @sync="syncOne('chrome_bookmarks')"
+          />
 
-          <div v-if="!settings.apple_books_enabled && !settings.wechat_read_enabled && !settings.bilibili_enabled"
+          <div v-if="!settings.apple_books_enabled && !settings.wechat_read_enabled && !settings.bilibili_enabled && !settings.kindle_enabled && !settings.safari_bookmarks_enabled && !settings.chrome_bookmarks_enabled"
                class="px-4 py-6 text-center text-gray-400 text-sm">
             No platforms enabled. Open Settings to configure.
           </div>
