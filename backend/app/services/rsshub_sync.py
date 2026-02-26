@@ -76,13 +76,14 @@ def _restart_rsshub_container() -> dict:
     Returns:
         dict with keys: restarted (bool), method (str), error (str|None)
     """
-    # 容器内: compose 文件挂载在 /project/docker-compose.yml
+    # 容器内: compose 文件挂载在 /project/ 下
     # 宿主机开发: 从脚本路径回溯到项目根目录
     project_root = Path(__file__).resolve().parents[3]
     compose_files = [
-        Path("/project/docker-compose.yml"),  # 容器内挂载路径
+        Path("/project/docker-compose.remote.yml"),  # 容器内挂载路径 (remote)
+        Path("/project/docker-compose.yml"),  # 容器内挂载路径 (local dev)
         project_root / "docker-compose.local.yml",
-        project_root / "docker-compose.yml",
+        project_root / "docker-compose.remote.yml",
     ]
 
     # 使用 docker compose up -d 重建容器（而非 restart），确保 env_file 变更生效

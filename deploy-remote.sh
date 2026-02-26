@@ -36,14 +36,14 @@ rsync -avz --delete -e 'ssh -p 2222' \
 
 # 3. Remote build & restart
 echo ">> [3/4] Building and restarting..."
-${SSH} "cd ${REMOTE_DIR} && docker compose build allin-one" 2>&1 | tail -20
-${SSH} "cd ${REMOTE_DIR} && docker compose up -d" 2>&1 | tail -10
+${SSH} "cd ${REMOTE_DIR} && docker compose -f docker-compose.remote.yml build allin-one" 2>&1 | tail -20
+${SSH} "cd ${REMOTE_DIR} && docker compose -f docker-compose.remote.yml up -d" 2>&1 | tail -10
 
 # 4. Wait for app healthy & run migrations
 echo ">> [4/4] Waiting for app to be healthy..."
 HEALTHY=false
 for i in $(seq 1 30); do
-    STATUS=$(${SSH} "cd ${REMOTE_DIR} && docker compose ps allin-one --format '{{.Status}}'" 2>/dev/null || echo "")
+    STATUS=$(${SSH} "cd ${REMOTE_DIR} && docker compose -f docker-compose.remote.yml ps allin-one --format '{{.Status}}'" 2>/dev/null || echo "")
     case "${STATUS}" in
         *healthy*)
             HEALTHY=true
@@ -59,7 +59,7 @@ done
 
 if ${HEALTHY}; then
     echo "   Running database migrations..."
-    ${SSH} "cd ${REMOTE_DIR} && docker compose exec -T allin-one alembic upgrade head" || echo "   ⚠ Migration failed, check manually"
+    ${SSH} "cd ${REMOTE_DIR} && docker compose -f docker-compose.remote.yml exec -T allin-one alembic upgrade head" || echo "   ⚠ Migration failed, check manually"
 else
     echo "   ⚠ Container not healthy after 60s, skipping migrations"
 fi
@@ -67,10 +67,10 @@ fi
 ${SSH} "docker image prune -f" > /dev/null 2>&1
 
 # 修正 data/ 目录权限（Docker 以 root 创建，需要让宿主用户可写以便 rsync 同步）
-${SSH} "HOST_UID=\$(id -u) HOST_GID=\$(id -g) && cd ${REMOTE_DIR} && docker compose exec -T allin-one chown -R \${HOST_UID}:\${HOST_GID} /app/data" 2>/dev/null || true
+${SSH} "HOST_UID=\$(id -u) HOST_GID=\$(id -g) && cd ${REMOTE_DIR} && docker compose -f docker-compose.remote.yml exec -T allin-one chown -R \${HOST_UID}:\${HOST_GID} /app/data" 2>/dev/null || true
 
 # 获取容器状态（单独命令，避免 heredoc 解析问题）
-CONTAINER_STATUS=$(${SSH} "cd ${REMOTE_DIR} && docker compose ps --format '{{.Name}}|{{.Status}}'")
+CONTAINER_STATUS=$(${SSH} "cd ${REMOTE_DIR} && docker compose -f docker-compose.remote.yml ps --format '{{.Name}}|{{.Status}}'")
 
 # 检查是否所有容器都在运行
 ALL_UP=true

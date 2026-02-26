@@ -3,19 +3,19 @@
 # Allin-One 本地日志查看工具
 #
 # 用法:
-#   ./logs.sh                  # 交互式选择要查看的日志
-#   ./logs.sh app              # 主应用 Docker 日志 (实时跟踪)
-#   ./logs.sh worker           # 全部 Worker 日志
-#   ./logs.sh pipeline         # Pipeline Worker 日志
-#   ./logs.sh scheduled        # Scheduled Worker 日志
-#   ./logs.sh rsshub           # RSSHub Docker 日志
-#   ./logs.sh browserless      # Browserless Docker 日志
-#   ./logs.sh db               # PostgreSQL Docker 日志
-#   ./logs.sh all              # 所有容器日志 (混合输出)
-#   ./logs.sh file backend     # 后端文件日志 (data/logs/)
-#   ./logs.sh file worker      # Worker 文件日志
-#   ./logs.sh file error       # 错误文件日志
-#   ./logs.sh error            # 错误日志汇总 (容器 + 文件)
+#   ./logs-local.sh                  # 交互式选择要查看的日志
+#   ./logs-local.sh app              # 主应用 Docker 日志 (实时跟踪)
+#   ./logs-local.sh worker           # 全部 Worker 日志
+#   ./logs-local.sh pipeline         # Pipeline Worker 日志
+#   ./logs-local.sh scheduled        # Scheduled Worker 日志
+#   ./logs-local.sh rsshub           # RSSHub Docker 日志
+#   ./logs-local.sh browserless      # Browserless Docker 日志
+#   ./logs-local.sh db               # PostgreSQL Docker 日志
+#   ./logs-local.sh all              # 所有容器日志 (混合输出)
+#   ./logs-local.sh file backend     # 后端文件日志 (data/logs/)
+#   ./logs-local.sh file worker      # Worker 文件日志
+#   ./logs-local.sh file error       # 错误文件日志
+#   ./logs-local.sh error            # 错误日志汇总 (容器 + 文件)
 #
 # 选项:
 #   -n, --lines NUM   显示最近 N 行 (默认 100)
@@ -245,7 +245,7 @@ case "$CMD" in
         ;;
     *)
         echo -e "${RED}未知命令: $CMD${NC}"
-        echo "用法: ./logs.sh [app|worker|pipeline|scheduled|rsshub|browserless|db|all|file|error]"
+        echo "用法: ./logs-local.sh [app|worker|pipeline|scheduled|rsshub|browserless|db|all|file|error]"
         exit 1
         ;;
 esac

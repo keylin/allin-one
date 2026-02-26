@@ -87,7 +87,7 @@ docker_logs() {
     [ "$FOLLOW" = true ] && opts="$opts -f"
     [ -n "$SINCE" ] && opts="$opts --since $SINCE"
 
-    local remote_cmd="cd ${REMOTE_DIR} && docker compose logs $opts $services"
+    local remote_cmd="cd ${REMOTE_DIR} && docker compose -f docker-compose.remote.yml logs $opts $services"
 
     if [ -n "$GREP_PATTERN" ]; then
         remote_cmd="$remote_cmd 2>&1 | grep --color=always -i '$GREP_PATTERN'"
@@ -106,7 +106,7 @@ docker_logs_all() {
     [ "$FOLLOW" = true ] && opts="$opts -f"
     [ -n "$SINCE" ] && opts="$opts --since $SINCE"
 
-    local remote_cmd="cd ${REMOTE_DIR} && docker compose logs $opts"
+    local remote_cmd="cd ${REMOTE_DIR} && docker compose -f docker-compose.remote.yml logs $opts"
 
     if [ -n "$GREP_PATTERN" ]; then
         remote_cmd="$remote_cmd 2>&1 | grep --color=always -i '$GREP_PATTERN'"
@@ -171,11 +171,11 @@ show_errors() {
 
     for svc in allin-one allin-worker-pipeline allin-worker-scheduled; do
         local count
-        count=$(${SSH_NT} "cd ${REMOTE_DIR} && docker compose logs $opts $svc 2>&1 | grep -ic 'error\|exception\|traceback\|failed'" || true)
+        count=$(${SSH_NT} "cd ${REMOTE_DIR} && docker compose -f docker-compose.remote.yml logs $opts $svc 2>&1 | grep -ic 'error\|exception\|traceback\|failed'" || true)
         count=$(echo "$count" | tr -d '[:space:]')
         if [ -n "$count" ] && [ "$count" -gt 0 ] 2>/dev/null; then
             echo -e "${RED}── $svc ($count 条错误) ──${NC}"
-            ${SSH_NT} "cd ${REMOTE_DIR} && docker compose logs $opts $svc 2>&1 | grep --color=always -i 'error\|exception\|traceback\|failed' | tail -n 20"
+            ${SSH_NT} "cd ${REMOTE_DIR} && docker compose -f docker-compose.remote.yml logs $opts $svc 2>&1 | grep --color=always -i 'error\|exception\|traceback\|failed' | tail -n 20"
             echo ""
         else
             echo -e "${GREEN}── $svc (无错误) ──${NC}"

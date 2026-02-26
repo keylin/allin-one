@@ -63,7 +63,7 @@ python3 scripts/verify/timezone/verify_timezone.py
 python3 scripts/migration/migrate_sqlite_to_pg.py
 
 # Database initialization (automatically run by Docker)
-# See docker-compose.yml for usage
+# See docker-compose.remote.yml for usage
 
 # Add new verification script
 mkdir -p scripts/verify/feature-name
