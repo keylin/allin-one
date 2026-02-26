@@ -32,6 +32,7 @@ rsync -avz --delete -e 'ssh -p 2222' \
     --exclude 'node_modules' \
     --exclude '__pycache__' \
     --exclude '.env' \
+    --exclude 'fountain' \
     ./ ${REMOTE_HOST}:${REMOTE_DIR}/ --quiet
 
 # 3. Remote build & restart
