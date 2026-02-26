@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "identifier": "douban-remote",
+  "description": "Allow Douban webview to invoke capture_douban_cookies via IPC",
+  "remote": {
+    "urls": ["https://www.douban.com", "https://*.douban.com"]
+  },
+  "windows": ["douban-login"],
+  "permissions": [
+    "core:default"
+  ]
+}

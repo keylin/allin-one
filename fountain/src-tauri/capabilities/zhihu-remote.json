@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "identifier": "zhihu-remote",
+  "description": "Allow Zhihu webview to invoke capture_zhihu_cookies via IPC",
+  "remote": {
+    "urls": ["https://www.zhihu.com", "https://*.zhihu.com"]
+  },
+  "windows": ["zhihu-login"],
+  "permissions": [
+    "core:default"
+  ]
+}
