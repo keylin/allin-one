@@ -1,6 +1,6 @@
 """move playback fields to media_items
 
-Revision ID: 0015_move_playback_to_media_items
+Revision ID: 0015_mv_playback_to_media
 Revises: 9b5adeeead25
 Create Date: 2026-02-26 12:00:00.000000
 
@@ -11,7 +11,7 @@ from alembic import op
 import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
-revision: str = '0015_move_playback_to_media_items'
+revision: str = '0015_mv_playback_to_media'
 down_revision: Union[str, Sequence[str], None] = '9b5adeeead25'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

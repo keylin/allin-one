@@ -1,14 +1,15 @@
-"""Ebook API — 书架管理、标注只读、元数据编辑"""
+"""Ebook API — 书架管理、标注 CRUD、元数据编辑"""
 
 import json
 import logging
 import mimetypes
+import uuid
 from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, HTTPException, status
 from fastapi.responses import FileResponse
-from sqlalchemy import desc, asc
+from sqlalchemy import desc, asc, func, or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -18,6 +19,8 @@ from app.models.content import ContentItem, ContentStatus, MediaItem
 from app.models.ebook import ReadingProgress, BookAnnotation, BookBookmark
 from app.schemas import error_response
 from app.schemas.ebook import (
+    AnnotationCreate,
+    AnnotationUpdate,
     EbookMetadataUpdate,
     BookSearchResult,
     MetadataApplyRequest,
@@ -57,10 +60,20 @@ async def list_ebooks(
     db: Session = Depends(get_db),
 ):
     """书架列表"""
+    ann_count_sq = (
+        db.query(
+            BookAnnotation.content_id,
+            func.count(BookAnnotation.id).label("ann_count"),
+        )
+        .group_by(BookAnnotation.content_id)
+        .subquery()
+    )
+
     query = (
-        db.query(ContentItem, MediaItem, ReadingProgress)
+        db.query(ContentItem, MediaItem, ReadingProgress, ann_count_sq.c.ann_count)
         .join(MediaItem, MediaItem.content_id == ContentItem.id)
         .outerjoin(ReadingProgress, ReadingProgress.content_id == ContentItem.id)
+        .outerjoin(ann_count_sq, ann_count_sq.c.content_id == ContentItem.id)
         .filter(MediaItem.media_type == "ebook")
     )
 
@@ -83,6 +96,7 @@ async def list_ebooks(
     sort_map = {
         "title": ContentItem.title,
         "created_at": ContentItem.created_at,
+        "annotation_count": ann_count_sq.c.ann_count,
     }
     if sort_by == "updated_at":
         sort_column = ReadingProgress.updated_at
@@ -93,7 +107,7 @@ async def list_ebooks(
     query = query.order_by(order_expr).offset((page - 1) * page_size).limit(page_size)
 
     data = []
-    for content, media, progress in query.all():
+    for content, media, progress, ann_count in query.all():
         meta = {}
         if media.metadata_json:
             try:
@@ -126,6 +140,7 @@ async def list_ebooks(
             "source": raw.get("source"),  # 平台标识: apple_books / wechat_read 等
             "external_id": content.external_id,
             "media_status": media.status,
+            "annotation_count": ann_count or 0,
         })
 
     return {
@@ -176,14 +191,91 @@ async def list_recent_annotations(
             "cover_url": f"/api/ebook/{content.id}/cover" if has_cover else None,
             "cfi_range": ann.cfi_range,
             "section_index": ann.section_index,
+            "location": ann.location,
             "type": ann.type,
             "color": ann.color,
             "selected_text": ann.selected_text,
             "note": ann.note,
             "created_at": ann.created_at.isoformat() if ann.created_at else None,
+            "updated_at": ann.updated_at.isoformat() if ann.updated_at else None,
         })
 
     return {"code": 0, "data": data, "message": "ok"}
+
+
+@router.get("/annotations")
+async def list_all_annotations(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    content_id: Optional[str] = Query(None, description="按书筛选"),
+    color: Optional[str] = Query(None),
+    type: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    sort_by: str = Query("created_at", description="created_at / updated_at"),
+    sort_order: str = Query("desc"),
+    db: Session = Depends(get_db),
+):
+    """跨书标注搜索"""
+    query = (
+        db.query(BookAnnotation, ContentItem, MediaItem)
+        .join(ContentItem, ContentItem.id == BookAnnotation.content_id)
+        .join(MediaItem, (MediaItem.content_id == ContentItem.id) & (MediaItem.media_type == "ebook"))
+    )
+
+    if content_id:
+        query = query.filter(BookAnnotation.content_id == content_id)
+    if color:
+        query = query.filter(BookAnnotation.color == color)
+    if type:
+        query = query.filter(BookAnnotation.type == type)
+    if search:
+        like = f"%{search}%"
+        query = query.filter(
+            or_(
+                BookAnnotation.selected_text.ilike(like),
+                BookAnnotation.note.ilike(like),
+            )
+        )
+
+    total = query.count()
+
+    sort_col = BookAnnotation.updated_at if sort_by == "updated_at" else BookAnnotation.created_at
+    order_expr = desc(sort_col) if sort_order == "desc" else asc(sort_col)
+    query = query.order_by(order_expr).offset((page - 1) * page_size).limit(page_size)
+
+    data = []
+    for ann, content, media in query.all():
+        meta = {}
+        if media.metadata_json:
+            try:
+                meta = json.loads(media.metadata_json)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        has_cover = bool(meta.get("cover_path"))
+
+        data.append({
+            "id": ann.id,
+            "content_id": content.id,
+            "book_title": content.title,
+            "book_author": content.author,
+            "cover_url": f"/api/ebook/{content.id}/cover" if has_cover else None,
+            "location": ann.location,
+            "type": ann.type,
+            "color": ann.color,
+            "selected_text": ann.selected_text,
+            "note": ann.note,
+            "created_at": ann.created_at.isoformat() if ann.created_at else None,
+            "updated_at": ann.updated_at.isoformat() if ann.updated_at else None,
+        })
+
+    return {
+        "code": 0,
+        "data": data,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "message": "ok",
+    }
 
 
 # ─── Filters ──────────────────────────────────────────────────────────────────
@@ -498,30 +590,150 @@ async def get_ebook_cover(content_id: str, db: Session = Depends(get_db)):
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="封面未找到")
 
 
-# ─── Annotations (read-only) ─────────────────────────────────────────────────
+# ─── Annotations ─────────────────────────────────────────────────────────────
+
+def _annotation_dict(a: BookAnnotation) -> dict:
+    return {
+        "id": a.id,
+        "cfi_range": a.cfi_range,
+        "section_index": a.section_index,
+        "location": a.location,
+        "type": a.type,
+        "color": a.color,
+        "selected_text": a.selected_text,
+        "note": a.note,
+        "created_at": a.created_at.isoformat() if a.created_at else None,
+        "updated_at": a.updated_at.isoformat() if a.updated_at else None,
+    }
+
 
 @router.get("/{content_id}/annotations")
-async def list_annotations(content_id: str, db: Session = Depends(get_db)):
-    """获取全部批注（只读）"""
-    items = db.query(BookAnnotation).filter(
+async def list_annotations(
+    content_id: str,
+    color: Optional[str] = Query(None),
+    type: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    group_by_chapter: bool = Query(False),
+    db: Session = Depends(get_db),
+):
+    """获取标注，支持筛选/搜索/章节分组"""
+    query = db.query(BookAnnotation).filter(
         BookAnnotation.content_id == content_id
-    ).order_by(BookAnnotation.created_at).all()
+    )
+
+    if color:
+        query = query.filter(BookAnnotation.color == color)
+    if type:
+        query = query.filter(BookAnnotation.type == type)
+    if search:
+        like = f"%{search}%"
+        query = query.filter(
+            or_(
+                BookAnnotation.selected_text.ilike(like),
+                BookAnnotation.note.ilike(like),
+            )
+        )
+
+    items = query.order_by(BookAnnotation.created_at).all()
+
+    if not group_by_chapter:
+        return {
+            "code": 0,
+            "data": [_annotation_dict(a) for a in items],
+            "message": "ok",
+        }
+
+    # 按 location 分组
+    groups: dict[Optional[str], list] = {}
+    for a in items:
+        key = a.location
+        groups.setdefault(key, []).append(_annotation_dict(a))
+
+    chapters = []
+    for chapter, anns in groups.items():
+        if chapter is not None:
+            chapters.append({"chapter": chapter, "count": len(anns), "annotations": anns})
+
+    # None 组排最后
+    if None in groups:
+        anns = groups[None]
+        chapters.append({"chapter": None, "count": len(anns), "annotations": anns})
 
     return {
         "code": 0,
-        "data": [
-            {
-                "id": a.id,
-                "cfi_range": a.cfi_range,
-                "section_index": a.section_index,
-                "type": a.type,
-                "color": a.color,
-                "selected_text": a.selected_text,
-                "note": a.note,
-                "created_at": a.created_at.isoformat() if a.created_at else None,
-                "updated_at": a.updated_at.isoformat() if a.updated_at else None,
-            }
-            for a in items
-        ],
+        "data": {"chapters": chapters, "total": len(items)},
         "message": "ok",
     }
+
+
+@router.post("/{content_id}/annotations")
+async def create_annotation(
+    content_id: str,
+    body: AnnotationCreate,
+    db: Session = Depends(get_db),
+):
+    """创建标注"""
+    content = db.get(ContentItem, content_id)
+    if not content:
+        return error_response(404, "电子书不存在")
+
+    now = utcnow()
+    ann = BookAnnotation(
+        id=uuid.uuid4().hex,
+        content_id=content_id,
+        external_id=None,
+        cfi_range=body.cfi_range,
+        section_index=body.section_index,
+        location=body.location,
+        type=body.type,
+        color=body.color,
+        selected_text=body.selected_text,
+        note=body.note,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(ann)
+    db.commit()
+
+    return {"code": 0, "data": _annotation_dict(ann), "message": "ok"}
+
+
+@router.put("/{content_id}/annotations/{ann_id}")
+async def update_annotation(
+    content_id: str,
+    ann_id: str,
+    body: AnnotationUpdate,
+    db: Session = Depends(get_db),
+):
+    """更新标注"""
+    ann = db.get(BookAnnotation, ann_id)
+    if not ann or ann.content_id != content_id:
+        return error_response(404, "标注不存在")
+
+    if body.type is not None:
+        ann.type = body.type
+    if body.color is not None:
+        ann.color = body.color
+    if body.note is not None:
+        ann.note = body.note
+    ann.updated_at = utcnow()
+    db.commit()
+
+    return {"code": 0, "data": _annotation_dict(ann), "message": "ok"}
+
+
+@router.delete("/{content_id}/annotations/{ann_id}")
+async def delete_annotation(
+    content_id: str,
+    ann_id: str,
+    db: Session = Depends(get_db),
+):
+    """删除标注"""
+    ann = db.get(BookAnnotation, ann_id)
+    if not ann or ann.content_id != content_id:
+        return error_response(404, "标注不存在")
+
+    db.delete(ann)
+    db.commit()
+
+    return {"code": 0, "data": {"deleted": 1}, "message": "ok"}

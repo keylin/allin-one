@@ -16,13 +16,14 @@ setup_logging("worker")
 # 主 App — 异步连接器, Worker CLI 使用
 proc_app = procrastinate.App(
     connector=procrastinate.PsycopgConnector(conninfo=settings.DATABASE_URL),
-    import_paths=["app.tasks.pipeline_tasks", "app.tasks.scheduled_tasks", "app.tasks.collection_tasks"],
+    import_paths=["app.tasks.pipeline_tasks", "app.tasks.scheduled_tasks", "app.tasks.collection_tasks", "app.tasks.sync_tasks"],
 )
 
 import app.models  # noqa: F401 — 确保所有 ORM 模型注册
 import app.tasks.pipeline_tasks  # noqa: F401, E402
 import app.tasks.scheduled_tasks  # noqa: F401, E402
 import app.tasks.collection_tasks  # noqa: F401, E402
+import app.tasks.sync_tasks  # noqa: F401, E402
 
 # 同步 defer 专用 App — SyncPsycopgConnector, 惰性初始化
 _defer_app: procrastinate.App | None = None

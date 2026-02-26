@@ -11,7 +11,6 @@ from app.services.collectors.podcast import PodcastCollector
 from app.services.collectors.web_scraper import ScraperCollector
 from app.services.collectors.akshare import AkShareCollector
 from app.services.collectors.file_upload import FileUploadCollector
-from app.services.collectors.bilibili import BilibiliCollector
 from app.services.collectors.generic_account import GenericAccountCollector
 
 logger = logging.getLogger(__name__)
@@ -65,7 +64,6 @@ _podcast_collector = PodcastCollector()
 _scraper_collector = ScraperCollector()
 _akshare_collector = AkShareCollector()
 _file_upload_collector = FileUploadCollector()
-_bilibili_collector = BilibiliCollector()
 _generic_account_collector = GenericAccountCollector()
 
 COLLECTOR_MAP = {
@@ -75,7 +73,6 @@ COLLECTOR_MAP = {
     "web.scraper": _scraper_collector,
     "api.akshare": _akshare_collector,
     "file.upload": _file_upload_collector,
-    "account.bilibili": _bilibili_collector,
     "account.generic": _generic_account_collector,
 }
 

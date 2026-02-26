@@ -119,6 +119,17 @@ def _content_to_response(item: ContentItem, db: Session) -> dict:
     data["source_name"] = source.name if source else None
     data.update(_extract_summary_fields(item))
     data["media_items"] = _build_media_summaries(item.media_items)
+    media_types_set = {mi.media_type for mi in item.media_items}
+    if "ebook" in media_types_set:
+        data["content_type"] = "ebook"
+    elif "video" in media_types_set:
+        data["content_type"] = "video"
+    elif "audio" in media_types_set:
+        data["content_type"] = "audio"
+    elif "image" in media_types_set:
+        data["content_type"] = "image"
+    else:
+        data["content_type"] = "text"
     return data
 
 
@@ -143,6 +154,8 @@ async def list_content(
     status: str | None = Query(None),
     has_video: bool | None = Query(None, description="筛选包含视频的内容"),
     has_audio: bool | None = Query(None, description="筛选包含音频的内容"),
+    has_image: bool | None = Query(None, description="筛选包含图片的内容"),
+    has_ebook: bool | None = Query(None, description="筛选包含电子书的内容"),
     q: str | None = Query(None, description="搜索标题"),
     is_favorited: bool | None = Query(None),
     is_unread: bool | None = Query(None, description="未读过滤: true=未读, false=已读"),
@@ -184,6 +197,24 @@ async def list_content(
         else:
             query = query.filter(
                 ~ContentItem.media_items.any(MediaItem.media_type == "audio")
+            )
+    if has_image is not None:
+        if has_image:
+            query = query.filter(
+                ContentItem.media_items.any(MediaItem.media_type == "image")
+            )
+        else:
+            query = query.filter(
+                ~ContentItem.media_items.any(MediaItem.media_type == "image")
+            )
+    if has_ebook is not None:
+        if has_ebook:
+            query = query.filter(
+                ContentItem.media_items.any(MediaItem.media_type == "ebook")
+            )
+        else:
+            query = query.filter(
+                ~ContentItem.media_items.any(MediaItem.media_type == "ebook")
             )
     if q:
         pattern = f"%{q}%"
@@ -323,6 +354,18 @@ async def list_content(
             mi.media_type in ("video", "image") and mi.status == "downloaded"
             for mi in mi_list
         )
+        # content_type: 从 media_items 派生（ebook > video > audio > image > text）
+        media_types_set = {mi.media_type for mi in mi_list}
+        if "ebook" in media_types_set:
+            data["content_type"] = "ebook"
+        elif "video" in media_types_set:
+            data["content_type"] = "video"
+        elif "audio" in media_types_set:
+            data["content_type"] = "audio"
+        elif "image" in media_types_set:
+            data["content_type"] = "image"
+        else:
+            data["content_type"] = "text"
         data["reading_time_min"] = _estimate_reading_time(item)
         # audio_duration: 从 raw_data.itunes.duration 提取（播客卡片显示）
         if any(mi.media_type == "audio" for mi in mi_list) and item.raw_data:
@@ -446,11 +489,24 @@ async def batch_mark_read(body: ContentBatchDelete, db: Session = Depends(get_db
 async def batch_toggle_favorite(body: ContentBatchDelete, db: Session = Depends(get_db)):
     """批量收藏"""
     now = utcnow()
+    # 先查出之前未收藏的项（只有这些需要触发流水线）
+    newly_favorited = db.query(ContentItem).filter(
+        ContentItem.id.in_(body.ids),
+        ContentItem.is_favorited == False,
+    ).all()
+
+    # 批量更新收藏状态
     updated = db.query(ContentItem).filter(
         ContentItem.id.in_(body.ids)
     ).update({ContentItem.is_favorited: True, ContentItem.favorited_at: now, ContentItem.updated_at: now},
              synchronize_session=False)
     db.commit()
+
+    # 对新收藏的内容触发媒体下载流水线
+    for item in newly_favorited:
+        db.refresh(item)
+        await _trigger_media_pipeline(item, db)
+
     return {"code": 0, "data": {"updated": updated}, "message": "ok"}
 
 
@@ -459,6 +515,7 @@ class MarkAllReadRequest(BaseModel):
     status: str | None = None
     has_video: bool | None = None
     has_audio: bool | None = None
+    has_image: bool | None = None
     q: str | None = None
     date_from: str | None = None
     date_to: str | None = None
@@ -497,6 +554,15 @@ async def mark_all_read(body: MarkAllReadRequest, db: Session = Depends(get_db))
         else:
             query = query.filter(
                 ~ContentItem.media_items.any(MediaItem.media_type == "audio")
+            )
+    if body.has_image is not None:
+        if body.has_image:
+            query = query.filter(
+                ContentItem.media_items.any(MediaItem.media_type == "image")
+            )
+        else:
+            query = query.filter(
+                ~ContentItem.media_items.any(MediaItem.media_type == "image")
             )
     if body.q:
         query = query.filter(ContentItem.title.ilike(f"%{body.q}%"))
@@ -959,6 +1025,78 @@ async def apply_enrichment(content_id: str, body: EnrichApplyRequest, db: Sessio
     return {"code": 0, "data": {"method": body.method}, "message": "已应用富化结果"}
 
 
+async def _trigger_media_pipeline(content: ContentItem, db: Session) -> None:
+    """收藏触发媒体下载流水线（pending/failed → 触发, downloaded → 跳过）"""
+    from app.services.pipeline.orchestrator import PipelineOrchestrator
+
+    content_id = content.id
+
+    # 检查各状态的 MediaItem
+    pending_count = db.query(MediaItem).filter(
+        MediaItem.content_id == content_id,
+        MediaItem.status == "pending",
+    ).count()
+
+    failed_items = db.query(MediaItem).filter(
+        MediaItem.content_id == content_id,
+        MediaItem.status == "failed",
+    ).all()
+
+    downloaded_count = db.query(MediaItem).filter(
+        MediaItem.content_id == content_id,
+        MediaItem.status == "downloaded",
+    ).count()
+
+    # 重置失败项为 pending，准备重试
+    if failed_items:
+        for mi in failed_items:
+            mi.status = "pending"
+        db.commit()
+        logger.info(f"Reset {len(failed_items)} failed MediaItems to pending for retry: {content_id}")
+
+    # 有 pending 或 failed(已重置) 的媒体，触发流水线
+    need_download_count = pending_count + len(failed_items)
+    should_trigger = need_download_count > 0
+
+    # 无任何 MediaItem，但 HTML 中可能有 <img> → 也触发 localize_media 扫描
+    if not should_trigger and downloaded_count == 0:
+        if content.raw_data:
+            try:
+                raw = json.loads(content.raw_data)
+                html = ""
+                contents = raw.get("content", [])
+                if isinstance(contents, list) and contents:
+                    first = contents[0]
+                    html = first.get("value", "") if isinstance(first, dict) else str(first)
+                if not html:
+                    html = raw.get("summary", "")
+                if "<img" in html.lower():
+                    should_trigger = True
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+    if should_trigger:
+        # 查找"媒体下载"内置模板
+        template = db.query(PipelineTemplate).filter(
+            PipelineTemplate.name == "媒体下载",
+            PipelineTemplate.is_active == True,
+        ).first()
+
+        if template:
+            orchestrator = PipelineOrchestrator(db)
+            execution = orchestrator.trigger_for_content(
+                content=content,
+                template_override_id=template.id,
+                trigger=TriggerSource.FAVORITE,
+            )
+            if execution:
+                await orchestrator.async_start_execution(execution.id)
+                logger.info(f"Favorite triggered pipeline: content={content_id}, execution={execution.id}")
+    elif downloaded_count > 0:
+        # 已有下载完成的媒体，不触发
+        logger.info(f"Content {content_id} already has downloaded media, skip pipeline")
+
+
 @router.post("/{content_id}/favorite")
 async def toggle_favorite(content_id: str, db: Session = Depends(get_db)):
     """切换收藏状态
@@ -969,8 +1107,6 @@ async def toggle_favorite(content_id: str, db: Session = Depends(get_db)):
     - downloaded: 已成功下载，不触发（幂等）
     - 无 MediaItem: 纯文本内容，不触发
     """
-    from app.services.pipeline.orchestrator import PipelineOrchestrator
-
     item = db.get(ContentItem, content_id)
     if not item:
         return error_response(404, "Content not found")
@@ -985,70 +1121,7 @@ async def toggle_favorite(content_id: str, db: Session = Depends(get_db)):
 
     # 收藏时触发媒体下载（通过流水线框架）
     if item.is_favorited and not was_favorited:
-        # 检查各状态的 MediaItem
-        pending_count = db.query(MediaItem).filter(
-            MediaItem.content_id == content_id,
-            MediaItem.status == "pending",
-        ).count()
-
-        failed_items = db.query(MediaItem).filter(
-            MediaItem.content_id == content_id,
-            MediaItem.status == "failed",
-        ).all()
-
-        downloaded_count = db.query(MediaItem).filter(
-            MediaItem.content_id == content_id,
-            MediaItem.status == "downloaded",
-        ).count()
-
-        # 重置失败项为 pending，准备重试
-        if failed_items:
-            for mi in failed_items:
-                mi.status = "pending"
-            db.commit()
-            logger.info(f"Reset {len(failed_items)} failed MediaItems to pending for retry: {content_id}")
-
-        # 有 pending 或 failed(已重置) 的媒体，触发流水线
-        need_download_count = pending_count + len(failed_items)
-        should_trigger = need_download_count > 0
-
-        # 无任何 MediaItem，但 HTML 中可能有 <img> → 也触发 localize_media 扫描
-        if not should_trigger and downloaded_count == 0:
-            if item.raw_data:
-                try:
-                    raw = json.loads(item.raw_data)
-                    html = ""
-                    contents = raw.get("content", [])
-                    if isinstance(contents, list) and contents:
-                        first = contents[0]
-                        html = first.get("value", "") if isinstance(first, dict) else str(first)
-                    if not html:
-                        html = raw.get("summary", "")
-                    if "<img" in html.lower():
-                        should_trigger = True
-                except (json.JSONDecodeError, TypeError):
-                    pass
-
-        if should_trigger:
-            # 查找"媒体下载"内置模板
-            template = db.query(PipelineTemplate).filter(
-                PipelineTemplate.name == "媒体下载",
-                PipelineTemplate.is_active == True,
-            ).first()
-
-            if template:
-                orchestrator = PipelineOrchestrator(db)
-                execution = orchestrator.trigger_for_content(
-                    content=item,
-                    template_override_id=template.id,
-                    trigger=TriggerSource.FAVORITE,
-                )
-                if execution:
-                    await orchestrator.async_start_execution(execution.id)
-                    logger.info(f"Favorite triggered pipeline: content={content_id}, execution={execution.id}")
-        elif downloaded_count > 0:
-            # 已有下载完成的媒体，不触发
-            logger.info(f"Content {content_id} already has downloaded media, skip pipeline")
+        await _trigger_media_pipeline(item, db)
 
     return {"code": 0, "data": {"is_favorited": item.is_favorited}, "message": "ok"}
 

@@ -20,8 +20,9 @@ class ReadingProgressResponse(BaseModel):
 
 
 class AnnotationCreate(BaseModel):
-    cfi_range: str
+    cfi_range: Optional[str] = None
     section_index: Optional[int] = None
+    location: Optional[str] = None
     type: str = "highlight"
     color: str = "yellow"
     selected_text: Optional[str] = None
@@ -29,22 +30,48 @@ class AnnotationCreate(BaseModel):
 
 
 class AnnotationUpdate(BaseModel):
+    type: Optional[str] = None
     color: Optional[str] = None
     note: Optional[str] = None
 
 
 class AnnotationResponse(BaseModel):
     id: str
-    cfi_range: str
+    cfi_range: Optional[str] = None
     section_index: Optional[int] = None
+    location: Optional[str] = None
     type: str
     color: str
     selected_text: Optional[str] = None
     note: Optional[str] = None
     created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
     class Config:
         from_attributes = True
+
+
+class AnnotationChapterGroup(BaseModel):
+    """按章节分组的标注"""
+    chapter: Optional[str] = None
+    count: int
+    annotations: list[AnnotationResponse]
+
+
+class CrossBookAnnotationResponse(BaseModel):
+    """跨书标注（含书籍上下文）"""
+    id: str
+    content_id: str
+    book_title: str
+    book_author: Optional[str] = None
+    cover_url: Optional[str] = None
+    location: Optional[str] = None
+    type: str
+    color: str
+    selected_text: Optional[str] = None
+    note: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
 
 class BookmarkCreate(BaseModel):

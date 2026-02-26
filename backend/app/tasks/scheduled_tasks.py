@@ -524,10 +524,20 @@ async def cleanup_records():
                         f"(kept {MIN_KEEP_PER_SOURCE} most recent)"
                     )
 
+        # ---- 同步进度记录清理（7 天前的已终态记录）----
+        from app.models.sync_progress import SyncTaskProgress
+
+        sync_progress_cutoff = now - timedelta(days=7)
+        total_sync_deleted = db.query(SyncTaskProgress).filter(
+            SyncTaskProgress.status.in_(["completed", "failed"]),
+            SyncTaskProgress.created_at < sync_progress_cutoff,
+        ).delete(synchronize_session=False)
+
         db.commit()
         logger.info(
             f"Records cleanup: {total_exec_deleted} executions, "
-            f"{total_coll_deleted} collection records deleted. "
+            f"{total_coll_deleted} collection records, "
+            f"{total_sync_deleted} sync progress records deleted. "
             f"Protected records per source: {MIN_KEEP_PER_SOURCE}"
         )
 

@@ -1,4 +1,4 @@
-"""电子书同步 API — 接收本地脚本推送的阅读数据（通用化，支持多平台）"""
+"""视频同步 API — 接收外置脚本推送的视频数据（支持 B站等平台）"""
 
 import logging
 import uuid
@@ -9,22 +9,20 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.models.content import ContentItem, SourceConfig, SourceType
-from app.models.ebook import BookAnnotation
 from app.schemas import error_response
-from app.schemas.ebook_sync import (
-    EbookSyncRequest,
-    EbookSyncResponse,
-    EbookSyncStatus,
+from app.schemas.video_sync import (
+    VideoSyncRequest,
+    VideoSyncResponse,
+    VideoSyncStatus,
 )
-from app.services.sync.upsert import upsert_ebooks
+from app.services.sync.upsert import upsert_videos
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # 平台名称映射（source_type value → 显示名称）
 _PLATFORM_NAMES = {
-    SourceType.SYNC_APPLE_BOOKS.value: "Apple Books",
-    SourceType.SYNC_WECHAT_READ.value: "微信读书",
+    SourceType.SYNC_BILIBILI.value: "Bilibili",
 }
 
 
@@ -35,8 +33,8 @@ def _platform_name(source_type: str) -> str:
 # ─── Setup ────────────────────────────────────────────────────────────────────
 
 @router.post("/sync/setup")
-async def setup_ebook_sync(
-    source_type: str = Query(SourceType.SYNC_APPLE_BOOKS.value),
+async def setup_video_sync(
+    source_type: str = Query(SourceType.SYNC_BILIBILI.value),
     db: Session = Depends(get_db),
 ):
     """首次设置 — 自动创建 sync.* 类型的 SourceConfig"""
@@ -70,7 +68,7 @@ async def setup_ebook_sync(
     db.add(source)
     db.commit()
 
-    logger.info(f"Created ebook sync source: {source.id} ({source_type})")
+    logger.info(f"Created video sync source: {source.id} ({source_type})")
     return {
         "code": 0,
         "data": {"source_id": source.id},
@@ -82,55 +80,26 @@ async def setup_ebook_sync(
 
 @router.get("/sync/status")
 async def get_sync_status(
-    source_id: str | None = Query(None),
+    source_id: str = Query(...),
     db: Session = Depends(get_db),
 ):
-    """同步状态 — 返回最后同步时间、书籍数、标注数
+    """同步状态 — 返回最后同步时间、视频总数"""
+    source = db.get(SourceConfig, source_id)
+    if not source or not source.source_type.startswith("sync."):
+        return {"code": 0, "data": VideoSyncStatus().model_dump(), "message": "ok"}
 
-    - 传 source_id: 返回指定源的状态
-    - 不传: 聚合所有 sync.* 源的状态
-    """
-    if source_id:
-        source = db.get(SourceConfig, source_id)
-        if not source or not source.source_type.startswith("sync."):
-            return {"code": 0, "data": EbookSyncStatus().model_dump(), "message": "ok"}
-        sources = [source]
-    else:
-        sources = db.query(SourceConfig).filter(
-            SourceConfig.source_type.like("sync.%"),
-        ).all()
-
-    if not sources:
-        return {"code": 0, "data": EbookSyncStatus().model_dump(), "message": "ok"}
-
-    source_ids = [s.id for s in sources]
-
-    total_books = db.query(func.count(ContentItem.id)).filter(
-        ContentItem.source_id.in_(source_ids),
+    total_videos = db.query(func.count(ContentItem.id)).filter(
+        ContentItem.source_id == source.id,
     ).scalar() or 0
 
-    total_annotations = (
-        db.query(func.count(BookAnnotation.id))
-        .join(ContentItem, ContentItem.id == BookAnnotation.content_id)
-        .filter(ContentItem.source_id.in_(source_ids))
-        .scalar() or 0
-    )
-
-    # 最新同步时间 = 所有源中最晚的 last_collected_at
-    last_sync = max(
-        (s.last_collected_at for s in sources if s.last_collected_at),
-        default=None,
-    )
-
-    first_source_id = sources[0].id
+    last_sync = source.last_collected_at
 
     return {
         "code": 0,
-        "data": EbookSyncStatus(
-            source_id=first_source_id,
+        "data": VideoSyncStatus(
+            source_id=source.id,
             last_sync_at=last_sync.isoformat() if last_sync else None,
-            total_books=total_books,
-            total_annotations=total_annotations,
+            total_videos=total_videos,
         ).model_dump(),
         "message": "ok",
     }
@@ -139,25 +108,23 @@ async def get_sync_status(
 # ─── Full Sync ────────────────────────────────────────────────────────────────
 
 @router.post("/sync")
-async def sync_ebooks(
-    body: EbookSyncRequest,
+async def sync_videos(
+    body: VideoSyncRequest,
     db: Session = Depends(get_db),
 ):
-    """全量/增量同步 — 接收书籍元数据、阅读进度、标注"""
+    """全量/增量同步 — 接收视频元数据、播放进度"""
     source = db.get(SourceConfig, body.source_id)
     if not source or not source.source_type.startswith("sync."):
         return error_response(404, "同步源不存在")
 
     # 将 Pydantic 模型转为 dict 列表
-    books_dicts = [b.model_dump(by_alias=False) for b in body.books]
-    stats = upsert_ebooks(db, source, books_dicts)
+    videos_dicts = [v.model_dump(by_alias=False) for v in body.videos]
+    stats = upsert_videos(db, source, videos_dicts)
 
     platform = _platform_name(source.source_type)
     logger.info(
-        f"{platform} sync completed: "
-        f"{stats['new_books']} new, {stats['updated_books']} updated, "
-        f"{stats['new_annotations']} new annotations, "
-        f"{stats['deleted_annotations']} deleted annotations"
+        f"{platform} video sync completed: "
+        f"{stats['new_videos']} new, {stats['updated_videos']} updated"
     )
 
     return {

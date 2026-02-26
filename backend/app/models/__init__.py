@@ -7,3 +7,4 @@ from app.models.pipeline import PipelineTemplate, PipelineExecution, PipelineSte
 from app.models.prompt_template import PromptTemplate  # noqa: F401
 from app.models.system_setting import SystemSetting  # noqa: F401
 from app.models.ebook import ReadingProgress, BookAnnotation, BookBookmark  # noqa: F401
+from app.models.sync_progress import SyncTaskProgress  # noqa: F401

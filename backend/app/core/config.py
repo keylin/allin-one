@@ -22,7 +22,6 @@ class Settings(BaseSettings):
     CORS_ORIGINS: str = "*"
 
     # Application
-    APP_PORT: int = 8000
     LOG_LEVEL: str = "INFO"
 
     # File Storage

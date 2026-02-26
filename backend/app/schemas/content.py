@@ -45,6 +45,8 @@ class ContentResponse(BaseModel):
     tags: Optional[list[str]] = None
     sentiment: Optional[str] = None
     has_thumbnail: bool = False
+    # 派生内容类型（ebook > video > audio > image > text）
+    content_type: str = "text"
     # 媒体项摘要
     media_items: list[MediaItemSummary] = []
 

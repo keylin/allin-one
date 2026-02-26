@@ -43,10 +43,13 @@ class SourceType(str, Enum):
     # 文件
     FILE_UPLOAD = "file.upload"      # 用户上传文件
     # 账号授权
-    ACCOUNT_BILIBILI = "account.bilibili"  # B站账号
     ACCOUNT_GENERIC = "account.generic"    # 其他平台账号
     # 播客
     PODCAST_APPLE = "podcast.apple"  # Apple Podcasts
+    # 同步
+    SYNC_APPLE_BOOKS = "sync.apple_books"  # Apple Books 同步
+    SYNC_WECHAT_READ = "sync.wechat_read"  # 微信读书同步
+    SYNC_BILIBILI = "sync.bilibili"        # B站视频同步
     # 用户记录
     USER_NOTE = "user.note"          # 日常笔记
     SYSTEM_NOTIFICATION = "system.notification"  # 系统消息
@@ -65,6 +68,7 @@ _SOURCE_CATEGORY_MAP = {
     "web": SourceCategory.NETWORK,
     "account": SourceCategory.NETWORK,
     "file": SourceCategory.USER,
+    "sync": SourceCategory.USER,
     "user": SourceCategory.USER,
     "system": SourceCategory.USER,
 }

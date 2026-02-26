@@ -2,7 +2,7 @@
 
 import uuid
 
-from sqlalchemy import Column, String, DateTime, Text, Integer, Float, ForeignKey, Index
+from sqlalchemy import Column, String, DateTime, Text, Integer, Float, ForeignKey, Index, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from app.core.database import Base
@@ -43,9 +43,12 @@ class BookAnnotation(Base):
     id = Column(String, primary_key=True, default=_uuid)
     content_id = Column(String, ForeignKey("content_items.id", ondelete="CASCADE"), nullable=False)
 
+    external_id = Column(String, nullable=True, index=True)  # 外部标注 ID（如 Apple Books UUID）
+
     # 定位
-    cfi_range = Column(Text, nullable=False)           # CFI 范围
+    cfi_range = Column(Text, nullable=True)            # CFI 范围（本地标注必填，外部同步可为空）
     section_index = Column(Integer, nullable=True)
+    location = Column(String, nullable=True)           # 外部定位信息（如 Apple Books 章节位置）
 
     # 内容
     type = Column(String, default="highlight")         # highlight / note
@@ -60,6 +63,7 @@ class BookAnnotation(Base):
 
     __table_args__ = (
         Index("ix_annotation_content", "content_id"),
+        UniqueConstraint("content_id", "external_id", name="uq_annotation_external"),
     )
 
 

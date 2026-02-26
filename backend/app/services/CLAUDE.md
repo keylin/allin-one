@@ -14,10 +14,10 @@ services/
 │   ├── web_scraper.py   # ScraperCollector (L1/L2/L3)
 │   ├── akshare.py       # AkShareCollector (金融数据)
 │   ├── podcast.py       # PodcastCollector (Apple Podcasts)
-│   ├── bilibili.py      # BilibiliCollector (B站账号 API)
 │   ├── generic_account.py # GenericAccountCollector
 │   ├── file_upload.py   # FileUploadCollector
 │   └── utils.py         # 采集器工具函数
+│   # 注: sync.* 类型无 Collector，由外部脚本通过 API 推送 (见 api/routes/video_sync.py, ebook_sync.py)
 ├── scheduling/          # 智能调度服务
 │   ├── calculator.py    # SchedulingService (间隔计算)
 │   ├── config.py        # SchedulingConfig (调度参数)
@@ -82,6 +82,11 @@ class BaseCollector(ABC):
 SourceType → Collector 映射见 `app/tasks/collection_tasks.py` 中的 COLLECTOR_MAP。
 
 没有 BilibiliVideoCollector 或 YouTubeVideoCollector。B站/YouTube 视频通过 RSSHub 发现，由流水线的 `localize_media` 步骤处理。
+
+`sync.*` 类型（Apple Books、微信读书、B站视频）不走 Collector，由外部脚本通过同步 API 推送:
+- 电子书同步: `api/routes/ebook_sync.py` (sync.apple_books, sync.wechat_read)
+- 视频同步: `api/routes/video_sync.py` (sync.bilibili)
+- 外部脚本: `scripts/bilibili-sync.py`, `scripts/wechat-read-sync.py`
 
 ## 步骤处理器开发
 
