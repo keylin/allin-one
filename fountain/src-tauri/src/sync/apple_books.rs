@@ -112,7 +112,7 @@ pub async fn run_sync(
                 None => true, // new book — always sync
                 Some(entry) => {
                     entry.annotation_count != annot_count
-                        || (entry.reading_progress - book.reading_progress).abs() > 0.005
+                        || (entry.reading_progress - book.reading_progress).abs() > 0.001
                 }
             }
         })
@@ -195,14 +195,20 @@ fn find_apple_books_db(settings: &AppSettings) -> Result<PathBuf> {
             return Ok(base);
         }
 
-        // Fallback for older macOS
-        let base2 =
-            PathBuf::from(home).join("Library/Application Support/iBooks");
+        // Fallback for older macOS (iBooks era)
+        let base2 = PathBuf::from(&home).join("Library/Application Support/iBooks");
         if base2.exists() {
             return Ok(base2);
         }
 
-        bail!("Apple Books database not found. Please verify iBooks/Books app is installed.");
+        // Fallback for macOS 14+ (Books.app container rename)
+        let base3 =
+            PathBuf::from(home).join("Library/Containers/com.apple.Books/Data/Documents");
+        if base3.exists() {
+            return Ok(base3);
+        }
+
+        bail!("Apple Books database not found. Please verify Books/iBooks app is installed.");
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -327,11 +333,13 @@ fn read_annotations(db_path: &Path) -> Result<Vec<Annotation>> {
 
     let annots = stmt.query_map([], |row| {
         let created_ts: Option<f64> = row.get(7)?;
-        let created_at = created_ts.map(|ts| {
+        // CoreData epoch offset: seconds since 2001-01-01. Reject clearly invalid timestamps.
+        let created_at = created_ts.and_then(|ts| {
+            if ts < 0.0 || ts > 2_000_000_000.0 {
+                return None; // reject negative or far-future timestamps
+            }
             let unix_ts = ts as i64 + COREDATA_EPOCH_OFFSET;
-            chrono::DateTime::from_timestamp(unix_ts, 0)
-                .map(|dt| dt.to_rfc3339())
-                .unwrap_or_default()
+            chrono::DateTime::from_timestamp(unix_ts, 0).map(|dt| dt.to_rfc3339())
         });
 
         Ok(Annotation {

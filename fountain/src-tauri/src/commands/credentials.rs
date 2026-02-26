@@ -233,18 +233,19 @@ fn save_bilibili_cookies(set_cookie_headers: &[String]) -> Result<(), String> {
         }
     }
 
-    if let Some(v) = sessdata {
-        credential_store::set_credential(KEY_BILIBILI_SESSDATA, &v)
-            .map_err(|e| e.to_string())?;
-    }
-    if let Some(v) = bili_jct {
-        credential_store::set_credential(KEY_BILIBILI_BILI_JCT, &v)
-            .map_err(|e| e.to_string())?;
-    }
-    if let Some(v) = buvid3 {
-        credential_store::set_credential(KEY_BILIBILI_BUVID3, &v)
-            .map_err(|e| e.to_string())?;
-    }
+    // All three cookies must be present before writing any — avoids partial Keychain state
+    let (Some(sessdata), Some(bili_jct), Some(buvid3)) = (sessdata, bili_jct, buvid3) else {
+        return Err(
+            "Incomplete cookie set from QR login (missing SESSDATA, bili_jct, or buvid3)".into(),
+        );
+    };
+
+    credential_store::set_credential(KEY_BILIBILI_SESSDATA, &sessdata)
+        .map_err(|e| e.to_string())?;
+    credential_store::set_credential(KEY_BILIBILI_BILI_JCT, &bili_jct)
+        .map_err(|e| e.to_string())?;
+    credential_store::set_credential(KEY_BILIBILI_BUVID3, &buvid3)
+        .map_err(|e| e.to_string())?;
 
     Ok(())
 }

@@ -138,11 +138,25 @@ pub(crate) async fn run_apple_books_sync(app: &AppHandle, settings: &AppSettings
 }
 
 fn load_apple_books_manifest(app: &AppHandle) -> HashMap<String, BookManifestEntry> {
-    app.store(SETTINGS_STORE)
-        .ok()
-        .and_then(|store| store.get(APPLE_BOOKS_MANIFEST_KEY))
-        .and_then(|v| serde_json::from_value(v).ok())
-        .unwrap_or_default()
+    let store = match app.store(SETTINGS_STORE) {
+        Ok(s) => s,
+        Err(e) => {
+            log::warn!("Failed to open settings store for manifest: {}", e);
+            return HashMap::new();
+        }
+    };
+
+    let Some(val) = store.get(APPLE_BOOKS_MANIFEST_KEY) else {
+        return HashMap::new(); // first run
+    };
+
+    match serde_json::from_value(val) {
+        Ok(manifest) => manifest,
+        Err(e) => {
+            log::warn!("Apple Books manifest corrupted, starting fresh ({})", e);
+            HashMap::new()
+        }
+    }
 }
 
 fn save_apple_books_manifest(app: &AppHandle, manifest: &HashMap<String, BookManifestEntry>) {
@@ -316,6 +330,39 @@ fn update_platform_success(app: &AppHandle, platform: Platform, count: u32) {
             let _ = store.save();
         }
         let _ = app.emit("sync-status-changed", &state);
+    }
+}
+
+/// On startup, reset any stale "Syncing" statuses left by a previous crash.
+/// Called once before the scheduler starts.
+pub(crate) fn reset_stale_sync_state(app: &AppHandle) {
+    if let Ok(store) = app.store(SETTINGS_STORE) {
+        let mut state: SyncState = store
+            .get(SYNC_STATE_KEY)
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
+
+        let mut changed = false;
+        if state.apple_books_status == SyncPlatformStatus::Syncing {
+            state.apple_books_status = SyncPlatformStatus::Idle;
+            changed = true;
+        }
+        if state.wechat_read_status == SyncPlatformStatus::Syncing {
+            state.wechat_read_status = SyncPlatformStatus::Idle;
+            changed = true;
+        }
+        if state.bilibili_status == SyncPlatformStatus::Syncing {
+            state.bilibili_status = SyncPlatformStatus::Idle;
+            changed = true;
+        }
+
+        if changed {
+            if let Ok(val) = serde_json::to_value(&state) {
+                store.set(SYNC_STATE_KEY, val);
+                let _ = store.save();
+            }
+            log::info!("Reset stale Syncing statuses to Idle on startup");
+        }
     }
 }
 

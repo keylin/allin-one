@@ -4,12 +4,17 @@ mod credential_store;
 mod scheduler;
 mod sync;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tauri::{
+    menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     App, Listener, Manager, WebviewUrl, WebviewWindowBuilder,
 };
-use tokio::sync::RwLock;
+use tokio::sync::{oneshot, RwLock};
+
+/// Holds the sender half of the scheduler shutdown channel.
+/// Stored in Tauri managed state so the tray Quit handler can trigger shutdown.
+struct ShutdownSender(Mutex<Option<oneshot::Sender<()>>>);
 
 pub fn run() {
     env_logger::init();
@@ -39,9 +44,16 @@ pub fn run() {
             commands::settings::test_server_connection,
         ])
         .setup(|app| {
+            // Create shutdown channel before tray and scheduler so both can access it
+            let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+            app.manage(ShutdownSender(Mutex::new(Some(shutdown_tx))));
+
+            // Reset any stale "Syncing" state left by a previous crash
+            commands::sync::reset_stale_sync_state(app.handle());
+
             setup_tray(app)?;
             setup_windows(app)?;
-            start_scheduler(app);
+            start_scheduler(app, shutdown_rx);
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -49,8 +61,26 @@ pub fn run() {
 }
 
 fn setup_tray(app: &mut App) -> tauri::Result<()> {
+    // Tray menu: Quit item for graceful exit
+    let quit_item = MenuItem::with_id(app, "quit", "Quit Fountain", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&quit_item])?;
+
     let tray = TrayIconBuilder::with_id("main-tray")
         .tooltip("Fountain")
+        .menu(&menu)
+        .on_menu_event(|app, event| {
+            if event.id.as_ref() == "quit" {
+                // Send shutdown signal to the scheduler before exiting
+                if let Some(state) = app.try_state::<ShutdownSender>() {
+                    if let Ok(mut guard) = state.0.lock() {
+                        if let Some(tx) = guard.take() {
+                            let _ = tx.send(());
+                        }
+                    }
+                }
+                app.exit(0);
+            }
+        })
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
@@ -94,7 +124,7 @@ fn setup_windows(app: &mut App) -> tauri::Result<()> {
     Ok(())
 }
 
-fn start_scheduler(app: &mut App) {
+fn start_scheduler(app: &mut App, shutdown: oneshot::Receiver<()>) {
     use tauri_plugin_store::StoreExt;
 
     // Load initial settings from store
@@ -109,7 +139,7 @@ fn start_scheduler(app: &mut App) {
     let app_handle = app.handle().clone();
     let sched = scheduler::Scheduler::new(app_handle, settings);
 
-    // Listen for settings changes to update scheduler
+    // Listen for settings changes to update scheduler in-flight
     let app_handle = app.handle().clone();
     app_handle.listen("settings-changed", {
         let sched_settings = sched.settings();
@@ -125,7 +155,7 @@ fn start_scheduler(app: &mut App) {
         }
     });
 
-    tokio::spawn(async move { sched.run().await });
+    tokio::spawn(async move { sched.run(shutdown).await });
 }
 
 fn toggle_main_window(app: &tauri::AppHandle) {
