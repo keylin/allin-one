@@ -5,6 +5,7 @@ import { listContent, getContent, analyzeContent, toggleFavorite, listSourceOpti
 import { useToast } from '@/composables/useToast'
 import { useSwipe } from '@/composables/useSwipe'
 import { usePullToRefresh } from '@/composables/usePullToRefresh'
+import { useDoubleTapFavorite } from '@/composables/useDoubleTapFavorite'
 import { useAutoRead } from '@/composables/useAutoRead'
 import { useContentChat } from '@/composables/useContentChat'
 import FeedCard from '@/components/feed-card.vue'
@@ -145,6 +146,7 @@ const applyingEnrich = ref(null)
 // --- Detail content ref ---
 const detailContentRef = ref(null)
 const mobileDetailContentRef = ref(null)
+const mobileScrollRef = ref(null)
 
 // --- Mobile detail overlay ---
 const showMobileDetail = ref(false)
@@ -714,11 +716,20 @@ const swipeDismissing = ref(false)
 
 // 初始化手势
 useSwipe(mobileDetailRef, {
-  threshold: 80,
+  threshold: 60,
   onSwipeRight: () => {
     swipeDismissing.value = true
     closeMobileDetail()
   }
+})
+
+// 双击收藏（移动端详情内容区）
+const {
+  heartVisible: mobileHeartVisible,
+  heartX: mobileHeartX,
+  heartY: mobileHeartY,
+} = useDoubleTapFavorite(mobileScrollRef, {
+  onFavorite: handleDetailFavorite,
 })
 
 // 下拉刷新
@@ -1245,7 +1256,28 @@ onUnmounted(() => {
           </div>
 
           <div v-else-if="detailContent" class="flex-1 min-h-0 flex flex-col">
-            <div class="flex-1 overflow-y-auto">
+            <div ref="mobileScrollRef" class="flex-1 overflow-y-auto">
+              <!-- 双击爱心动画（fixed 定位，位置为视口坐标） -->
+              <Teleport to="body">
+                <Transition
+                  enter-active-class="transition-all duration-300 ease-out"
+                  enter-from-class="scale-0 opacity-100"
+                  enter-to-class="scale-100 opacity-100"
+                  leave-active-class="transition-all duration-500 ease-in"
+                  leave-from-class="scale-100 opacity-100"
+                  leave-to-class="scale-150 opacity-0"
+                >
+                  <div
+                    v-if="mobileHeartVisible"
+                    class="fixed z-[9999] pointer-events-none -translate-x-1/2 -translate-y-1/2"
+                    :style="{ left: mobileHeartX + 'px', top: mobileHeartY + 'px' }"
+                  >
+                    <svg class="w-14 h-14 text-rose-500 drop-shadow-lg" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M11.645 20.91l-.007-.003-.022-.012a15.247 15.247 0 01-.383-.218 25.18 25.18 0 01-4.244-3.17C4.688 15.36 2.25 12.174 2.25 8.25 2.25 5.322 4.714 3 7.688 3A5.5 5.5 0 0112 5.052 5.5 5.5 0 0116.313 3c2.973 0 5.437 2.322 5.437 5.25 0 3.925-2.438 7.111-4.739 9.256a25.175 25.175 0 01-4.244 3.17 15.247 15.247 0 01-.383.219l-.022.012-.007.004-.003.001a.752.752 0 01-.704 0l-.003-.001z" />
+                    </svg>
+                  </div>
+                </Transition>
+              </Teleport>
               <DetailContent
                 ref="mobileDetailContentRef"
                 :item="detailContent"

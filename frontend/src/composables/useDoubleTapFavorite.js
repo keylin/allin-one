@@ -11,7 +11,7 @@ const INTERACTIVE_SELECTOR = 'a, button, input, textarea, select, img, video, au
  * @param {Ref} targetRef - 绑定目标元素
  * @param {Object} options
  * @param {Function} options.onFavorite - 双击时调用
- * @returns {{ heartVisible, heartX, heartY }} - 爱心动画位置（相对于目标元素左上角）
+ * @returns {{ heartVisible, heartX, heartY }} - 爱心动画位置（视口坐标，配合 fixed 定位使用）
  */
 export function useDoubleTapFavorite(targetRef, options = {}) {
   const { onFavorite } = options
@@ -45,10 +45,9 @@ export function useDoubleTapFavorite(targetRef, options = {}) {
       // 双击确认 → 触发收藏
       if (onFavorite) onFavorite()
 
-      // 爱心显示在点击位置（相对于目标元素）
-      const rect = currentEl ? currentEl.getBoundingClientRect() : { left: 0, top: 0 }
-      heartX.value = x - rect.left
-      heartY.value = y - rect.top
+      // 爱心显示在点击位置（视口坐标，配合 fixed 定位使用）
+      heartX.value = x
+      heartY.value = y
       heartVisible.value = true
 
       // 触觉反馈

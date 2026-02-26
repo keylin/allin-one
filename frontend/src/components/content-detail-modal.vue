@@ -3,6 +3,8 @@ import { ref, computed, watch, watchEffect, toRef, onBeforeUnmount } from 'vue'
 import { getContent, analyzeContent } from '@/api/content'
 import { useScrollLock } from '@/composables/useScrollLock'
 import { useContentChat } from '@/composables/useContentChat'
+import { useSwipe } from '@/composables/useSwipe'
+import { useDoubleTapFavorite } from '@/composables/useDoubleTapFavorite'
 import ChatPanel from '@/components/feed/chat-panel.vue'
 import MarkdownIt from 'markdown-it'
 import DOMPurify from 'dompurify'
@@ -23,6 +25,29 @@ const props = defineProps({
 
 const emit = defineEmits(['close', 'favorite', 'note', 'prev', 'next'])
 useScrollLock(toRef(props, 'visible'))
+
+// 移动端：右滑关闭
+const modalCardRef = ref(null)
+const swipeDismissing = ref(false)
+
+useSwipe(modalCardRef, {
+  threshold: 60,
+  onSwipeRight: () => {
+    swipeDismissing.value = true
+    emit('close')
+  },
+})
+
+// 移动端：双击收藏
+const modalScrollRef = ref(null)
+
+const {
+  heartVisible: modalHeartVisible,
+  heartX: modalHeartX,
+  heartY: modalHeartY,
+} = useDoubleTapFavorite(modalScrollRef, {
+  onFavorite: handleFavorite,
+})
 
 const content = ref(null)
 const loading = ref(false)
@@ -328,16 +353,17 @@ function formatTime(t) {
     enter-active-class="transition-all duration-200 ease-out"
     enter-from-class="opacity-0"
     enter-to-class="opacity-100"
-    leave-active-class="transition-all duration-150 ease-in"
-    leave-from-class="opacity-100"
-    leave-to-class="opacity-0"
+    :leave-active-class="swipeDismissing ? '' : 'transition-all duration-150 ease-in'"
+    :leave-from-class="swipeDismissing ? '' : 'opacity-100'"
+    :leave-to-class="swipeDismissing ? '' : 'opacity-0'"
+    @after-leave="swipeDismissing = false"
   >
     <div
       v-if="visible"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm md:p-4"
+      class="fixed inset-0 z-50 md:flex md:items-center md:justify-center md:bg-slate-900/40 md:backdrop-blur-sm md:p-4"
       @click.self="emit('close')"
     >
-      <div class="bg-white md:rounded-2xl shadow-2xl md:max-w-4xl w-full h-full md:h-auto md:max-h-[90vh] overflow-hidden flex flex-col">
+      <div ref="modalCardRef" class="bg-white md:rounded-2xl shadow-2xl md:max-w-4xl w-full h-full md:h-auto md:max-h-[90vh] overflow-hidden flex flex-col">
         <!-- Header -->
         <div class="flex items-start justify-between p-3 sm:p-4 md:p-6 border-b border-slate-100">
           <div class="flex-1 min-w-0 pr-2 md:pr-4">
@@ -360,7 +386,29 @@ function formatTime(t) {
         </div>
 
         <!-- Content -->
-        <div class="flex-1 overflow-y-auto overscroll-contain p-3 md:p-6">
+        <div ref="modalScrollRef" class="flex-1 overflow-y-auto overscroll-contain p-3 md:p-6">
+          <!-- 双击爱心动画（移动端，fixed 定位，位置为视口坐标） -->
+          <Teleport to="body">
+            <Transition
+              enter-active-class="transition-all duration-300 ease-out"
+              enter-from-class="scale-0 opacity-100"
+              enter-to-class="scale-100 opacity-100"
+              leave-active-class="transition-all duration-500 ease-in"
+              leave-from-class="scale-100 opacity-100"
+              leave-to-class="scale-150 opacity-0"
+            >
+              <div
+                v-if="modalHeartVisible"
+                class="fixed z-[9999] pointer-events-none -translate-x-1/2 -translate-y-1/2"
+                :style="{ left: modalHeartX + 'px', top: modalHeartY + 'px' }"
+              >
+                <svg class="w-14 h-14 text-rose-500 drop-shadow-lg" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M11.645 20.91l-.007-.003-.022-.012a15.247 15.247 0 01-.383-.218 25.18 25.18 0 01-4.244-3.17C4.688 15.36 2.25 12.174 2.25 8.25 2.25 5.322 4.714 3 7.688 3A5.5 5.5 0 0112 5.052 5.5 5.5 0 0116.313 3c2.973 0 5.437 2.322 5.437 5.25 0 3.925-2.438 7.111-4.739 9.256a25.175 25.175 0 01-4.244 3.17 15.247 15.247 0 01-.383.219l-.022.012-.007.004-.003.001a.752.752 0 01-.704 0l-.003-.001z" />
+                </svg>
+              </div>
+            </Transition>
+          </Teleport>
+
           <div v-if="loading" class="flex items-center justify-center py-16">
             <svg class="w-8 h-8 animate-spin text-slate-200" fill="none" viewBox="0 0 24 24">
               <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>

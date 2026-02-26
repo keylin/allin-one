@@ -123,14 +123,14 @@ export function useSwipe(targetRef, options = {}) {
 
     // 未触发手势 → 回弹动画
     if (!triggered && el) {
-      el.style.transition = 'transform 0.2s ease-out'
+      el.style.transition = 'transform 0.15s ease-out'
       el.style.transform = ''
       const onEnd = () => {
         el.removeEventListener('transitionend', onEnd)
         cleanupEl(el)
       }
       el.addEventListener('transitionend', onEnd, { once: true })
-      setTimeout(() => cleanupEl(el), 220)
+      setTimeout(() => cleanupEl(el), 170)
     }
   }
 
