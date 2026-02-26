@@ -33,14 +33,17 @@ pub async fn run_sync(settings: &AppSettings) -> Result<u32> {
 
     // Build WeChat Read HTTP client with cookies
     let cookie = format!("wr_skey={}; wr_vid={}", skey, vid);
+    let mut default_headers = reqwest::header::HeaderMap::new();
+    let cookie_val = reqwest::header::HeaderValue::try_from(cookie.as_str())
+        .context("Invalid WeChat Read cookie format (non-ASCII characters in credentials)")?;
+    default_headers.insert("Cookie", cookie_val);
+    default_headers.insert(
+        "User-Agent",
+        reqwest::header::HeaderValue::from_static("WeRead/8.0 Mozilla/5.0"),
+    );
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
-        .default_headers({
-            let mut h = reqwest::header::HeaderMap::new();
-            h.insert("Cookie", cookie.parse().unwrap());
-            h.insert("User-Agent", "WeRead/8.0 Mozilla/5.0".parse().unwrap());
-            h
-        })
+        .default_headers(default_headers)
         .build()?;
 
     // Fetch bookshelf
@@ -60,7 +63,9 @@ pub async fn run_sync(settings: &AppSettings) -> Result<u32> {
     // Check for refreshed cookies in response headers
     let new_skey = extract_cookie_from_response(&shelf_resp, "wr_skey");
     if let Some(new_val) = new_skey {
-        let _ = credential_store::set_credential(credential_store::KEY_WECHAT_READ_SKEY, &new_val);
+        if let Err(e) = credential_store::set_credential(credential_store::KEY_WECHAT_READ_SKEY, &new_val) {
+            log::warn!("Failed to refresh WeChat Read skey in Keychain: {}", e);
+        }
     }
 
     let shelf: Value = shelf_resp.json().await?;
@@ -71,11 +76,11 @@ pub async fn run_sync(settings: &AppSettings) -> Result<u32> {
 
     // Three-step protocol
     let source_id = api_client
-        .ebook_setup("wechat_read", &vid)
+        .ebook_setup("sync.wechat_read")
         .await
         .context("ebook setup failed")?;
 
-    let last_sync_at = api_client.ebook_status(source_id).await.unwrap_or(None);
+    let last_sync_at = api_client.ebook_status(&source_id).await.unwrap_or(None);
     let last_sync_ts: Option<i64> = last_sync_at
         .as_deref()
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())

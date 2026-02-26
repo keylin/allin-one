@@ -46,10 +46,8 @@ pub fn save_settings(app: AppHandle, settings: AppSettings) -> Result<(), String
         autostart.disable().map_err(|e| e.to_string())?;
     }
 
-    // Notify scheduler of settings change
-    if let Ok(json) = serde_json::to_string(&settings) {
-        let _ = app.emit("settings-changed", json);
-    }
+    // Notify scheduler of settings change (emit struct directly to avoid double serialization)
+    let _ = app.emit("settings-changed", &settings);
 
     Ok(())
 }

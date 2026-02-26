@@ -15,6 +15,8 @@ pub struct QrPollResponse {
     pub code: i32,
     pub message: String,
     pub is_success: bool,
+    /// true when code == 86038 (QR code expired), frontend should stop polling
+    pub is_expired: bool,
 }
 
 #[command]
@@ -156,6 +158,7 @@ pub async fn poll_bilibili_qr_status(qrcode_key: String) -> Result<QrPollRespons
         .to_string();
 
     let is_success = code == 0;
+    let is_expired = code == 86038;
     if is_success {
         // Parse and store cookies
         save_bilibili_cookies(&cookies)?;
@@ -165,6 +168,7 @@ pub async fn poll_bilibili_qr_status(qrcode_key: String) -> Result<QrPollRespons
         code,
         message,
         is_success,
+        is_expired,
     })
 }
 

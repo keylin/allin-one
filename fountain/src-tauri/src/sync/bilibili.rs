@@ -9,6 +9,7 @@ use crate::sync::api_client::ApiClient;
 
 const BILI_API: &str = "https://api.bilibili.com";
 const BATCH_SIZE: usize = 20;
+const MAX_PAGES: u32 = 500;
 
 pub async fn run_sync(settings: &AppSettings) -> Result<u32> {
     if settings.server_url.is_empty() {
@@ -38,15 +39,23 @@ pub async fn run_sync(settings: &AppSettings) -> Result<u32> {
         .unwrap_or_default();
     let api_client = ApiClient::new(settings.server_url.clone(), api_key);
 
+    let mut default_headers = reqwest::header::HeaderMap::new();
+    let cookie_val = reqwest::header::HeaderValue::try_from(cookie.as_str())
+        .context("Invalid Bilibili cookie format (non-ASCII characters in credentials)")?;
+    default_headers.insert("Cookie", cookie_val);
+    default_headers.insert(
+        "User-Agent",
+        reqwest::header::HeaderValue::from_static(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        ),
+    );
+    default_headers.insert(
+        "Referer",
+        reqwest::header::HeaderValue::from_static("https://www.bilibili.com"),
+    );
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
-        .default_headers({
-            let mut h = reqwest::header::HeaderMap::new();
-            h.insert("Cookie", cookie.parse().unwrap());
-            h.insert("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36".parse().unwrap());
-            h.insert("Referer", "https://www.bilibili.com".parse().unwrap());
-            h
-        })
+        .default_headers(default_headers)
         .build()?;
 
     // Get user info to verify auth + get uid
@@ -65,11 +74,11 @@ pub async fn run_sync(settings: &AppSettings) -> Result<u32> {
 
     // Three-step protocol
     let source_id = api_client
-        .video_setup("bilibili", &uid_str)
+        .video_setup("sync.bilibili")
         .await
         .context("video setup failed")?;
 
-    let last_sync_at = api_client.video_status(source_id).await.unwrap_or(None);
+    let last_sync_at = api_client.video_status(&source_id).await.unwrap_or(None);
     let last_sync_ts: Option<i64> = last_sync_at
         .as_deref()
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
@@ -81,6 +90,9 @@ pub async fn run_sync(settings: &AppSettings) -> Result<u32> {
 
     for folder in &fav_folders {
         let folder_id = folder["id"].as_i64().unwrap_or(0);
+        if folder_id == 0 {
+            continue; // skip malformed folder entries
+        }
         let folder_title = folder["title"].as_str().unwrap_or("").to_string();
 
         let videos = fetch_folder_videos(&http, folder_id, last_sync_ts).await?;
@@ -210,6 +222,10 @@ async fn fetch_folder_videos(http: &reqwest::Client, folder_id: i64, since_ts: O
         }
 
         page += 1;
+        if page > MAX_PAGES {
+            log::warn!("Reached max pages ({MAX_PAGES}) for folder {folder_id}, stopping early");
+            break;
+        }
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
 

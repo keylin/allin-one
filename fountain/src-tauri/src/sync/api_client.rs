@@ -1,9 +1,9 @@
 /// Client for the Allin-One backend — implements the three-step sync protocol:
-///   1. POST /api/{ebook|video}/sync/setup  → source_id
+///   1. POST /api/{ebook|video}/sync/setup  → source_id (string UUID)
 ///   2. GET  /api/{ebook|video}/sync/status → last_sync_at
 ///   3. POST /api/{ebook|video}/sync        → upsert data
 use anyhow::{bail, Context, Result};
-use serde::{Deserialize, Serialize};
+use reqwest::header::HeaderValue;
 use serde_json::Value;
 
 #[derive(Clone)]
@@ -12,19 +12,6 @@ pub struct ApiClient {
     pub api_key: String,
     client: reqwest::Client,
 }
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct EbookSyncSetupRequest {
-    pub platform: String,
-    pub platform_user_id: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct VideoSyncSetupRequest {
-    pub platform: String,
-    pub platform_user_id: String,
-}
-
 
 impl ApiClient {
     pub fn new(base_url: String, api_key: String) -> Self {
@@ -43,26 +30,24 @@ impl ApiClient {
     fn auth_headers(&self) -> reqwest::header::HeaderMap {
         let mut headers = reqwest::header::HeaderMap::new();
         if !self.api_key.is_empty() {
-            headers.insert(
-                "X-API-Key",
-                self.api_key.parse().expect("Invalid API key header"),
-            );
+            // Use try_from to avoid panicking on malformed API keys from Keychain
+            if let Ok(val) = HeaderValue::try_from(&self.api_key) {
+                headers.insert("X-API-Key", val);
+            }
         }
         headers
     }
 
-    pub async fn ebook_setup(&self, platform: &str, user_id: &str) -> Result<i64> {
+    /// Setup sync source. `source_type` must be a valid sync.* SourceType value
+    /// (e.g. "sync.apple_books", "sync.wechat_read", "sync.bilibili").
+    /// Returns the source UUID string from the backend.
+    pub async fn ebook_setup(&self, source_type: &str) -> Result<String> {
         let url = format!("{}/api/ebook/sync/setup", self.base_url);
-        let body = EbookSyncSetupRequest {
-            platform: platform.to_string(),
-            platform_user_id: user_id.to_string(),
-        };
-
         let resp = self
             .client
             .post(&url)
             .headers(self.auth_headers())
-            .json(&body)
+            .query(&[("source_type", source_type)])
             .send()
             .await
             .context("ebook setup request failed")?;
@@ -72,17 +57,19 @@ impl ApiClient {
         }
 
         let data: Value = resp.json().await?;
-        data["source_id"]
-            .as_i64()
+        data["data"]["source_id"]
+            .as_str()
+            .map(|s| s.to_string())
             .context("Missing source_id in setup response")
     }
 
-    pub async fn ebook_status(&self, source_id: i64) -> Result<Option<String>> {
-        let url = format!("{}/api/ebook/sync/status?source_id={}", self.base_url, source_id);
+    pub async fn ebook_status(&self, source_id: &str) -> Result<Option<String>> {
+        let url = format!("{}/api/ebook/sync/status", self.base_url);
         let resp = self
             .client
             .get(&url)
             .headers(self.auth_headers())
+            .query(&[("source_id", source_id)])
             .send()
             .await
             .context("ebook status request failed")?;
@@ -92,7 +79,7 @@ impl ApiClient {
         }
 
         let data: Value = resp.json().await?;
-        Ok(data["last_sync_at"].as_str().map(|s| s.to_string()))
+        Ok(data["data"]["last_sync_at"].as_str().map(|s| s.to_string()))
     }
 
     pub async fn ebook_sync(&self, payload: Value) -> Result<Value> {
@@ -115,18 +102,15 @@ impl ApiClient {
         Ok(resp.json().await?)
     }
 
-    pub async fn video_setup(&self, platform: &str, user_id: &str) -> Result<i64> {
+    /// Setup video sync source. `source_type` must be a valid sync.* SourceType value
+    /// (e.g. "sync.bilibili"). Returns the source UUID string from the backend.
+    pub async fn video_setup(&self, source_type: &str) -> Result<String> {
         let url = format!("{}/api/video/sync/setup", self.base_url);
-        let body = VideoSyncSetupRequest {
-            platform: platform.to_string(),
-            platform_user_id: user_id.to_string(),
-        };
-
         let resp = self
             .client
             .post(&url)
             .headers(self.auth_headers())
-            .json(&body)
+            .query(&[("source_type", source_type)])
             .send()
             .await
             .context("video setup request failed")?;
@@ -136,17 +120,19 @@ impl ApiClient {
         }
 
         let data: Value = resp.json().await?;
-        data["source_id"]
-            .as_i64()
+        data["data"]["source_id"]
+            .as_str()
+            .map(|s| s.to_string())
             .context("Missing source_id in setup response")
     }
 
-    pub async fn video_status(&self, source_id: i64) -> Result<Option<String>> {
-        let url = format!("{}/api/video/sync/status?source_id={}", self.base_url, source_id);
+    pub async fn video_status(&self, source_id: &str) -> Result<Option<String>> {
+        let url = format!("{}/api/video/sync/status", self.base_url);
         let resp = self
             .client
             .get(&url)
             .headers(self.auth_headers())
+            .query(&[("source_id", source_id)])
             .send()
             .await
             .context("video status request failed")?;
@@ -156,7 +142,7 @@ impl ApiClient {
         }
 
         let data: Value = resp.json().await?;
-        Ok(data["last_sync_at"].as_str().map(|s| s.to_string()))
+        Ok(data["data"]["last_sync_at"].as_str().map(|s| s.to_string()))
     }
 
     pub async fn video_sync(&self, payload: Value) -> Result<Value> {

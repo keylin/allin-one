@@ -97,7 +97,7 @@ pub async fn run_sync(
 
     // Three-step protocol: setup → source_id
     let source_id = client
-        .ebook_setup("apple_books", "local")
+        .ebook_setup("sync.apple_books")
         .await
         .context("ebook setup failed")?;
 
