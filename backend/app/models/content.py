@@ -56,6 +56,8 @@ class SourceType(str, Enum):
     SYNC_DOUBAN_BOOKS  = "sync.douban_books"       # 豆瓣书单同步
     SYNC_DOUBAN_MOVIES = "sync.douban_movies"      # 豆瓣影单同步
     SYNC_ZHIHU         = "sync.zhihu"              # 知乎收藏夹同步
+    SYNC_GITHUB_STARS  = "sync.github_stars"       # GitHub Star 同步
+    SYNC_TWITTER       = "sync.twitter"            # Twitter/X 推文同步
     # 用户记录
     USER_NOTE = "user.note"          # 日常笔记
     SYSTEM_NOTIFICATION = "system.notification"  # 系统消息

@@ -23,6 +23,8 @@ pub enum Platform {
     ChromeBookmarks,
     Douban,
     Zhihu,
+    GithubStars,
+    Twitter,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -71,6 +73,14 @@ pub async fn sync_now(app: AppHandle) -> Result<Vec<SyncResult>, String> {
         let r = run_zhihu_sync(&app, &settings).await;
         results.push(r);
     }
+    if settings.github_stars_enabled {
+        let r = run_github_stars_sync(&app, &settings).await;
+        results.push(r);
+    }
+    if settings.twitter_enabled {
+        let r = run_twitter_sync(&app, &settings).await;
+        results.push(r);
+    }
 
     Ok(results)
 }
@@ -88,6 +98,8 @@ pub async fn sync_platform(app: AppHandle, platform: Platform) -> Result<SyncRes
         Platform::ChromeBookmarks => Ok(run_chrome_bookmarks_sync(&app, &settings).await),
         Platform::Douban => Ok(run_douban_sync(&app, &settings).await),
         Platform::Zhihu => Ok(run_zhihu_sync(&app, &settings).await),
+        Platform::GithubStars => Ok(run_github_stars_sync(&app, &settings).await),
+        Platform::Twitter => Ok(run_twitter_sync(&app, &settings).await),
     }
 }
 
@@ -591,6 +603,126 @@ pub(crate) async fn run_zhihu_sync(app: &AppHandle, settings: &AppSettings) -> S
     }
 }
 
+pub(crate) async fn run_github_stars_sync(app: &AppHandle, settings: &AppSettings) -> SyncResult {
+    update_platform_status(app, Platform::GithubStars, SyncPlatformStatus::Syncing);
+
+    let result = sync::github_stars::run_sync(settings).await;
+    match result {
+        Ok(count) => {
+            update_platform_success(app, Platform::GithubStars, count);
+            if count > 0 && settings.notifications_enabled {
+                let _ = app
+                    .notification()
+                    .builder()
+                    .title("GitHub Stars Synced")
+                    .body(format!("{} stars synced", count))
+                    .show();
+            }
+            SyncResult {
+                platform: Platform::GithubStars,
+                success: true,
+                message: if count > 0 {
+                    format!("Synced {} stars", count)
+                } else {
+                    "No new stars".to_string()
+                },
+                items_synced: count,
+            }
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            let needs_auth = msg.contains("401") || msg.contains("invalid or expired");
+            if needs_auth {
+                update_platform_status(app, Platform::GithubStars, SyncPlatformStatus::NeedsAuth);
+                if settings.notifications_enabled {
+                    let _ = app
+                        .notification()
+                        .builder()
+                        .title("GitHub Token Invalid")
+                        .body("Please update your GitHub Personal Access Token")
+                        .show();
+                }
+            } else {
+                update_platform_error(app, Platform::GithubStars, msg.clone());
+                if settings.notifications_enabled {
+                    let _ = app
+                        .notification()
+                        .builder()
+                        .title("GitHub Stars Sync Failed")
+                        .body(&msg)
+                        .show();
+                }
+            }
+            SyncResult {
+                platform: Platform::GithubStars,
+                success: false,
+                message: msg,
+                items_synced: 0,
+            }
+        }
+    }
+}
+
+pub(crate) async fn run_twitter_sync(app: &AppHandle, settings: &AppSettings) -> SyncResult {
+    update_platform_status(app, Platform::Twitter, SyncPlatformStatus::Syncing);
+
+    let result = sync::twitter::run_sync(settings).await;
+    match result {
+        Ok(count) => {
+            update_platform_success(app, Platform::Twitter, count);
+            if count > 0 && settings.notifications_enabled {
+                let _ = app
+                    .notification()
+                    .builder()
+                    .title("Twitter Synced")
+                    .body(format!("{} tweets synced", count))
+                    .show();
+            }
+            SyncResult {
+                platform: Platform::Twitter,
+                success: true,
+                message: if count > 0 {
+                    format!("Synced {} tweets", count)
+                } else {
+                    "No new tweets".to_string()
+                },
+                items_synced: count,
+            }
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            let needs_auth = msg.contains("auth expired") || msg.contains("401") || msg.contains("403");
+            if needs_auth {
+                update_platform_status(app, Platform::Twitter, SyncPlatformStatus::NeedsAuth);
+                if settings.notifications_enabled {
+                    let _ = app
+                        .notification()
+                        .builder()
+                        .title("Twitter 登录已过期")
+                        .body("请重新登录 Twitter / X")
+                        .show();
+                }
+            } else {
+                update_platform_error(app, Platform::Twitter, msg.clone());
+                if settings.notifications_enabled {
+                    let _ = app
+                        .notification()
+                        .builder()
+                        .title("Twitter Sync Failed")
+                        .body(&msg)
+                        .show();
+                }
+            }
+            SyncResult {
+                platform: Platform::Twitter,
+                success: false,
+                message: msg,
+                items_synced: 0,
+            }
+        }
+    }
+}
+
 fn update_platform_status(app: &AppHandle, platform: Platform, status: SyncPlatformStatus) {
     if let Ok(store) = app.store(SETTINGS_STORE) {
         let mut state: SyncState = store
@@ -607,6 +739,8 @@ fn update_platform_status(app: &AppHandle, platform: Platform, status: SyncPlatf
             Platform::ChromeBookmarks => state.chrome_bookmarks_status = status,
             Platform::Douban => state.douban_status = status,
             Platform::Zhihu => state.zhihu_status = status,
+            Platform::GithubStars => state.github_stars_status = status,
+            Platform::Twitter => state.twitter_status = status,
         }
 
         if let Ok(val) = serde_json::to_value(&state) {
@@ -675,6 +809,18 @@ fn update_platform_success(app: &AppHandle, platform: Platform, count: u32) {
                 state.zhihu_item_count = count;
                 state.zhihu_error = None;
             }
+            Platform::GithubStars => {
+                state.github_stars_status = SyncPlatformStatus::Success;
+                state.github_stars_last_sync = Some(now);
+                state.github_stars_count = count;
+                state.github_stars_error = None;
+            }
+            Platform::Twitter => {
+                state.twitter_status = SyncPlatformStatus::Success;
+                state.twitter_last_sync = Some(now);
+                state.twitter_tweet_count = count;
+                state.twitter_error = None;
+            }
         }
 
         if let Ok(val) = serde_json::to_value(&state) {
@@ -719,6 +865,22 @@ pub(crate) fn reset_stale_sync_state(app: &AppHandle) {
             state.chrome_bookmarks_status = SyncPlatformStatus::Idle;
             changed = true;
         }
+        if state.douban_status == SyncPlatformStatus::Syncing {
+            state.douban_status = SyncPlatformStatus::Idle;
+            changed = true;
+        }
+        if state.zhihu_status == SyncPlatformStatus::Syncing {
+            state.zhihu_status = SyncPlatformStatus::Idle;
+            changed = true;
+        }
+        if state.github_stars_status == SyncPlatformStatus::Syncing {
+            state.github_stars_status = SyncPlatformStatus::Idle;
+            changed = true;
+        }
+        if state.twitter_status == SyncPlatformStatus::Syncing {
+            state.twitter_status = SyncPlatformStatus::Idle;
+            changed = true;
+        }
 
         if changed {
             if let Ok(val) = serde_json::to_value(&state) {
@@ -761,6 +923,22 @@ fn update_platform_error(app: &AppHandle, platform: Platform, error: String) {
             Platform::ChromeBookmarks => {
                 state.chrome_bookmarks_status = SyncPlatformStatus::Error;
                 state.chrome_bookmarks_error = Some(error);
+            }
+            Platform::Douban => {
+                state.douban_status = SyncPlatformStatus::Error;
+                state.douban_error = Some(error);
+            }
+            Platform::Zhihu => {
+                state.zhihu_status = SyncPlatformStatus::Error;
+                state.zhihu_error = Some(error);
+            }
+            Platform::GithubStars => {
+                state.github_stars_status = SyncPlatformStatus::Error;
+                state.github_stars_error = Some(error);
+            }
+            Platform::Twitter => {
+                state.twitter_status = SyncPlatformStatus::Error;
+                state.twitter_error = Some(error);
             }
         }
 

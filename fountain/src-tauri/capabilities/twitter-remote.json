@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "identifier": "twitter-remote",
+  "description": "Allow Twitter webview to invoke capture_twitter_ct0 via IPC",
+  "remote": {
+    "urls": ["https://x.com", "https://*.x.com", "https://twitter.com", "https://*.twitter.com"]
+  },
+  "windows": ["twitter-login"],
+  "permissions": [
+    "core:default"
+  ]
+}

@@ -542,6 +542,202 @@ pub async fn validate_zhihu_cookie() -> Result<bool, String> {
     Ok(resp.status().is_success())
 }
 
+// ─── GitHub Token ─────────────────────────────────────────────────────────
+
+#[command]
+pub async fn validate_github_token() -> Result<bool, String> {
+    let token = credential_store::get_credential(KEY_GITHUB_TOKEN)
+        .map_err(|e| e.to_string())?;
+    let Some(token) = token else {
+        return Ok(false);
+    };
+    if token.is_empty() {
+        return Ok(false);
+    }
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get("https://api.github.com/user")
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Accept", "application/vnd.github.v3+json")
+        .header("User-Agent", "Fountain")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(resp.status().is_success())
+}
+
+// ─── Twitter/X WebView login ───────────────────────────────────────────────
+
+/// Initialization script for the Twitter login WebView.
+/// Polls document.cookie every 1.5 s; when ct0 is visible (not HttpOnly),
+/// invokes the Rust command to capture it.
+/// Note: auth_token IS HttpOnly and cannot be captured this way — user must
+/// enter it manually from DevTools.
+const TWITTER_INIT_SCRIPT: &str = r#"
+(function () {
+  'use strict';
+  var _timer = setInterval(function () {
+    try {
+      var c = document.cookie || '';
+      if (c.indexOf('ct0=') >= 0) {
+        clearInterval(_timer);
+        if (window.__TAURI__ && window.__TAURI__.core) {
+          window.__TAURI__.core.invoke('capture_twitter_ct0', { cookies: c })
+            .catch(function (e) { console.error('[Fountain] Twitter ct0 capture failed:', e); });
+        }
+      }
+    } catch (e) {}
+  }, 1500);
+})();
+"#;
+
+#[command]
+pub async fn open_twitter_webview(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(existing) = app.get_webview_window("twitter-login") {
+        let _ = existing.close();
+        tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+    }
+
+    let url = "https://x.com"
+        .parse::<url::Url>()
+        .map_err(|e| e.to_string())?;
+
+    WebviewWindowBuilder::new(&app, "twitter-login", WebviewUrl::External(url))
+        .title("Twitter / X — Login")
+        .inner_size(960.0, 680.0)
+        .center()
+        .initialization_script(TWITTER_INIT_SCRIPT)
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// Called by the initialization script when ct0 appears in document.cookie.
+/// Stores ct0 in Keychain and emits an event so the Vue form can react.
+/// auth_token is HttpOnly and must be entered manually by the user.
+#[command]
+pub async fn capture_twitter_ct0(
+    cookies: String,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let mut ct0: Option<String> = None;
+
+    for part in cookies.split(';') {
+        let part = part.trim();
+        if let Some((name, value)) = part.split_once('=') {
+            if name.trim() == "ct0" {
+                ct0 = Some(value.trim().to_string());
+                break;
+            }
+        }
+    }
+
+    let Some(ct0_val) = ct0 else {
+        return Ok(()); // ct0 not yet visible
+    };
+
+    credential_store::set_credential(KEY_TWITTER_CT0, &ct0_val).map_err(|e| e.to_string())?;
+
+    // Keep the window open — user still needs to enter auth_token manually
+    app.emit("twitter-ct0-captured", ())
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// Save auth_token + ct0, then verify credentials and store screen_name/user_id.
+#[command]
+pub async fn save_twitter_cookies(
+    auth_token: String,
+    ct0: String,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    if auth_token.is_empty() || ct0.is_empty() {
+        return Err("auth_token and ct0 are required".to_string());
+    }
+
+    credential_store::set_credential(KEY_TWITTER_AUTH_TOKEN, &auth_token)
+        .map_err(|e| e.to_string())?;
+    credential_store::set_credential(KEY_TWITTER_CT0, &ct0)
+        .map_err(|e| e.to_string())?;
+
+    // Verify credentials and fetch user info
+    let client = reqwest::Client::new();
+    let resp = client
+        .get("https://api.twitter.com/1.1/account/verify_credentials.json")
+        .query(&[("skip_status", "1")])
+        .header(
+            "authorization",
+            "Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA",
+        )
+        .header("cookie", format!("auth_token={}; ct0={}", auth_token, ct0))
+        .header("x-csrf-token", ct0.as_str())
+        .header("User-Agent", "Mozilla/5.0")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Twitter verify_credentials failed: {}", resp.status()));
+    }
+
+    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+
+    if let Some(screen_name) = json["screen_name"].as_str() {
+        credential_store::set_credential(KEY_TWITTER_SCREEN_NAME, screen_name)
+            .map_err(|e| e.to_string())?;
+    }
+    if let Some(id_str) = json["id_str"].as_str() {
+        credential_store::set_credential(KEY_TWITTER_USER_ID, id_str)
+            .map_err(|e| e.to_string())?;
+    }
+
+    // Close login window if still open
+    if let Some(w) = app.get_webview_window("twitter-login") {
+        let _ = w.close();
+    }
+
+    app.emit("twitter-cookies-captured", ())
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[command]
+pub async fn validate_twitter_cookie() -> Result<bool, String> {
+    let auth_token = credential_store::get_credential(KEY_TWITTER_AUTH_TOKEN)
+        .map_err(|e| e.to_string())?;
+    let ct0 = credential_store::get_credential(KEY_TWITTER_CT0)
+        .map_err(|e| e.to_string())?;
+
+    let (Some(auth_token), Some(ct0)) = (auth_token, ct0) else {
+        return Ok(false);
+    };
+    if auth_token.is_empty() || ct0.is_empty() {
+        return Ok(false);
+    }
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get("https://api.twitter.com/1.1/account/verify_credentials.json")
+        .query(&[("skip_status", "1")])
+        .header(
+            "authorization",
+            "Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA",
+        )
+        .header("cookie", format!("auth_token={}; ct0={}", auth_token, ct0))
+        .header("x-csrf-token", ct0.as_str())
+        .header("User-Agent", "Mozilla/5.0")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(resp.status().is_success())
+}
+
 fn save_bilibili_cookies(set_cookie_headers: &[String]) -> Result<(), String> {
     let mut sessdata = None;
     let mut bili_jct = None;

@@ -240,8 +240,64 @@ const settings = computed(() => settingsStore.settings)
             :enabled="!!settings.server_url"
             @sync="syncOne('chrome_bookmarks')"
           />
+          <SyncStatus
+            v-if="settings.douban_enabled"
+            icon="🐟"
+            name="豆瓣"
+            platform="douban"
+            :status="s.douban_status"
+            :last-sync="s.douban_last_sync"
+            :item-count="s.douban_book_count + s.douban_movie_count"
+            item-label="items"
+            :error="s.douban_error"
+            :enabled="!!settings.server_url"
+            @sync="syncOne('douban')"
+            @fix-auth="openCredForm('douban')"
+          />
+          <SyncStatus
+            v-if="settings.zhihu_enabled"
+            icon="💬"
+            name="知乎"
+            platform="zhihu"
+            :status="s.zhihu_status"
+            :last-sync="s.zhihu_last_sync"
+            :item-count="s.zhihu_item_count"
+            item-label="items"
+            :error="s.zhihu_error"
+            :enabled="!!settings.server_url"
+            @sync="syncOne('zhihu')"
+            @fix-auth="openCredForm('zhihu')"
+          />
+          <SyncStatus
+            v-if="settings.github_stars_enabled"
+            icon="⭐"
+            name="GitHub Stars"
+            platform="github_stars"
+            :status="s.github_stars_status"
+            :last-sync="s.github_stars_last_sync"
+            :item-count="s.github_stars_count"
+            item-label="stars"
+            :error="s.github_stars_error"
+            :enabled="!!settings.server_url"
+            @sync="syncOne('github_stars')"
+            @fix-auth="openCredForm('github_stars')"
+          />
+          <SyncStatus
+            v-if="settings.twitter_enabled"
+            icon="🐦"
+            name="Twitter / X"
+            platform="twitter"
+            :status="s.twitter_status"
+            :last-sync="s.twitter_last_sync"
+            :item-count="s.twitter_tweet_count"
+            item-label="tweets"
+            :error="s.twitter_error"
+            :enabled="!!settings.server_url"
+            @sync="syncOne('twitter')"
+            @fix-auth="openCredForm('twitter')"
+          />
 
-          <div v-if="!settings.apple_books_enabled && !settings.wechat_read_enabled && !settings.bilibili_enabled && !settings.kindle_enabled && !settings.safari_bookmarks_enabled && !settings.chrome_bookmarks_enabled"
+          <div v-if="!settings.apple_books_enabled && !settings.wechat_read_enabled && !settings.bilibili_enabled && !settings.kindle_enabled && !settings.safari_bookmarks_enabled && !settings.chrome_bookmarks_enabled && !settings.douban_enabled && !settings.zhihu_enabled && !settings.github_stars_enabled && !settings.twitter_enabled"
                class="px-4 py-6 text-center text-gray-400 text-sm">
             No platforms enabled. Open Settings to configure.
           </div>

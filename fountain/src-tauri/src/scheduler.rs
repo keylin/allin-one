@@ -29,6 +29,10 @@ impl Scheduler {
         let mut kindle_last: Option<std::time::Instant> = None;
         let mut safari_bookmarks_last: Option<std::time::Instant> = None;
         let mut chrome_bookmarks_last: Option<std::time::Instant> = None;
+        let mut douban_last: Option<std::time::Instant> = None;
+        let mut zhihu_last: Option<std::time::Instant> = None;
+        let mut github_stars_last: Option<std::time::Instant> = None;
+        let mut twitter_last: Option<std::time::Instant> = None;
 
         loop {
             tokio::select! {
@@ -173,6 +177,90 @@ impl Scheduler {
                                 log::error!("Scheduled: Chrome bookmarks failed: {}", result.message);
                             }
                             chrome_bookmarks_last = Some(std::time::Instant::now());
+                        }
+                    }
+
+                    if settings.douban_enabled {
+                        let secs = settings.douban_interval_hours as u64 * 3600;
+                        let due = douban_last
+                            .map(|last| now.duration_since(last).as_secs() >= secs)
+                            .unwrap_or(true);
+                        if due {
+                            info!("Scheduled: Douban sync starting");
+                            let result = crate::commands::sync::run_douban_sync(
+                                &self.app_handle,
+                                &settings,
+                            )
+                            .await;
+                            if result.success {
+                                info!("Scheduled: Douban done ({} items)", result.items_synced);
+                            } else {
+                                log::error!("Scheduled: Douban failed: {}", result.message);
+                            }
+                            douban_last = Some(std::time::Instant::now());
+                        }
+                    }
+
+                    if settings.zhihu_enabled {
+                        let secs = settings.zhihu_interval_hours as u64 * 3600;
+                        let due = zhihu_last
+                            .map(|last| now.duration_since(last).as_secs() >= secs)
+                            .unwrap_or(true);
+                        if due {
+                            info!("Scheduled: Zhihu sync starting");
+                            let result = crate::commands::sync::run_zhihu_sync(
+                                &self.app_handle,
+                                &settings,
+                            )
+                            .await;
+                            if result.success {
+                                info!("Scheduled: Zhihu done ({} items)", result.items_synced);
+                            } else {
+                                log::error!("Scheduled: Zhihu failed: {}", result.message);
+                            }
+                            zhihu_last = Some(std::time::Instant::now());
+                        }
+                    }
+
+                    if settings.github_stars_enabled {
+                        let secs = settings.github_stars_interval_hours as u64 * 3600;
+                        let due = github_stars_last
+                            .map(|last| now.duration_since(last).as_secs() >= secs)
+                            .unwrap_or(true);
+                        if due {
+                            info!("Scheduled: GitHub Stars sync starting");
+                            let result = crate::commands::sync::run_github_stars_sync(
+                                &self.app_handle,
+                                &settings,
+                            )
+                            .await;
+                            if result.success {
+                                info!("Scheduled: GitHub Stars done ({} items)", result.items_synced);
+                            } else {
+                                log::error!("Scheduled: GitHub Stars failed: {}", result.message);
+                            }
+                            github_stars_last = Some(std::time::Instant::now());
+                        }
+                    }
+
+                    if settings.twitter_enabled {
+                        let secs = settings.twitter_interval_hours as u64 * 3600;
+                        let due = twitter_last
+                            .map(|last| now.duration_since(last).as_secs() >= secs)
+                            .unwrap_or(true);
+                        if due {
+                            info!("Scheduled: Twitter sync starting");
+                            let result = crate::commands::sync::run_twitter_sync(
+                                &self.app_handle,
+                                &settings,
+                            )
+                            .await;
+                            if result.success {
+                                info!("Scheduled: Twitter done ({} tweets)", result.items_synced);
+                            } else {
+                                log::error!("Scheduled: Twitter failed: {}", result.message);
+                            }
+                            twitter_last = Some(std::time::Instant::now());
                         }
                     }
                 }

@@ -29,6 +29,23 @@ export const useSyncStore = defineStore('sync', () => {
     kindle_error: null,
     safari_bookmarks_error: null,
     chrome_bookmarks_error: null,
+    douban_last_sync: null,
+    zhihu_last_sync: null,
+    douban_book_count: 0,
+    douban_movie_count: 0,
+    zhihu_item_count: 0,
+    douban_status: 'idle',
+    zhihu_status: 'idle',
+    douban_error: null,
+    zhihu_error: null,
+    github_stars_last_sync: null,
+    twitter_last_sync: null,
+    github_stars_count: 0,
+    twitter_tweet_count: 0,
+    github_stars_status: 'idle',
+    twitter_status: 'idle',
+    github_stars_error: null,
+    twitter_error: null,
   })
 
   const isSyncing = computed(() =>
@@ -37,7 +54,11 @@ export const useSyncStore = defineStore('sync', () => {
     status.value.bilibili_status === 'syncing' ||
     status.value.kindle_status === 'syncing' ||
     status.value.safari_bookmarks_status === 'syncing' ||
-    status.value.chrome_bookmarks_status === 'syncing'
+    status.value.chrome_bookmarks_status === 'syncing' ||
+    status.value.douban_status === 'syncing' ||
+    status.value.zhihu_status === 'syncing' ||
+    status.value.github_stars_status === 'syncing' ||
+    status.value.twitter_status === 'syncing'
   )
 
   async function loadStatus() {

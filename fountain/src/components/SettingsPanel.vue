@@ -309,6 +309,118 @@ function onCredSaved() {
           </div>
         </section>
 
+        <!-- Douban section -->
+        <section>
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-xs font-semibold text-gray-500 uppercase tracking-wide">🐟 豆瓣</h2>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" v-model="settings.douban_enabled" class="w-4 h-4 accent-blue-600" />
+              <span class="text-sm text-gray-600">Enabled</span>
+            </label>
+          </div>
+          <div v-if="settings.douban_enabled" class="space-y-2">
+            <div class="flex items-center gap-3">
+              <label class="text-sm text-gray-600 whitespace-nowrap">Sync every</label>
+              <input
+                v-model.number="settings.douban_interval_hours"
+                type="number" min="1" max="168"
+                class="w-20 px-2 py-1 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+              />
+              <span class="text-sm text-gray-500">hours</span>
+            </div>
+            <button
+              @click="openCred('douban')"
+              class="px-3 py-1.5 text-sm font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition-colors"
+            >
+              Update Login
+            </button>
+          </div>
+        </section>
+
+        <!-- Zhihu section -->
+        <section>
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-xs font-semibold text-gray-500 uppercase tracking-wide">💬 知乎</h2>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" v-model="settings.zhihu_enabled" class="w-4 h-4 accent-blue-600" />
+              <span class="text-sm text-gray-600">Enabled</span>
+            </label>
+          </div>
+          <div v-if="settings.zhihu_enabled" class="space-y-2">
+            <div class="flex items-center gap-3">
+              <label class="text-sm text-gray-600 whitespace-nowrap">Sync every</label>
+              <input
+                v-model.number="settings.zhihu_interval_hours"
+                type="number" min="1" max="168"
+                class="w-20 px-2 py-1 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+              />
+              <span class="text-sm text-gray-500">hours</span>
+            </div>
+            <button
+              @click="openCred('zhihu')"
+              class="px-3 py-1.5 text-sm font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition-colors"
+            >
+              Update Login
+            </button>
+          </div>
+        </section>
+
+        <!-- GitHub Stars section -->
+        <section>
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-xs font-semibold text-gray-500 uppercase tracking-wide">⭐ GitHub Stars</h2>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" v-model="settings.github_stars_enabled" class="w-4 h-4 accent-blue-600" />
+              <span class="text-sm text-gray-600">Enabled</span>
+            </label>
+          </div>
+          <div v-if="settings.github_stars_enabled" class="space-y-2">
+            <div class="flex items-center gap-3">
+              <label class="text-sm text-gray-600 whitespace-nowrap">Sync every</label>
+              <input
+                v-model.number="settings.github_stars_interval_hours"
+                type="number" min="1" max="168"
+                class="w-20 px-2 py-1 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+              />
+              <span class="text-sm text-gray-500">hours</span>
+            </div>
+            <button
+              @click="openCred('github_stars')"
+              class="px-3 py-1.5 text-sm font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition-colors"
+            >
+              Update Token
+            </button>
+          </div>
+        </section>
+
+        <!-- Twitter / X section -->
+        <section>
+          <div class="flex items-center justify-between mb-3">
+            <h2 class="text-xs font-semibold text-gray-500 uppercase tracking-wide">🐦 Twitter / X</h2>
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" v-model="settings.twitter_enabled" class="w-4 h-4 accent-blue-600" />
+              <span class="text-sm text-gray-600">Enabled</span>
+            </label>
+          </div>
+          <div v-if="settings.twitter_enabled" class="space-y-2">
+            <div class="flex items-center gap-3">
+              <label class="text-sm text-gray-600 whitespace-nowrap">Sync every</label>
+              <input
+                v-model.number="settings.twitter_interval_hours"
+                type="number" min="1" max="168"
+                class="w-20 px-2 py-1 text-sm border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+              />
+              <span class="text-sm text-gray-500">hours</span>
+            </div>
+            <button
+              @click="openCred('twitter')"
+              class="px-3 py-1.5 text-sm font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition-colors"
+            >
+              Update Login
+            </button>
+          </div>
+        </section>
+
         <!-- General section -->
         <section>
           <h2 class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">General</h2>

@@ -26,6 +26,10 @@ pub struct AppSettings {
     pub douban_interval_hours: u32,
     pub zhihu_enabled: bool,
     pub zhihu_interval_hours: u32,
+    pub github_stars_enabled: bool,
+    pub github_stars_interval_hours: u32,
+    pub twitter_enabled: bool,
+    pub twitter_interval_hours: u32,
 }
 
 impl Default for AppSettings {
@@ -54,6 +58,10 @@ impl Default for AppSettings {
             douban_interval_hours: 24,
             zhihu_enabled: false,
             zhihu_interval_hours: 12,
+            github_stars_enabled: false,
+            github_stars_interval_hours: 12,
+            twitter_enabled: false,
+            twitter_interval_hours: 6,
         }
     }
 }
@@ -94,6 +102,14 @@ pub struct SyncState {
     pub zhihu_status: SyncPlatformStatus,
     pub douban_error: Option<String>,
     pub zhihu_error: Option<String>,
+    pub github_stars_last_sync: Option<String>,
+    pub twitter_last_sync: Option<String>,
+    pub github_stars_count: u32,
+    pub twitter_tweet_count: u32,
+    pub github_stars_status: SyncPlatformStatus,
+    pub twitter_status: SyncPlatformStatus,
+    pub github_stars_error: Option<String>,
+    pub twitter_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -142,6 +158,14 @@ impl Default for SyncState {
             zhihu_status: SyncPlatformStatus::Idle,
             douban_error: None,
             zhihu_error: None,
+            github_stars_last_sync: None,
+            twitter_last_sync: None,
+            github_stars_count: 0,
+            twitter_tweet_count: 0,
+            github_stars_status: SyncPlatformStatus::Idle,
+            twitter_status: SyncPlatformStatus::Idle,
+            github_stars_error: None,
+            twitter_error: None,
         }
     }
 }
