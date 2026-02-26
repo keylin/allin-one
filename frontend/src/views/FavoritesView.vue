@@ -2,10 +2,12 @@
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { listContent, toggleFavorite, batchMarkRead, incrementView } from '@/api/content'
+import { listMedia, toggleMediaFavorite } from '@/api/media'
 import { listSources } from '@/api/sources'
 import { useToast } from '@/composables/useToast'
 import { formatTimeShort } from '@/utils/time'
 import ContentDetailModal from '@/components/content-detail-modal.vue'
+import ImageLightbox from '@/components/image-lightbox.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -36,6 +38,109 @@ function handleScroll() {
   toolbarCollapsed.value = st > lastScrollTop && st > 40
   lastScrollTop = st
 }
+
+// --- 视图切换：内容 / 媒体项 ---
+const activeView = ref(route.query.view || 'content')
+
+// --- 媒体项视图状态 ---
+const mediaItems = ref([])
+const mediaTotalCount = ref(0)
+const mediaLoading = ref(false)
+const mediaLoadingMore = ref(false)
+const mediaPage = ref(1)
+const mediaHasMore = ref(true)
+const mediaFilterType = ref(route.query.mt || '')
+const mediaSortBy = ref(route.query.msort || 'favorited_at')
+
+const mediaTypeFilters = [
+  { value: '', label: '全部' },
+  { value: 'image', label: '图片' },
+  { value: 'video', label: '视频' },
+  { value: 'audio', label: '音频' },
+]
+
+// Lightbox for media view images
+const mediaLightboxVisible = ref(false)
+const mediaLightboxImages = ref([])
+const mediaLightboxIndex = ref(0)
+
+async function fetchMediaItems(reset = false) {
+  if (reset) {
+    mediaPage.value = 1
+    mediaItems.value = []
+    mediaHasMore.value = true
+    mediaLoading.value = true
+  } else {
+    mediaLoadingMore.value = true
+  }
+  try {
+    const params = {
+      page: mediaPage.value,
+      page_size: 24,
+      is_favorited: true,
+      status: '',  // 空字符串不过滤状态，显示全部（pending/downloaded/failed）
+      sort_by: mediaSortBy.value,
+      sort_order: 'desc',
+    }
+    if (mediaFilterType.value) params.media_type = mediaFilterType.value
+    const res = await listMedia(params)
+    if (res.code === 0) {
+      if (reset) {
+        mediaItems.value = res.data
+        mediaTotalCount.value = res.total
+      } else {
+        mediaItems.value = [...mediaItems.value, ...res.data]
+      }
+      mediaHasMore.value = res.data.length >= 24
+      if (!reset) mediaPage.value++
+    }
+  } finally {
+    mediaLoading.value = false
+    mediaLoadingMore.value = false
+  }
+}
+
+watch([mediaFilterType, mediaSortBy], () => {
+  fetchMediaItems(true)
+})
+
+async function handleMediaUnfavorite(item) {
+  const prev = item.is_favorited
+  item.is_favorited = false
+  try {
+    const res = await toggleMediaFavorite(item.id)
+    if (res.code === 0) {
+      if (!res.data.is_favorited) {
+        mediaItems.value = mediaItems.value.filter(m => m.id !== item.id)
+        mediaTotalCount.value = Math.max(0, mediaTotalCount.value - 1)
+        toast.success('已取消收藏')
+      }
+    } else {
+      item.is_favorited = prev
+      toast.error('操作失败')
+    }
+  } catch {
+    item.is_favorited = prev
+    toast.error('网络错误')
+  }
+}
+
+function openMediaLightbox(item, index) {
+  // Build image list from current filtered items
+  const images = mediaItems.value
+    .filter(m => m.media_type === 'image')
+    .map(m => ({ url: m.media_info?.file_url || m.media_info?.file_path || '', id: m.id, isFavorited: m.is_favorited }))
+  const imageIdx = mediaItems.value.filter(m => m.media_type === 'image').findIndex(m => m.id === item.id)
+  mediaLightboxImages.value = images
+  mediaLightboxIndex.value = imageIdx >= 0 ? imageIdx : 0
+  mediaLightboxVisible.value = true
+}
+
+watch(activeView, (val) => {
+  if (val === 'media' && mediaItems.value.length === 0) {
+    fetchMediaItems(true)
+  }
+})
 
 // --- 筛选 ---
 const searchQuery = ref(route.query.q || '')
@@ -188,12 +293,15 @@ function onThumbnailLoad(event, itemId) {
 // --- URL 同步 ---
 function syncQueryParams() {
   const query = {}
+  if (activeView.value !== 'content') query.view = activeView.value
   if (searchQuery.value) query.q = searchQuery.value
   if (activeMediaType.value) query.media_type = activeMediaType.value
   if (filterSourceId.value) query.source_id = filterSourceId.value
   if (dateRange.value) query.date_range = dateRange.value
   if (sortBy.value !== 'favorited_at') query.sort_by = sortBy.value
   if (sortOrder.value !== 'desc') query.sort_order = sortOrder.value
+  if (mediaFilterType.value) query.mt = mediaFilterType.value
+  if (mediaSortBy.value !== 'favorited_at') query.msort = mediaSortBy.value
   router.replace({ query }).catch(() => {})
 }
 
@@ -420,8 +528,27 @@ onUnmounted(() => {
          ══════════════════════════════════════════════ -->
     <div class="sticky top-0 z-10 bg-white/95 backdrop-blur-sm border-b border-slate-100 shrink-0">
 
-      <!-- ── 移动端搜索框（仅移动端独占一行） ── -->
+      <!-- ── 视图切换：内容 / 媒体项 ── -->
+      <div class="flex items-center gap-1 px-4 pt-2.5 pb-0">
+        <button
+          class="px-3 py-1 text-xs font-medium rounded-lg transition-all"
+          :class="activeView === 'content'
+            ? 'bg-indigo-600 text-white shadow-sm'
+            : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100'"
+          @click="activeView = 'content'"
+        >内容</button>
+        <button
+          class="px-3 py-1 text-xs font-medium rounded-lg transition-all"
+          :class="activeView === 'media'
+            ? 'bg-indigo-600 text-white shadow-sm'
+            : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100'"
+          @click="activeView = 'media'"
+        >媒体项</button>
+      </div>
+
+      <!-- ── 移动端搜索框（仅移动端独占一行，内容视图） ── -->
       <div
+        v-if="activeView === 'content'"
         class="px-4 pt-2.5 md:hidden transition-all duration-300 ease-in-out overflow-hidden"
         :class="toolbarCollapsed ? 'max-h-0 !pt-0 opacity-0' : 'max-h-20 opacity-100'"
       >
@@ -447,8 +574,9 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- ── 筛选工具栏（移动端单行，桌面端与搜索框合并） ── -->
+      <!-- ── 筛选工具栏（内容视图） ── -->
       <div
+        v-if="activeView === 'content'"
         class="flex items-center gap-1.5 px-4 pt-2 pb-2.5 md:px-5 overflow-x-auto scrollbar-hide transition-all duration-300 ease-in-out md:!max-h-none md:!opacity-100 md:!pt-2.5 md:!pb-2.5"
         :class="toolbarCollapsed ? 'max-h-0 !pt-0 !pb-0 opacity-0 !overflow-hidden' : 'max-h-16 opacity-100'"
       >
@@ -533,13 +661,173 @@ onUnmounted(() => {
           @click="clearFilters"
         >清除</button>
       </div>
+      <!-- ── 媒体项筛选工具栏 ── -->
+      <div v-if="activeView === 'media'" class="flex items-center gap-1.5 px-4 pt-2 pb-2.5 md:px-5 overflow-x-auto scrollbar-hide">
+        <!-- 类型 -->
+        <div class="flex items-center gap-1 flex-shrink-0">
+          <button
+            v-for="mt in mediaTypeFilters"
+            :key="mt.value"
+            class="px-2.5 py-1 text-xs font-medium rounded-lg border transition-all whitespace-nowrap"
+            :class="mediaFilterType === mt.value
+              ? 'bg-indigo-50 border-indigo-300 text-indigo-700'
+              : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300 hover:text-slate-700'"
+            @click="mediaFilterType = mt.value"
+          >{{ mt.label }}</button>
+        </div>
+        <!-- 排序 -->
+        <select
+          v-model="mediaSortBy"
+          class="flex-shrink-0 ml-auto pl-2.5 pr-6 py-1 text-xs font-medium border rounded-lg outline-none transition-all cursor-pointer border-slate-200 text-slate-500 bg-white"
+          :style="selectArrowStyle"
+        >
+          <option value="favorited_at">最近收藏</option>
+          <option value="published_at">最新发布</option>
+          <option value="collected_at">最新采集</option>
+        </select>
+      </div>
     </div>
 
     <!-- ══════════════════════════════════════════════
          内容区（可滚动）
          ══════════════════════════════════════════════ -->
     <div ref="scrollContainerRef" class="flex-1 overflow-y-auto overscroll-contain">
-      <div class="px-3 py-4 md:px-5 md:py-5">
+
+      <!-- ══ 媒体项视图 ══ -->
+      <div v-if="activeView === 'media'" class="px-3 py-4 md:px-5 md:py-5">
+        <!-- 骨架屏 -->
+        <div v-if="mediaLoading" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+          <div v-for="i in 10" :key="i" class="bg-white rounded-xl border border-slate-200/60 overflow-hidden animate-pulse">
+            <div class="aspect-square bg-slate-100"/>
+            <div class="p-2 space-y-1.5">
+              <div class="h-3 bg-slate-100 rounded w-3/4"/>
+              <div class="h-2.5 bg-slate-100 rounded w-1/2"/>
+            </div>
+          </div>
+        </div>
+
+        <!-- 空状态 -->
+        <div v-else-if="mediaItems.length === 0" class="flex flex-col items-center justify-center py-20 px-6">
+          <div class="w-20 h-20 bg-amber-50 rounded-2xl flex items-center justify-center mb-5">
+            <svg class="w-9 h-9 text-amber-200" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>
+            </svg>
+          </div>
+          <h3 class="text-base font-semibold text-slate-700 mb-2">还没有收藏的媒体项</h3>
+          <p class="text-sm text-slate-400 text-center max-w-xs leading-relaxed">在内容详情中点击媒体项旁的 ★ 即可单独收藏</p>
+        </div>
+
+        <!-- 网格（图片） / 列表（视频/音频） -->
+        <template v-else>
+          <!-- 图片网格 -->
+          <div v-if="!mediaFilterType || mediaFilterType === 'image'" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 mb-4">
+            <div
+              v-for="item in mediaItems.filter(m => m.media_type === 'image')"
+              :key="item.id"
+              class="group relative bg-white rounded-xl border border-slate-200/60 overflow-hidden cursor-pointer hover:border-slate-300 hover:shadow-md transition-all"
+              @click="openMediaLightbox(item)"
+            >
+              <div class="aspect-square bg-slate-100 overflow-hidden">
+                <img
+                  v-if="item.media_info?.file_url"
+                  :src="item.media_info.file_url"
+                  class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                  loading="lazy"
+                />
+                <div v-else class="w-full h-full flex items-center justify-center text-slate-300">
+                  <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5z"/>
+                  </svg>
+                </div>
+              </div>
+              <!-- 收藏/取消按钮 -->
+              <button
+                class="absolute top-1.5 right-1.5 p-1 rounded-full bg-white/80 text-amber-500 opacity-0 group-hover:opacity-100 transition-opacity shadow-sm"
+                @click.stop="handleMediaUnfavorite(item)"
+                title="取消收藏"
+              >
+                <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>
+                </svg>
+              </button>
+              <div class="p-2">
+                <p class="text-[10px] text-slate-400 truncate">{{ item.title }}</p>
+                <p class="text-[10px] text-slate-300">{{ formatTimeShort(item.favorited_at || item.collected_at) }}</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- 视频/音频列表 -->
+          <div v-if="!mediaFilterType || mediaFilterType === 'video' || mediaFilterType === 'audio'" class="space-y-2">
+            <div
+              v-for="item in mediaItems.filter(m => m.media_type === 'video' || m.media_type === 'audio')"
+              :key="item.id"
+              class="group flex items-center gap-3 p-3 bg-white rounded-xl border border-slate-200/60 hover:border-slate-300 hover:shadow-sm transition-all cursor-pointer"
+              @click="$router.push(`/feed?content_id=${item.content_id}`)"
+            >
+              <!-- 图标 -->
+              <div class="w-10 h-10 rounded-lg flex items-center justify-center shrink-0"
+                :class="item.media_type === 'video' ? 'bg-indigo-50' : 'bg-emerald-50'"
+              >
+                <svg v-if="item.media_type === 'video'" class="w-5 h-5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+                </svg>
+                <svg v-else class="w-5 h-5 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M9 9l10.5-3m0 6.553v3.75a2.25 2.25 0 01-1.632 2.163l-1.32.377a1.803 1.803 0 11-.99-3.467l2.31-.66a2.25 2.25 0 001.632-2.163zm0 0V2.25L9 5.25v10.303m0 0v3.75a2.25 2.25 0 01-1.632 2.163l-1.32.377a1.803 1.803 0 01-.99-3.467l2.31-.66A2.25 2.25 0 009 15.553z"/>
+                </svg>
+              </div>
+              <!-- 信息 -->
+              <div class="flex-1 min-w-0">
+                <p class="text-sm font-medium text-slate-800 truncate">{{ item.title }}</p>
+                <div class="flex items-center gap-2 text-[11px] text-slate-400 mt-0.5">
+                  <span v-if="item.source_name">{{ item.source_name }}</span>
+                  <span v-if="item.favorited_at">收藏于 {{ formatTimeShort(item.favorited_at) }}</span>
+                </div>
+              </div>
+              <!-- 状态 + 取消收藏 -->
+              <div class="flex items-center gap-2 shrink-0">
+                <span
+                  class="text-[10px] px-1.5 py-0.5 rounded-md font-medium"
+                  :class="item.status === 'completed' ? 'bg-emerald-50 text-emerald-600' : item.status === 'failed' ? 'bg-rose-50 text-rose-500' : 'bg-slate-100 text-slate-400'"
+                >{{ item.status === 'completed' ? '已下载' : item.status === 'failed' ? '失败' : '待下载' }}</span>
+                <button
+                  class="p-1 text-amber-400 hover:text-amber-600 opacity-0 group-hover:opacity-100 transition-all"
+                  @click.stop="handleMediaUnfavorite(item)"
+                  title="取消收藏"
+                >
+                  <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 加载更多 -->
+          <div v-if="mediaLoadingMore" class="flex items-center justify-center py-8">
+            <svg class="w-5 h-5 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+            </svg>
+          </div>
+          <div v-else-if="!mediaHasMore && mediaItems.length > 0" class="flex items-center gap-3 py-8 px-2">
+            <div class="h-px flex-1 bg-slate-100"/>
+            <span class="text-xs text-slate-400 whitespace-nowrap">已显示全部 {{ mediaTotalCount }} 个媒体项</span>
+            <div class="h-px flex-1 bg-slate-100"/>
+          </div>
+        </template>
+
+        <!-- ImageLightbox -->
+        <ImageLightbox
+          :visible="mediaLightboxVisible"
+          :images="mediaLightboxImages"
+          :start-index="mediaLightboxIndex"
+          @close="mediaLightboxVisible = false"
+        />
+      </div>
+
+      <!-- ══ 内容视图 ══ -->
+      <div v-if="activeView === 'content'" class="px-3 py-4 md:px-5 md:py-5">
 
         <!-- ── 骨架屏 ── -->
         <div v-if="loading" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3 md:gap-4">
@@ -791,7 +1079,7 @@ onUnmounted(() => {
           <!-- 无限滚动 sentinel -->
           <div ref="sentinelRef" class="h-1"/>
         </template>
-      </div>
+      </div><!-- end content view -->
     </div>
 
     <!-- ══════════════════════════════════════════════

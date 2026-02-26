@@ -16,6 +16,8 @@ class MediaItemSummary(BaseModel):
     status: str = "pending"
     playback_position: int = 0
     last_played_at: Optional[datetime] = None
+    is_favorited: bool = False
+    favorited_at: Optional[datetime] = None
 
 
 class ContentResponse(BaseModel):

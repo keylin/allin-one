@@ -270,6 +270,9 @@ class MediaItem(Base):
     playback_position = Column(Integer, default=0)   # 播放进度（秒）
     last_played_at = Column(DateTime, nullable=True) # 最后播放时间
 
+    is_favorited = Column(Boolean, default=False)
+    favorited_at = Column(DateTime, nullable=True)
+
     created_at = Column(DateTime, default=_utcnow)
 
     content = relationship("ContentItem", back_populates="media_items")

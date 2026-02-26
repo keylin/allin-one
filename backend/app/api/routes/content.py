@@ -108,6 +108,8 @@ def _build_media_summaries(media_items) -> list[dict]:
             status=mi.status,
             playback_position=mi.playback_position or 0,
             last_played_at=mi.last_played_at,
+            is_favorited=mi.is_favorited or False,
+            favorited_at=mi.favorited_at,
         ).model_dump())
     return summaries
 
@@ -1031,15 +1033,25 @@ async def _trigger_media_pipeline(content: ContentItem, db: Session) -> None:
 
     content_id = content.id
 
-    # 检查各状态的 MediaItem
+    # 新增：将所有关联 MediaItem 标记为 is_favorited=True
+    now = utcnow()
+    for mi in content.media_items:
+        if not mi.is_favorited:
+            mi.is_favorited = True
+            mi.favorited_at = now
+    db.commit()
+
+    # 检查各状态的 MediaItem（仅统计已收藏的）
     pending_count = db.query(MediaItem).filter(
         MediaItem.content_id == content_id,
         MediaItem.status == "pending",
+        MediaItem.is_favorited == True,
     ).count()
 
     failed_items = db.query(MediaItem).filter(
         MediaItem.content_id == content_id,
         MediaItem.status == "failed",
+        MediaItem.is_favorited == True,
     ).all()
 
     downloaded_count = db.query(MediaItem).filter(

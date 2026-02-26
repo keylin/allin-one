@@ -1,5 +1,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { toggleMediaFavorite } from '@/api/media'
+import { useToast } from '@/composables/useToast'
 
 const props = defineProps({
   visible: { type: Boolean, default: false },
@@ -8,10 +10,22 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['close'])
+const toast = useToast()
+
+// Normalize images array: accept string URLs or {url, id, isFavorited} objects
+const normalizedImages = computed(() =>
+  props.images.map(img =>
+    typeof img === 'string'
+      ? { url: img, id: null, isFavorited: false }
+      : { url: img.url, id: img.id || null, isFavorited: img.isFavorited || false }
+  )
+)
 
 // --- State ---
 const currentIndex = ref(0)
 const hint = ref('')
+// Local favorited state for current session (keyed by index)
+const localFavorited = ref({})
 let hintTimer = null
 
 // Sync startIndex when lightbox opens
@@ -20,12 +34,18 @@ watch(() => props.visible, (val) => {
     currentIndex.value = props.startIndex
     hint.value = ''
     translateX.value = 0
+    localFavorited.value = {}
   }
 })
 
 // --- Computed ---
-const currentSrc = computed(() => props.images[currentIndex.value] || '')
-const total = computed(() => props.images.length)
+const currentItem = computed(() => normalizedImages.value[currentIndex.value] || { url: '', id: null, isFavorited: false })
+const currentSrc = computed(() => currentItem.value.url)
+const currentIsFavorited = computed(() => {
+  const local = localFavorited.value[currentIndex.value]
+  return local !== undefined ? local : currentItem.value.isFavorited
+})
+const total = computed(() => normalizedImages.value.length)
 const isFirst = computed(() => currentIndex.value === 0)
 const isLast = computed(() => currentIndex.value === total.value - 1)
 
@@ -56,6 +76,28 @@ function goNext() {
 
 function close() {
   emit('close')
+}
+
+// --- Favorite ---
+async function toggleFavorite() {
+  const item = currentItem.value
+  if (!item.id) return
+  const prev = currentIsFavorited.value
+  localFavorited.value = { ...localFavorited.value, [currentIndex.value]: !prev }
+  try {
+    const res = await toggleMediaFavorite(item.id)
+    if (res.code === 0) {
+      localFavorited.value = { ...localFavorited.value, [currentIndex.value]: res.data.is_favorited }
+      toast.success(res.data.is_favorited ? '已收藏' : '已取消收藏')
+    } else {
+      // revert
+      localFavorited.value = { ...localFavorited.value, [currentIndex.value]: prev }
+      toast.error('操作失败')
+    }
+  } catch {
+    localFavorited.value = { ...localFavorited.value, [currentIndex.value]: prev }
+    toast.error('网络错误')
+  }
 }
 
 // --- Keyboard ---
@@ -167,6 +209,21 @@ defineExpose({ visible: computed(() => props.visible) })
         >
           <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+
+        <!-- Favorite button (only when MediaItem has an id) -->
+        <button
+          v-if="currentItem.id"
+          class="absolute top-4 right-16 z-10 p-2 rounded-full transition-all"
+          :class="currentIsFavorited
+            ? 'bg-amber-500/20 text-amber-400 hover:bg-amber-500/30'
+            : 'bg-white/10 text-white/60 hover:bg-white/20 hover:text-amber-400'"
+          :title="currentIsFavorited ? '取消收藏' : '收藏此图'"
+          @click.stop="toggleFavorite"
+        >
+          <svg class="w-5 h-5" :fill="currentIsFavorited ? 'currentColor' : 'none'" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.563.563 0 00-.586 0L6.982 20.54a.562.562 0 01-.84-.61l1.285-5.386a.562.562 0 00-.182-.557l-4.204-3.602a.563.563 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z" />
           </svg>
         </button>
 

@@ -54,6 +54,7 @@ async def list_media(
     platform: Optional[str] = Query(None, description="按平台筛选（仅 video 有效）"),
     source_id: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
+    is_favorited: Optional[bool] = Query(None, description="按收藏状态筛选"),
     sort_by: str = Query("created_at"),
     sort_order: str = Query("desc"),
     db: Session = Depends(get_db),
@@ -93,6 +94,9 @@ async def list_media(
     if search:
         query = query.filter(ContentItem.title.ilike(f"%{search}%"))
 
+    if is_favorited is not None:
+        query = query.filter(MediaItem.is_favorited == is_favorited)
+
     # 视频平台列表（独立查询）
     platforms_q = (
         db.query(cast(MediaItem.metadata_json, JSONB)["platform"].astext)
@@ -109,6 +113,7 @@ async def list_media(
         "collected_at": ContentItem.collected_at,
         "title": ContentItem.title,
         "duration": cast(media_meta["duration"].astext, Float),
+        "favorited_at": MediaItem.favorited_at,
     }
     sort_column = sort_map.get(sort_by, MediaItem.created_at)
     order_expr = (
@@ -159,7 +164,8 @@ async def list_media(
             "collected_at": content.collected_at.isoformat() if content.collected_at else None,
             "playback_position": media.playback_position or 0,
             "last_played_at": media.last_played_at.isoformat() if media.last_played_at else None,
-            "is_favorited": content.is_favorited or False,
+            "is_favorited": media.is_favorited or False,
+            "favorited_at": media.favorited_at.isoformat() if media.favorited_at else None,
             "media_info": media_info,
         })
 
@@ -170,6 +176,54 @@ async def list_media(
         "page": page,
         "page_size": page_size,
         "platforms": platforms_set,
+        "message": "ok",
+    }
+
+
+@router.post("/{media_id}/favorite")
+async def toggle_media_favorite(media_id: str, db: Session = Depends(get_db)):
+    """切换单个 MediaItem 的收藏状态。
+    收藏且 pending → 触发媒体下载流水线（只下载该 MediaItem）。
+    """
+    from app.core.time import utcnow
+    from app.models.pipeline import PipelineTemplate, TriggerSource
+
+    media = db.get(MediaItem, media_id)
+    if not media:
+        return error_response(404, "Media not found")
+
+    was_favorited = media.is_favorited
+    media.is_favorited = not media.is_favorited
+    media.favorited_at = utcnow() if media.is_favorited else None
+    db.commit()
+    db.refresh(media)
+
+    # 收藏且处于 pending 状态 → 触发流水线下载该 MediaItem
+    if media.is_favorited and not was_favorited and media.status == "pending":
+        content = db.get(ContentItem, media.content_id)
+        if content:
+            from app.services.pipeline.orchestrator import PipelineOrchestrator
+            template = db.query(PipelineTemplate).filter(
+                PipelineTemplate.name == "媒体下载",
+                PipelineTemplate.is_active == True,
+            ).first()
+            if template:
+                orchestrator = PipelineOrchestrator(db)
+                execution = orchestrator.trigger_for_content(
+                    content=content,
+                    template_override_id=template.id,
+                    trigger=TriggerSource.FAVORITE,
+                )
+                if execution:
+                    await orchestrator.async_start_execution(execution.id)
+                    logger.info(f"MediaItem favorite triggered pipeline: media={media_id}, execution={execution.id}")
+
+    return {
+        "code": 0,
+        "data": {
+            "is_favorited": media.is_favorited,
+            "favorited_at": media.favorited_at.isoformat() if media.favorited_at else None,
+        },
         "message": "ok",
     }
 

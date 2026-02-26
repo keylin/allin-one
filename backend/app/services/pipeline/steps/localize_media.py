@@ -68,6 +68,8 @@ def _handle_localize_media(context: dict) -> dict:
             return {"status": "skipped", "reason": "content not found"}
         html_content = content.processed_content or ""
         raw_data_json = content.raw_data
+        content_is_favorited = content.is_favorited or False
+        content_favorited_at = content.favorited_at
 
     # Check: is the content URL a video page?
     is_video_url = url_matches_video_pattern(content_url)
@@ -88,6 +90,23 @@ def _handle_localize_media(context: dict) -> dict:
 
     # ---- 1. Video URL → yt-dlp download ----
     if is_video_url:
+        # 检查是否应该下载：content.is_favorited=True，或存在 pending+is_favorited 的视频 MediaItem
+        should_download_video = content_is_favorited
+        if not should_download_video:
+            with SessionLocal() as db:
+                _fav_video = db.query(MediaItem).filter(
+                    MediaItem.content_id == content_id,
+                    MediaItem.media_type == MediaType.VIDEO.value,
+                    MediaItem.status == "pending",
+                    MediaItem.is_favorited == True,
+                ).first()
+                should_download_video = _fav_video is not None
+
+        if not should_download_video:
+            logger.info(f"[localize_media] Skip video download (not favorited): {content_url}")
+            result["summary"] = {}
+            return result
+
         logger.info(f"[localize_media] Video URL detected: {content_url}")
         try:
             import yt_dlp
@@ -167,6 +186,8 @@ def _handle_localize_media(context: dict) -> dict:
                         filename=os.path.basename(video_path) if video_path else None,
                         status="downloaded" if video_path else "failed",
                         metadata_json=json.dumps(metadata, ensure_ascii=False),
+                        is_favorited=True,
+                        favorited_at=content_favorited_at,
                     ))
 
                 # Update content title and published_at from video info
@@ -224,6 +245,8 @@ def _handle_localize_media(context: dict) -> dict:
                         original_url=content_url,
                         status="failed",
                         metadata_json=json.dumps({"error": str(e)[:200]}),
+                        is_favorited=True,
+                        favorited_at=content_favorited_at,
                     ))
                 db.commit()
             result["media_items_created"] += 1
@@ -243,11 +266,13 @@ def _handle_localize_media(context: dict) -> dict:
 
     # ---- 1.5 Audio download ----
     # Download pending audio MediaItems (e.g. podcast episodes)
+    # 仅下载已收藏 (is_favorited=True) 且 pending 的音频项
     with SessionLocal() as db:
         audio_items = db.query(MediaItem).filter(
             MediaItem.content_id == content_id,
             MediaItem.media_type == MediaType.AUDIO.value,
             MediaItem.status == "pending",
+            MediaItem.is_favorited == True,
         ).all()
 
     for audio_mi in audio_items:
@@ -371,36 +396,60 @@ def _handle_localize_media(context: dict) -> dict:
             filename = f"{url_hash}{ext}"
             local_path = os.path.join(images_dir, filename)
 
-            # Download image with browser headers + Referer
-            with httpx.Client(timeout=15, follow_redirects=True, headers=dl_headers) as client:
-                resp = client.get(src)
-                resp.raise_for_status()
-                with open(local_path, "wb") as f:
-                    f.write(resp.content)
+            if content_is_favorited:
+                # Download image with browser headers + Referer
+                with httpx.Client(timeout=15, follow_redirects=True, headers=dl_headers) as client:
+                    resp = client.get(src)
+                    resp.raise_for_status()
+                    with open(local_path, "wb") as f:
+                        f.write(resp.content)
 
-            # Create MediaItem
-            with SessionLocal() as db:
-                media_item = MediaItem(
-                    content_id=content_id,
-                    media_type=MediaType.IMAGE.value,
-                    original_url=src,
-                    local_path=local_path,
-                    filename=filename,
-                    status="downloaded",
-                    metadata_json=json.dumps({"alt": img.get("alt", "")}),
-                )
-                db.add(media_item)
-                db.commit()
+                # Create MediaItem (downloaded)
+                with SessionLocal() as db:
+                    media_item = MediaItem(
+                        content_id=content_id,
+                        media_type=MediaType.IMAGE.value,
+                        original_url=src,
+                        local_path=local_path,
+                        filename=filename,
+                        status="downloaded",
+                        metadata_json=json.dumps({"alt": img.get("alt", "")}),
+                        is_favorited=True,
+                        favorited_at=content_favorited_at,
+                    )
+                    db.add(media_item)
+                    db.commit()
 
-            # Rewrite URL in HTML
-            img["src"] = f"/api/media/{content_id}/images/{filename}"
-            images_downloaded += 1
-            result["media_items_created"] += 1
-            result["media_items"].append({
-                "type": "image",
-                "status": "downloaded",
-                "path": local_path,
-            })
+                # Rewrite URL in HTML
+                img["src"] = f"/api/media/{content_id}/images/{filename}"
+                images_downloaded += 1
+                result["media_items_created"] += 1
+                result["media_items"].append({
+                    "type": "image",
+                    "status": "downloaded",
+                    "path": local_path,
+                })
+            else:
+                # 内容未收藏：创建 pending MediaItem，不下载
+                with SessionLocal() as db:
+                    media_item = MediaItem(
+                        content_id=content_id,
+                        media_type=MediaType.IMAGE.value,
+                        original_url=src,
+                        local_path=None,
+                        filename=filename,
+                        status="pending",
+                        metadata_json=json.dumps({"alt": img.get("alt", "")}),
+                        is_favorited=False,
+                    )
+                    db.add(media_item)
+                    db.commit()
+                result["media_items_created"] += 1
+                result["media_items"].append({
+                    "type": "image",
+                    "status": "pending",
+                    "url": src[:80],
+                })
 
         except Exception as e:
             logger.warning(f"[localize_media] Failed to download image {src[:80]}: {e}")
