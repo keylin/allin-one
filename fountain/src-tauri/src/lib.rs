@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    App, Listener, Manager, WebviewUrl, WebviewWindowBuilder,
+    App, Listener, Manager,
 };
 use tokio::sync::{oneshot, RwLock};
 
@@ -39,6 +39,9 @@ pub fn run() {
             commands::credentials::validate_wechat_read_cookie,
             commands::credentials::start_bilibili_qr_login,
             commands::credentials::poll_bilibili_qr_status,
+            commands::credentials::open_wechat_webview,
+            commands::credentials::capture_wechat_cookies,
+            commands::credentials::close_wechat_webview,
             commands::settings::get_settings,
             commands::settings::save_settings,
             commands::settings::test_server_connection,
@@ -52,7 +55,6 @@ pub fn run() {
             commands::sync::reset_stale_sync_state(app.handle());
 
             setup_tray(app)?;
-            setup_windows(app)?;
             start_scheduler(app, shutdown_rx);
             Ok(())
         })
@@ -102,28 +104,6 @@ fn setup_tray(app: &mut App) -> tauri::Result<()> {
     Ok(())
 }
 
-fn setup_windows(app: &mut App) -> tauri::Result<()> {
-    WebviewWindowBuilder::new(app, "main", WebviewUrl::App("/".into()))
-        .title("Fountain")
-        .inner_size(360.0, 520.0)
-        .resizable(false)
-        .visible(false)
-        .decorations(false)
-        .always_on_top(true)
-        .skip_taskbar(true)
-        .build()?;
-
-    WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("/settings".into()))
-        .title("Fountain — Settings")
-        .inner_size(560.0, 600.0)
-        .resizable(false)
-        .visible(false)
-        .center()
-        .build()?;
-
-    Ok(())
-}
-
 fn start_scheduler(app: &mut App, shutdown: oneshot::Receiver<()>) {
     use tauri_plugin_store::StoreExt;
 
@@ -148,14 +128,14 @@ fn start_scheduler(app: &mut App, shutdown: oneshot::Receiver<()>) {
                 event.payload(),
             ) {
                 let sched_settings = sched_settings.clone();
-                tokio::spawn(async move {
+                tauri::async_runtime::spawn(async move {
                     *sched_settings.write().await = new_settings;
                 });
             }
         }
     });
 
-    tokio::spawn(async move { sched.run(shutdown).await });
+    tauri::async_runtime::spawn(async move { sched.run(shutdown).await });
 }
 
 fn toggle_main_window(app: &tauri::AppHandle) {

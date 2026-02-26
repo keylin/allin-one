@@ -1,6 +1,27 @@
 use crate::credential_store::{self, *};
 use serde::{Deserialize, Serialize};
-use tauri::command;
+use tauri::{command, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+
+/// Initialization script injected into the WeChat Read WebView.
+/// Polls document.cookie every 1.5 s; when both wr_skey and wr_vid are
+/// visible (i.e., not HttpOnly), invokes the Rust command to capture them.
+const WECHAT_INIT_SCRIPT: &str = r#"
+(function () {
+  'use strict';
+  var _timer = setInterval(function () {
+    try {
+      var c = document.cookie || '';
+      if (c.indexOf('wr_skey=') >= 0 && c.indexOf('wr_vid=') >= 0) {
+        clearInterval(_timer);
+        if (window.__TAURI__ && window.__TAURI__.core) {
+          window.__TAURI__.core.invoke('capture_wechat_cookies', { cookies: c })
+            .catch(function (e) { console.error('[Fountain] cookie capture failed:', e); });
+        }
+      }
+    } catch (e) {}
+  }, 1500);
+})();
+"#;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BilibiliQrResponse {
@@ -211,6 +232,83 @@ fn qr_to_svg(qr: &qrcodegen::QrCode) -> String {
          <g fill=\"#000\">{modules}</g>\
          </svg>"
     )
+}
+
+/// Open an in-app browser window pointing to WeChat Read for login.
+/// An initialization script polls document.cookie; on success it calls
+/// `capture_wechat_cookies` which saves the cookies and closes this window.
+#[command]
+pub async fn open_wechat_webview(app: tauri::AppHandle) -> Result<(), String> {
+    // Close any pre-existing login window gracefully.
+    if let Some(existing) = app.get_webview_window("wechat-login") {
+        let _ = existing.close();
+        tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+    }
+
+    let url = "https://weread.qq.com"
+        .parse::<url::Url>()
+        .map_err(|e| e.to_string())?;
+
+    WebviewWindowBuilder::new(&app, "wechat-login", WebviewUrl::External(url))
+        .title("微信读书 — Login")
+        .inner_size(960.0, 680.0)
+        .center()
+        .initialization_script(WECHAT_INIT_SCRIPT)
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// Called by the initialization script when wr_skey + wr_vid appear in
+/// document.cookie (i.e., neither is HttpOnly).
+/// Saves credentials to Keychain, closes the WebView, emits an event so the
+/// Vue credential form can react.
+#[command]
+pub async fn capture_wechat_cookies(
+    cookies: String,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let mut wr_skey: Option<String> = None;
+    let mut wr_vid: Option<String> = None;
+
+    for part in cookies.split(';') {
+        let part = part.trim();
+        if let Some((name, value)) = part.split_once('=') {
+            match name.trim() {
+                "wr_skey" => wr_skey = Some(value.trim().to_string()),
+                "wr_vid" => wr_vid = Some(value.trim().to_string()),
+                _ => {}
+            }
+        }
+    }
+
+    let (Some(skey), Some(vid)) = (wr_skey, wr_vid) else {
+        // Partial cookies: both not yet visible, keep waiting (do nothing).
+        return Ok(());
+    };
+
+    credential_store::set_credential(KEY_WECHAT_READ_SKEY, &skey).map_err(|e| e.to_string())?;
+    credential_store::set_credential(KEY_WECHAT_READ_VID, &vid).map_err(|e| e.to_string())?;
+
+    // Close the login window.
+    if let Some(w) = app.get_webview_window("wechat-login") {
+        let _ = w.close();
+    }
+
+    // Notify all windows (TrayPopover / CredentialForm listen for this).
+    app.emit("wechat-cookies-captured", ())
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// Close the WeChat login WebView without saving (user cancels).
+#[command]
+pub fn close_wechat_webview(app: tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("wechat-login") {
+        let _ = w.close();
+    }
 }
 
 fn save_bilibili_cookies(set_cookie_headers: &[String]) -> Result<(), String> {

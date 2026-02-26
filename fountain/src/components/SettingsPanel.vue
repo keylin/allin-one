@@ -1,6 +1,7 @@
 <script setup>
-import { ref, onMounted } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
+import { confirm } from '@tauri-apps/plugin-dialog'
 import { useSettingsStore } from '../stores/settings.js'
 import CredentialForm from './CredentialForm.vue'
 
@@ -13,13 +14,46 @@ const testing = ref(false)
 const showCredForm = ref(false)
 const credPlatform = ref('')
 
-onMounted(() => settingsStore.load())
+// Unsaved change tracking
+const originalSettings = ref(null)
+const isDirty = computed(() => {
+  if (!originalSettings.value) return false
+  return JSON.stringify(settings) !== JSON.stringify(originalSettings.value)
+})
+
+let unlisten = null
+let skipCloseCheck = false
+
+onMounted(async () => {
+  await settingsStore.load()
+  originalSettings.value = JSON.parse(JSON.stringify(settings))
+
+  const appWindow = getCurrentWebviewWindow()
+  unlisten = await appWindow.onCloseRequested(async (event) => {
+    if (skipCloseCheck || !isDirty.value) return
+    event.preventDefault()
+    const ok = await confirm('You have unsaved changes. Close without saving?', {
+      title: 'Unsaved Changes',
+      kind: 'warning',
+      okLabel: 'Close Anyway',
+      cancelLabel: 'Keep Editing',
+    })
+    if (ok) {
+      skipCloseCheck = true
+      appWindow.close()
+    }
+  })
+})
+
+onUnmounted(() => {
+  if (unlisten) unlisten()
+})
 
 async function handleSave() {
   saving.value = true
   try {
     await save()
-    // Show brief success indication
+    originalSettings.value = JSON.parse(JSON.stringify(settings))
     setTimeout(() => { saving.value = false }, 500)
   } catch (e) {
     alert('Failed to save settings: ' + e)
@@ -52,8 +86,9 @@ function onCredSaved() {
 <template>
   <div class="h-full flex flex-col bg-white">
     <!-- Header -->
-    <div class="flex items-center px-5 py-4 border-b border-gray-100">
+    <div class="flex items-center justify-between px-5 py-4 border-b border-gray-100">
       <span class="text-base font-semibold text-gray-800">Settings</span>
+      <span v-if="isDirty" class="text-xs text-amber-600 font-medium">● Unsaved changes</span>
     </div>
 
     <div class="flex-1 overflow-y-auto">
@@ -89,9 +124,10 @@ function onCredSaved() {
               <input
                 v-model="settings.api_key"
                 type="password"
-                placeholder="Optional API key"
+                placeholder="Optional — set in Allin-One server settings"
                 class="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
+              <p class="mt-1 text-xs text-gray-400">Leave blank if your server has no auth</p>
             </div>
             <div class="flex items-center gap-2">
               <button
@@ -156,7 +192,7 @@ function onCredSaved() {
               @click="openCred('wechat_read')"
               class="px-3 py-1.5 text-sm font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition-colors"
             >
-              Update Cookies
+              Update Login
             </button>
           </div>
         </section>
@@ -207,11 +243,13 @@ function onCredSaved() {
     </div>
 
     <!-- Footer -->
-    <div v-if="!showCredForm" class="px-5 py-4 border-t border-gray-100 flex justify-end">
+    <div v-if="!showCredForm" class="px-5 py-4 border-t border-gray-100 flex items-center justify-end gap-3">
+      <span v-if="isDirty" class="text-xs text-gray-400">Unsaved changes will be lost if you close this window</span>
       <button
         @click="handleSave"
         :disabled="saving"
-        class="px-5 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-60"
+        class="px-5 py-2 text-sm font-medium text-white rounded-lg transition-colors disabled:opacity-60"
+        :class="isDirty ? 'bg-blue-600 hover:bg-blue-700' : 'bg-gray-400 hover:bg-gray-500'"
       >
         {{ saving ? 'Saved ✓' : 'Save Settings' }}
       </button>

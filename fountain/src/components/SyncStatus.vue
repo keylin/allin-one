@@ -1,5 +1,7 @@
 <script setup>
-defineProps({
+import { ref, watch, onUnmounted } from 'vue'
+
+const props = defineProps({
   icon: { type: String, required: true },
   name: { type: String, required: true },
   platform: { type: String, required: true },
@@ -12,6 +14,25 @@ defineProps({
 })
 
 const emit = defineEmits(['sync', 'fix-auth'])
+
+const errorExpanded = ref(false)
+const justSucceeded = ref(false)
+let successTimer = null
+
+watch(() => props.status, (newStatus, oldStatus) => {
+  if (oldStatus === 'syncing' && newStatus === 'success') {
+    justSucceeded.value = true
+    if (successTimer) clearTimeout(successTimer)
+    successTimer = setTimeout(() => { justSucceeded.value = false }, 1200)
+  }
+  if (newStatus !== 'error') {
+    errorExpanded.value = false
+  }
+})
+
+onUnmounted(() => {
+  if (successTimer) clearTimeout(successTimer)
+})
 
 function relativeTime(isoString) {
   if (!isoString) return null
@@ -29,7 +50,13 @@ function relativeTime(isoString) {
 </script>
 
 <template>
-  <div class="px-4 py-3 hover:bg-gray-50 transition-colors" :class="{ 'opacity-50': !enabled }">
+  <div
+    class="px-4 py-3 transition-colors duration-700"
+    :class="[
+      !enabled ? 'opacity-50' : '',
+      justSucceeded ? 'bg-green-50' : 'hover:bg-gray-50',
+    ]"
+  >
     <div class="flex items-center justify-between">
       <div class="flex items-center gap-2.5">
         <span class="text-lg leading-none">{{ icon }}</span>
@@ -44,7 +71,7 @@ function relativeTime(isoString) {
               </svg>
               Syncing...
             </span>
-            <span v-else-if="status === 'success'" class="text-xs text-green-600">
+            <span v-else-if="status === 'success'" class="text-xs text-green-600" :class="justSucceeded ? 'font-semibold' : ''">
               ✓ {{ lastSync ? relativeTime(lastSync) : 'done' }}
             </span>
             <span v-else-if="status === 'error'" class="text-xs text-red-500">✗ Error</span>
@@ -54,8 +81,15 @@ function relativeTime(isoString) {
           <div v-if="itemCount > 0" class="text-xs text-gray-400 mt-0.5">
             {{ itemCount.toLocaleString() }} {{ itemLabel }}
           </div>
-          <div v-if="error && status === 'error'" class="text-xs text-red-400 mt-0.5 max-w-[200px] truncate">
-            {{ error }}
+          <!-- Error message: click to expand/collapse -->
+          <div
+            v-if="error && status === 'error'"
+            class="text-xs text-red-400 mt-0.5 cursor-pointer select-text"
+            :class="errorExpanded ? 'break-all whitespace-normal max-w-[240px]' : 'max-w-[200px] truncate'"
+            @click.stop="errorExpanded = !errorExpanded"
+            :title="errorExpanded ? 'Click to collapse' : 'Click for full error'"
+          >
+            {{ error }}<span class="text-red-300 ml-0.5 not-italic">{{ errorExpanded ? ' ▲' : ' ▼' }}</span>
           </div>
         </div>
       </div>
@@ -80,4 +114,3 @@ function relativeTime(isoString) {
     </div>
   </div>
 </template>
-

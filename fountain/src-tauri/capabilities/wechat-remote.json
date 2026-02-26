@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "identifier": "wechat-remote",
+  "description": "Allow WeChat Read webview to invoke capture_wechat_cookies via IPC",
+  "remote": {
+    "urls": ["https://weread.qq.com", "https://*.weread.qq.com"]
+  },
+  "windows": ["wechat-login"],
+  "permissions": [
+    "core:default"
+  ]
+}

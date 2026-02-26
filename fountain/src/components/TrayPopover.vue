@@ -110,12 +110,37 @@ const settings = computed(() => settingsStore.settings)
       </div>
     </div>
 
-    <!-- No server configured -->
-    <div v-if="!settings.server_url" class="px-4 py-6 text-center">
-      <p class="text-gray-500 text-sm mb-3">Server not configured</p>
-      <button @click="openSettings" class="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors">
-        Open Settings
-      </button>
+    <!-- No server configured — onboarding card -->
+    <div v-if="!settings.server_url" class="px-4 py-5">
+      <div class="bg-blue-50 border border-blue-100 rounded-xl p-4">
+        <div class="flex items-center gap-2 mb-2">
+          <span class="text-base">👋</span>
+          <span class="text-sm font-semibold text-blue-900">Welcome to Fountain</span>
+        </div>
+        <p class="text-xs text-blue-700 mb-3 leading-relaxed">
+          Connect to your Allin-One server to start syncing your reading and video data.
+        </p>
+        <div class="space-y-1.5 mb-4">
+          <div class="flex items-center gap-2 text-xs text-blue-700">
+            <span class="w-4 h-4 rounded-full bg-blue-600 text-white flex items-center justify-center text-[10px] font-bold flex-shrink-0">1</span>
+            Open Settings and enter your server URL
+          </div>
+          <div class="flex items-center gap-2 text-xs text-blue-700">
+            <span class="w-4 h-4 rounded-full bg-blue-600 text-white flex items-center justify-center text-[10px] font-bold flex-shrink-0">2</span>
+            Enable platforms and configure credentials
+          </div>
+          <div class="flex items-center gap-2 text-xs text-blue-700">
+            <span class="w-4 h-4 rounded-full bg-blue-600 text-white flex items-center justify-center text-[10px] font-bold flex-shrink-0">3</span>
+            Click Sync to push your data
+          </div>
+        </div>
+        <button
+          @click="openSettings"
+          class="w-full py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
+        >
+          Open Settings →
+        </button>
+      </div>
     </div>
 
     <!-- Platform sync cards -->
