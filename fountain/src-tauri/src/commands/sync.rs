@@ -123,10 +123,13 @@ fn load_settings(app: &AppHandle) -> Result<AppSettings, String> {
         .store(SETTINGS_STORE)
         .map_err(|e| e.to_string())?;
 
-    Ok(store
-        .get(SETTINGS_KEY)
-        .and_then(|v| serde_json::from_value(v).ok())
-        .unwrap_or_default())
+    Ok(match store.get(SETTINGS_KEY) {
+        Some(v) => serde_json::from_value(v.clone()).unwrap_or_else(|e| {
+            log::error!("sync::load_settings: deserialization failed: {e}");
+            AppSettings::default()
+        }),
+        None => AppSettings::default(),
+    })
 }
 
 
@@ -159,7 +162,7 @@ pub(crate) async fn run_apple_books_sync(app: &AppHandle, settings: &AppSettings
             }
         }
         Err(e) => {
-            let msg = e.to_string();
+            let msg = format!("{:#}", e);
             update_platform_error(app, Platform::AppleBooks, msg.clone());
             if settings.notifications_enabled {
                 let _ = app
@@ -232,7 +235,7 @@ pub(crate) async fn run_wechat_read_sync(app: &AppHandle, settings: &AppSettings
             }
         }
         Err(e) => {
-            let msg = e.to_string();
+            let msg = format!("{:#}", e);
             let needs_auth = msg.contains("401") || msg.contains("expired") || msg.contains("auth");
             if needs_auth {
                 update_platform_status(app, Platform::WechatRead, SyncPlatformStatus::NeedsAuth);
@@ -285,7 +288,7 @@ pub(crate) async fn run_bilibili_sync(app: &AppHandle, settings: &AppSettings) -
             }
         }
         Err(e) => {
-            let msg = e.to_string();
+            let msg = format!("{:#}", e);
             let needs_auth = msg.contains("401") || msg.contains("expired") || msg.contains("not_login");
             if needs_auth {
                 update_platform_status(app, Platform::Bilibili, SyncPlatformStatus::NeedsAuth);
@@ -343,7 +346,7 @@ pub(crate) async fn run_kindle_sync(app: &AppHandle, settings: &AppSettings) -> 
             }
         }
         Err(e) => {
-            let msg = e.to_string();
+            let msg = format!("{:#}", e);
             update_platform_error(app, Platform::Kindle, msg.clone());
             if settings.notifications_enabled {
                 let _ = app
@@ -394,7 +397,7 @@ pub(crate) async fn run_safari_bookmarks_sync(
             }
         }
         Err(e) => {
-            let msg = e.to_string();
+            let msg = format!("{:#}", e);
             update_platform_error(app, Platform::SafariBookmarks, msg.clone());
             if settings.notifications_enabled {
                 let _ = app
@@ -445,7 +448,7 @@ pub(crate) async fn run_chrome_bookmarks_sync(
             }
         }
         Err(e) => {
-            let msg = e.to_string();
+            let msg = format!("{:#}", e);
             update_platform_error(app, Platform::ChromeBookmarks, msg.clone());
             if settings.notifications_enabled {
                 let _ = app
@@ -510,7 +513,7 @@ pub(crate) async fn run_douban_sync(app: &AppHandle, settings: &AppSettings) -> 
             }
         }
         Err(e) => {
-            let msg = e.to_string();
+            let msg = format!("{:#}", e);
             let needs_auth = msg.contains("auth expired") || msg.contains("401") || msg.contains("403");
             if needs_auth {
                 update_platform_status(app, Platform::Douban, SyncPlatformStatus::NeedsAuth);
@@ -570,7 +573,7 @@ pub(crate) async fn run_zhihu_sync(app: &AppHandle, settings: &AppSettings) -> S
             }
         }
         Err(e) => {
-            let msg = e.to_string();
+            let msg = format!("{:#}", e);
             let needs_auth = msg.contains("auth expired") || msg.contains("401") || msg.contains("403");
             if needs_auth {
                 update_platform_status(app, Platform::Zhihu, SyncPlatformStatus::NeedsAuth);
@@ -630,7 +633,7 @@ pub(crate) async fn run_github_stars_sync(app: &AppHandle, settings: &AppSetting
             }
         }
         Err(e) => {
-            let msg = e.to_string();
+            let msg = format!("{:#}", e);
             let needs_auth = msg.contains("401") || msg.contains("invalid or expired");
             if needs_auth {
                 update_platform_status(app, Platform::GithubStars, SyncPlatformStatus::NeedsAuth);
@@ -690,7 +693,7 @@ pub(crate) async fn run_twitter_sync(app: &AppHandle, settings: &AppSettings) ->
             }
         }
         Err(e) => {
-            let msg = e.to_string();
+            let msg = format!("{:#}", e);
             let needs_auth = msg.contains("auth expired") || msg.contains("401") || msg.contains("403");
             if needs_auth {
                 update_platform_status(app, Platform::Twitter, SyncPlatformStatus::NeedsAuth);
@@ -764,37 +767,37 @@ fn update_platform_success(app: &AppHandle, platform: Platform, count: u32) {
             Platform::AppleBooks => {
                 state.apple_books_status = SyncPlatformStatus::Success;
                 state.apple_books_last_sync = Some(now);
-                state.apple_books_book_count = count;
+                state.apple_books_book_count += count;
                 state.apple_books_error = None;
             }
             Platform::WechatRead => {
                 state.wechat_read_status = SyncPlatformStatus::Success;
                 state.wechat_read_last_sync = Some(now);
-                state.wechat_read_book_count = count;
+                state.wechat_read_book_count += count;
                 state.wechat_read_error = None;
             }
             Platform::Bilibili => {
                 state.bilibili_status = SyncPlatformStatus::Success;
                 state.bilibili_last_sync = Some(now);
-                state.bilibili_video_count = count;
+                state.bilibili_video_count += count;
                 state.bilibili_error = None;
             }
             Platform::Kindle => {
                 state.kindle_status = SyncPlatformStatus::Success;
                 state.kindle_last_sync = Some(now);
-                state.kindle_book_count = count;
+                state.kindle_book_count += count;
                 state.kindle_error = None;
             }
             Platform::SafariBookmarks => {
                 state.safari_bookmarks_status = SyncPlatformStatus::Success;
                 state.safari_bookmarks_last_sync = Some(now);
-                state.safari_bookmarks_count = count;
+                state.safari_bookmarks_count += count;
                 state.safari_bookmarks_error = None;
             }
             Platform::ChromeBookmarks => {
                 state.chrome_bookmarks_status = SyncPlatformStatus::Success;
                 state.chrome_bookmarks_last_sync = Some(now);
-                state.chrome_bookmarks_count = count;
+                state.chrome_bookmarks_count += count;
                 state.chrome_bookmarks_error = None;
             }
             Platform::Douban => {
@@ -806,19 +809,19 @@ fn update_platform_success(app: &AppHandle, platform: Platform, count: u32) {
             Platform::Zhihu => {
                 state.zhihu_status = SyncPlatformStatus::Success;
                 state.zhihu_last_sync = Some(now);
-                state.zhihu_item_count = count;
+                state.zhihu_item_count += count;
                 state.zhihu_error = None;
             }
             Platform::GithubStars => {
                 state.github_stars_status = SyncPlatformStatus::Success;
                 state.github_stars_last_sync = Some(now);
-                state.github_stars_count = count;
+                state.github_stars_count += count;
                 state.github_stars_error = None;
             }
             Platform::Twitter => {
                 state.twitter_status = SyncPlatformStatus::Success;
                 state.twitter_last_sync = Some(now);
-                state.twitter_tweet_count = count;
+                state.twitter_tweet_count += count;
                 state.twitter_error = None;
             }
         }

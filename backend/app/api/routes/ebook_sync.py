@@ -96,8 +96,13 @@ async def get_sync_status(
             return {"code": 0, "data": EbookSyncStatus().model_dump(), "message": "ok"}
         sources = [source]
     else:
+        ebook_types = [
+            SourceType.SYNC_APPLE_BOOKS.value,
+            SourceType.SYNC_WECHAT_READ.value,
+            SourceType.SYNC_KINDLE.value,
+        ]
         sources = db.query(SourceConfig).filter(
-            SourceConfig.source_type.like("sync.%"),
+            SourceConfig.source_type.in_(ebook_types),
         ).all()
 
     if not sources:

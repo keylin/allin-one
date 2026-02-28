@@ -140,7 +140,7 @@ pub async fn run_sync(settings: &AppSettings) -> Result<u32> {
         if !ebooks.is_empty() {
             let payload = json!({
                 "source_id": source_id,
-                "ebooks": ebooks,
+                "books": ebooks,
             });
             api_client.ebook_sync(payload).await.context("ebook sync failed")?;
             total_synced += ebooks.len() as u32;
@@ -153,7 +153,7 @@ pub async fn run_sync(settings: &AppSettings) -> Result<u32> {
     Ok(total_synced)
 }
 
-async fn fetch_annotations(http: &reqwest::Client, book_id: &str, since_ts: Option<i64>) -> Result<Vec<Value>> {
+async fn fetch_annotations(http: &reqwest::Client, book_id: &str, _since_ts: Option<i64>) -> Result<Vec<Value>> {
     let resp = http
         .get(format!("{}/book/bookmarklist", WEREAD_BASE))
         .query(&[("bookId", book_id)])
@@ -167,17 +167,8 @@ async fn fetch_annotations(http: &reqwest::Client, book_id: &str, since_ts: Opti
     let data: Value = resp.json().await?;
     let bookmarks = data["updated"].as_array().cloned().unwrap_or_default();
 
-    // Filter by since_ts for incremental sync
-    let bookmarks: Vec<_> = bookmarks
-        .into_iter()
-        .filter(|b| {
-            if let Some(since) = since_ts {
-                b["createTime"].as_i64().map(|t| t > since).unwrap_or(true)
-            } else {
-                true
-            }
-        })
-        .collect();
+    // Always push all annotations — backend upsert handles dedup.
+    // Filtering by createTime would miss modified annotations (e.g. updated notes).
 
     let annotations: Vec<Value> = bookmarks
         .iter()

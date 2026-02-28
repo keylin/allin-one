@@ -9,7 +9,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, HTTPException, status
 from fastapi.responses import FileResponse
-from sqlalchemy import desc, asc, func, or_
+from sqlalchemy import desc, asc, func, or_, case
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -25,10 +25,15 @@ from app.schemas.ebook import (
     BookSearchResult,
     MetadataApplyRequest,
 )
-from app.services.book_metadata import search_google_books
+from app.services.book_metadata import search_google_books, search_google_books_structured
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _escape_like(s: str) -> str:
+    """转义 LIKE 通配符，防止用户输入 % 或 _ 构造非预期匹配。"""
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _safe_media_path(rel_or_abs: str) -> Path:
@@ -78,7 +83,7 @@ async def list_ebooks(
     )
 
     if search:
-        like = f"%{search}%"
+        like = f"%{_escape_like(search)}%"
         query = query.filter(
             (ContentItem.title.ilike(like)) | (ContentItem.author.ilike(like))
         )
@@ -99,7 +104,7 @@ async def list_ebooks(
         "annotation_count": ann_count_sq.c.ann_count,
     }
     if sort_by == "updated_at":
-        sort_column = ReadingProgress.updated_at
+        sort_column = func.coalesce(ReadingProgress.updated_at, ContentItem.created_at)
     else:
         sort_column = sort_map.get(sort_by, ContentItem.created_at)
 
@@ -229,7 +234,7 @@ async def list_all_annotations(
     if type:
         query = query.filter(BookAnnotation.type == type)
     if search:
-        like = f"%{search}%"
+        like = f"%{_escape_like(search)}%"
         query = query.filter(
             or_(
                 BookAnnotation.selected_text.ilike(like),
@@ -364,27 +369,47 @@ async def update_ebook_metadata(
 @router.get("/{content_id}/metadata/search")
 async def search_book_metadata(
     content_id: str,
-    query: Optional[str] = Query(None, description="自定义搜索词"),
+    query: Optional[str] = Query(None, description="自定义搜索词（freeform）"),
+    title: Optional[str] = Query(None, description="书名（结构化搜索）"),
+    author: Optional[str] = Query(None, description="作者（结构化搜索）"),
+    isbn: Optional[str] = Query(None, description="ISBN（结构化搜索）"),
     db: Session = Depends(get_db),
 ):
-    """在线搜索书籍元数据（Google Books API）"""
+    """在线搜索书籍元数据（Google Books API）
+
+    三种模式：
+    - 有 query：用户手动输入，走 freeform 搜索（自动 langRestrict）
+    - 有 title/author/isbn：前端发送结构化字段，走 intitle:/inauthor:/isbn:
+    - 都没有：从 DB 的 content.title/author/isbn 自动填充，走结构化搜索
+    """
     content = db.get(ContentItem, content_id)
     if not content:
         return error_response(404, "电子书不存在")
 
-    search_query = query
-    if not search_query:
-        parts = []
-        if content.title:
-            parts.append(content.title)
-        if content.author:
-            parts.append(content.author)
-        search_query = " ".join(parts)
-
-    if not search_query:
-        return {"code": 0, "data": [], "message": "ok"}
-
-    results = await search_google_books(search_query, max_results=5)
+    if query:
+        # 用户手动输入的 freeform 搜索
+        results = await search_google_books(query, max_results=5)
+    elif title or author or isbn:
+        # 前端传入结构化字段
+        results = await search_google_books_structured(
+            title=title or "", author=author or "", isbn=isbn or "",
+        )
+    else:
+        # 从 DB 自动填充结构化搜索
+        raw = {}
+        if content.raw_data:
+            try:
+                raw = json.loads(content.raw_data)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        db_isbn = raw.get("isbn", "")
+        db_title = content.title or ""
+        db_author = content.author or ""
+        if not db_title and not db_author and not db_isbn:
+            return {"code": 0, "data": [], "message": "ok"}
+        results = await search_google_books_structured(
+            title=db_title, author=db_author, isbn=db_isbn,
+        )
 
     return {
         "code": 0,
@@ -626,7 +651,7 @@ async def list_annotations(
     if type:
         query = query.filter(BookAnnotation.type == type)
     if search:
-        like = f"%{search}%"
+        like = f"%{_escape_like(search)}%"
         query = query.filter(
             or_(
                 BookAnnotation.selected_text.ilike(like),
