@@ -31,3 +31,7 @@ export function getStorageStats() {
 export function getDedupStats() {
   return api.get('/dashboard/dedup-stats')
 }
+
+export function getUserBehaviorStats(params = {}) {
+  return api.get('/dashboard/user-behavior-stats', { params })
+}

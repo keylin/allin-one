@@ -48,6 +48,11 @@ impl Scheduler {
                     let settings = self.settings.read().await.clone();
                     let now = std::time::Instant::now();
 
+                    if settings.server_url.is_empty() {
+                        log::debug!("Server URL not configured, skipping all syncs");
+                        continue;
+                    }
+
                     if settings.apple_books_enabled {
                         let secs = settings.apple_books_interval_hours as u64 * 3600;
                         let due = apple_books_last

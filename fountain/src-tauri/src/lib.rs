@@ -17,9 +17,24 @@ use tokio::sync::{oneshot, RwLock};
 struct ShutdownSender(Mutex<Option<oneshot::Sender<()>>>);
 
 pub fn run() {
-    env_logger::init();
-
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: Some("fountain".into()),
+                    }),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Webview),
+                ])
+                .max_file_size(5_000_000) // 5MB per file
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepAll)
+                .timezone_strategy(tauri_plugin_log::TimezoneStrategy::UseLocal)
+                .level(log::LevelFilter::Info)
+                .level_for("reqwest", log::LevelFilter::Warn)
+                .level_for("tokio", log::LevelFilter::Warn)
+                .build(),
+        )
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(
@@ -53,6 +68,7 @@ pub fn run() {
             commands::credentials::capture_twitter_ct0,
             commands::credentials::save_twitter_cookies,
             commands::credentials::validate_twitter_cookie,
+            commands::settings::open_settings_window,
             commands::settings::get_settings,
             commands::settings::save_settings,
             commands::settings::test_server_connection,
@@ -74,15 +90,24 @@ pub fn run() {
 }
 
 fn setup_tray(app: &mut App) -> tauri::Result<()> {
-    // Tray menu: Quit item for graceful exit
+    // Tray menu: Open Logs + Quit
+    let open_logs_item =
+        MenuItem::with_id(app, "open_logs", "Open Logs", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit Fountain", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&quit_item])?;
+    let menu = Menu::with_items(app, &[&open_logs_item, &quit_item])?;
 
     let tray = TrayIconBuilder::with_id("main-tray")
         .tooltip("Fountain")
         .menu(&menu)
-        .on_menu_event(|app, event| {
-            if event.id.as_ref() == "quit" {
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "open_logs" => {
+                if let Ok(log_dir) = app.path().app_log_dir() {
+                    #[allow(deprecated)]
+                    let _ = tauri_plugin_shell::ShellExt::shell(app)
+                        .open(log_dir.to_string_lossy().as_ref(), None);
+                }
+            }
+            "quit" => {
                 // Send shutdown signal to the scheduler before exiting
                 if let Some(state) = app.try_state::<ShutdownSender>() {
                     if let Ok(mut guard) = state.0.lock() {
@@ -93,6 +118,7 @@ fn setup_tray(app: &mut App) -> tauri::Result<()> {
                 }
                 app.exit(0);
             }
+            _ => {}
         })
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
@@ -119,11 +145,17 @@ fn start_scheduler(app: &mut App, shutdown: oneshot::Receiver<()>) {
     use tauri_plugin_store::StoreExt;
 
     // Load initial settings from store
-    let initial_settings = app
+    let initial_settings: config::AppSettings = app
         .store("settings.json")
         .ok()
         .and_then(|s| s.get("app_settings"))
-        .and_then(|v| serde_json::from_value(v).ok())
+        .and_then(|v| match serde_json::from_value(v.clone()) {
+            Ok(s) => Some(s),
+            Err(e) => {
+                log::error!("Failed to deserialize initial settings: {e}. Raw: {v}");
+                None
+            }
+        })
         .unwrap_or_default();
 
     let settings = Arc::new(RwLock::new(initial_settings));

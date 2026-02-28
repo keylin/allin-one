@@ -43,8 +43,12 @@ export function updateEbookMetadata(contentId, data) {
   return api.put(`/ebook/${contentId}/metadata`, data)
 }
 
-export function searchBookMetadata(contentId, query = '') {
-  const params = query ? { query } : {}
+export function searchBookMetadata(contentId, { query, title, author, isbn } = {}) {
+  const params = {}
+  if (query) params.query = query
+  if (title) params.title = title
+  if (author) params.author = author
+  if (isbn) params.isbn = isbn
   return api.get(`/ebook/${contentId}/metadata/search`, { params })
 }
 

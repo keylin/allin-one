@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-capture-wechat-cookies"
+description = "Enables the capture_wechat_cookies command without any pre-configured scope."
+commands.allow = ["capture_wechat_cookies"]
+
+[[permission]]
+identifier = "deny-capture-wechat-cookies"
+description = "Denies the capture_wechat_cookies command without any pre-configured scope."
+commands.deny = ["capture_wechat_cookies"]

@@ -56,6 +56,10 @@ export function batchFavorite(ids) {
   return api.post('/content/batch-favorite', { ids })
 }
 
+export function batchUnfavorite(ids) {
+  return api.post('/content/batch-unfavorite', { ids })
+}
+
 export function submitContent(data) {
   return api.post('/content/submit', data)
 }

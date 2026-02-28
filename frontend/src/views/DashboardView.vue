@@ -10,6 +10,7 @@ import {
   getContentStatusDistribution,
   getStorageStats,
   getDedupStats,
+  getUserBehaviorStats,
 } from '@/api/dashboard'
 import { getFinanceSummary } from '@/api/finance'
 import { collectSource } from '@/api/sources'
@@ -30,7 +31,13 @@ const financeSummaries = ref([])
 const contentStatus = ref({ pending: 0, processing: 0, ready: 0, analyzed: 0, failed: 0, total: 0 })
 const storageStats = ref({ media: {}, database_bytes: 0, total_bytes: 0 })
 const dedupStats = ref({ total_items: 0, duplicate_count: 0, originals_with_dups: 0, dedup_rate: 0, today_duplicates: 0, by_source: [] })
+const behaviorStats = ref(null)
 const loading = ref(true)
+
+// 热力图 tooltip 状态
+const heatmapTooltip = ref({ visible: false, text: '', x: 0, y: 0 })
+// 趋势图 tooltip 状态
+const trendTooltip = ref({ visible: false, text: '', x: 0, y: 0 })
 const collectingId = ref(null)
 let timer = null
 let failCount = 0
@@ -71,6 +78,103 @@ const todayChange = computed(() => {
   const yesterday = stats.value.contents_yesterday
   if (yesterday === 0) return 0
   return today - yesterday
+})
+
+// --- 行为统计今昨对比 ---
+function behaviorDayChange(today, yesterday) {
+  if (yesterday === 0) return 0
+  return today - yesterday
+}
+
+// --- 收藏率 ---
+const favoriteRate = computed(() => {
+  if (!behaviorStats.value) return null
+  const { read_total, favorited_total } = behaviorStats.value
+  if (!read_total) return null
+  return Math.round(favorited_total / read_total * 100)
+})
+
+// --- 热力图计算 ---
+const heatmapCells = computed(() => {
+  if (!behaviorStats.value?.heatmap) return []
+  const map = {}
+  behaviorStats.value.heatmap.forEach(d => { map[d.date] = d.read_count })
+
+  const todayStr = behaviorStats.value?.today || dayjs().format('YYYY-MM-DD')
+  const cells = []
+  // 从 84 天前开始，按列（周）x 行（天）排列，列优先
+  const today = dayjs()
+  const startDay = today.subtract(83, 'day')
+  for (let col = 0; col < 12; col++) {
+    for (let row = 0; row < 7; row++) {
+      const dayIndex = col * 7 + row
+      const date = startDay.add(dayIndex, 'day')
+      const dateStr = date.format('YYYY-MM-DD')
+      const isFuture = dateStr > todayStr
+      const count = map[dateStr] || 0
+      let colorClass = 'fill-slate-100'
+      if (!isFuture) {
+        if (count >= 6) colorClass = 'fill-emerald-600'
+        else if (count >= 3) colorClass = 'fill-emerald-400'
+        else if (count >= 1) colorClass = 'fill-emerald-200'
+      }
+      cells.push({ dateStr, count, col, row, colorClass: isFuture ? '' : colorClass, isFuture, date })
+    }
+  }
+  return cells
+})
+
+const heatmapMonthLabels = computed(() => {
+  const labels = []
+  const seen = new Set()
+  heatmapCells.value.forEach(cell => {
+    if (cell.row === 0) {
+      const month = cell.date.format('M月')
+      if (!seen.has(month)) {
+        seen.add(month)
+        labels.push({ col: cell.col, label: month })
+      }
+    }
+  })
+  return labels
+})
+
+// --- 趋势折线图计算 ---
+const trendChartData = computed(() => {
+  if (!behaviorStats.value?.trend?.length) return null
+  const data = behaviorStats.value.trend
+  const readCounts = data.map(d => d.read_count)
+  const favCounts = data.map(d => d.favorite_count)
+  const maxVal = Math.max(...readCounts, ...favCounts, 1)
+  const W = 400
+  const H = 120
+  const padL = 8, padR = 8, padT = 10, padB = 10
+  const chartW = W - padL - padR
+  const chartH = H - padT - padB
+  const n = data.length
+
+  function toPoint(i, val) {
+    const x = padL + (n > 1 ? (i / (n - 1)) * chartW : chartW / 2)
+    const y = padT + chartH - (val / maxVal) * chartH
+    return { x, y }
+  }
+
+  const readPoints = data.map((d, i) => toPoint(i, d.read_count))
+  const favPoints = data.map((d, i) => toPoint(i, d.favorite_count))
+
+  function toPath(points) {
+    return points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ')
+  }
+
+  return { data, readPoints, favPoints, readPath: toPath(readPoints), favPath: toPath(favPoints), W, H }
+})
+
+// --- 数据源消费偏好 ---
+const sourcePreferenceData = computed(() => {
+  if (!behaviorStats.value?.source_preference?.length) return []
+  const top = behaviorStats.value.source_preference.slice(0, 5)
+  const maxRead = Math.max(...top.map(s => s.read_count), 1)
+  return top.map(s => ({ ...s, barWidth: Math.round(s.read_count / maxRead * 100) }))
 })
 
 // --- 内容状态分布 ---
@@ -146,6 +250,7 @@ async function fetchData() {
     getContentStatusDistribution(),
     getStorageStats(),
     getDedupStats(),
+    getUserBehaviorStats({ heatmap_days: 84, trend_days: 7, top_n: 5 }),
   ])
 
   const handlers = [
@@ -157,6 +262,7 @@ async function fetchData() {
     (res) => { contentStatus.value = res.data },
     (res) => { storageStats.value = res.data },
     (res) => { dedupStats.value = res.data },
+    (res) => { behaviorStats.value = res.data },
   ]
 
   let hasError = false
@@ -184,6 +290,33 @@ async function fetchData() {
 
 function selectDate(date) {
   selectedDate.value = date
+}
+
+function showHeatmapTooltip(event, cell) {
+  const d = dayjs(cell.dateStr)
+  const label = `${d.format('M')} 月 ${d.format('D')} 日：阅读 ${cell.count} 篇`
+  heatmapTooltip.value = { visible: true, text: label }
+}
+
+function hideHeatmapTooltip() {
+  heatmapTooltip.value.visible = false
+}
+
+function showTrendTooltip(event, label) {
+  trendTooltip.value = { visible: true, text: label }
+}
+
+function hideTrendTooltip() {
+  trendTooltip.value.visible = false
+}
+
+function formatTrendDate(dateStr) {
+  const d = dayjs(dateStr)
+  const today = dayjs().format('YYYY-MM-DD')
+  const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD')
+  if (dateStr === today) return '今天'
+  if (dateStr === yesterday) return '昨天'
+  return d.format('MM/DD')
 }
 
 function formatTime(t) {
@@ -275,6 +408,344 @@ onUnmounted(() => {
             </span>
           </div>
           <div v-if="item.date" class="text-[10px] text-slate-300 mt-0.5">{{ item.date }}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 我的阅读 -->
+    <div v-if="behaviorStats || loading" class="space-y-4">
+      <div class="flex items-center gap-2">
+        <h2 class="text-sm font-semibold text-slate-700">我的阅读</h2>
+        <div class="flex-1 h-px bg-slate-100"></div>
+      </div>
+
+      <!-- B1: 行为统计卡片 -->
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <!-- 已阅读 -->
+        <div
+          class="bg-white rounded-xl border border-slate-200/60 p-4 shadow-sm hover:shadow-md hover:border-slate-300 transition-all duration-300 cursor-pointer"
+          @click="router.push('/feed?unread=0')"
+        >
+          <div class="flex items-center justify-between mb-2">
+            <div class="w-9 h-9 rounded-lg flex items-center justify-center bg-teal-50">
+              <svg class="w-5 h-5 text-teal-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" />
+              </svg>
+            </div>
+            <svg class="w-4 h-4 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+            </svg>
+          </div>
+          <div class="flex items-baseline gap-2">
+            <div class="text-2xl font-bold tracking-tight text-teal-700">
+              {{ loading || !behaviorStats ? '-' : behaviorStats.read_total }}
+            </div>
+            <div v-if="!loading && behaviorStats && behaviorDayChange(behaviorStats.read_today, behaviorStats.read_yesterday) !== 0" class="flex items-center gap-0.5">
+              <svg v-if="behaviorDayChange(behaviorStats.read_today, behaviorStats.read_yesterday) > 0" class="w-3 h-3 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M5 10l7-7m0 0l7 7m-7-7v18" />
+              </svg>
+              <svg v-else class="w-3 h-3 text-rose-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+              </svg>
+              <span class="text-xs font-medium" :class="behaviorDayChange(behaviorStats.read_today, behaviorStats.read_yesterday) > 0 ? 'text-emerald-500' : 'text-rose-500'">
+                {{ behaviorDayChange(behaviorStats.read_today, behaviorStats.read_yesterday) > 0 ? '+' : '' }}{{ behaviorDayChange(behaviorStats.read_today, behaviorStats.read_yesterday) }}
+              </span>
+            </div>
+          </div>
+          <div class="text-sm text-slate-500 mt-0.5">已阅读</div>
+        </div>
+
+        <!-- 已收藏 -->
+        <div
+          class="bg-white rounded-xl border border-slate-200/60 p-4 shadow-sm hover:shadow-md hover:border-slate-300 transition-all duration-300 cursor-pointer"
+          @click="router.push('/favorites')"
+        >
+          <div class="flex items-center justify-between mb-2">
+            <div class="w-9 h-9 rounded-lg flex items-center justify-center bg-pink-50">
+              <svg class="w-5 h-5 text-pink-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M21 8.25c0-2.485-2.099-4.5-4.688-4.5-1.935 0-3.597 1.126-4.312 2.733-.715-1.607-2.377-2.733-4.313-2.733C5.1 3.75 3 5.765 3 8.25c0 7.22 9 12 9 12s9-4.78 9-12z" />
+              </svg>
+            </div>
+            <svg class="w-4 h-4 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+            </svg>
+          </div>
+          <div class="flex items-baseline gap-2">
+            <div class="text-2xl font-bold tracking-tight text-pink-600">
+              {{ loading || !behaviorStats ? '-' : behaviorStats.favorited_total }}
+            </div>
+            <div v-if="!loading && behaviorStats && behaviorDayChange(behaviorStats.favorited_today, behaviorStats.favorited_yesterday) !== 0" class="flex items-center gap-0.5">
+              <svg v-if="behaviorDayChange(behaviorStats.favorited_today, behaviorStats.favorited_yesterday) > 0" class="w-3 h-3 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M5 10l7-7m0 0l7 7m-7-7v18" />
+              </svg>
+              <svg v-else class="w-3 h-3 text-rose-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+              </svg>
+              <span class="text-xs font-medium" :class="behaviorDayChange(behaviorStats.favorited_today, behaviorStats.favorited_yesterday) > 0 ? 'text-emerald-500' : 'text-rose-500'">
+                {{ behaviorDayChange(behaviorStats.favorited_today, behaviorStats.favorited_yesterday) > 0 ? '+' : '' }}{{ behaviorDayChange(behaviorStats.favorited_today, behaviorStats.favorited_yesterday) }}
+              </span>
+            </div>
+          </div>
+          <div class="text-sm text-slate-500 mt-0.5">已收藏</div>
+          <div v-if="favoriteRate !== null" class="text-xs text-pink-400 mt-0.5">
+            收藏率 {{ favoriteRate }}%
+          </div>
+        </div>
+
+        <!-- AI 对话 -->
+        <div
+          class="bg-white rounded-xl border border-slate-200/60 p-4 shadow-sm hover:shadow-md hover:border-slate-300 transition-all duration-300 cursor-pointer"
+          @click="router.push('/content')"
+        >
+          <div class="flex items-center justify-between mb-2">
+            <div class="w-9 h-9 rounded-lg flex items-center justify-center bg-violet-50">
+              <svg class="w-5 h-5 text-violet-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M8.625 9.75a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375m-13.5 3.01c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.184-4.183a1.14 1.14 0 01.778-.332 48.294 48.294 0 005.83-.498c1.585-.233 2.708-1.626 2.708-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" />
+              </svg>
+            </div>
+            <svg class="w-4 h-4 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+            </svg>
+          </div>
+          <div class="text-2xl font-bold tracking-tight text-violet-700">
+            {{ loading || !behaviorStats ? '-' : behaviorStats.chat_count }}
+          </div>
+          <div class="text-sm text-slate-500 mt-0.5">AI 对话</div>
+        </div>
+
+        <!-- 笔记批注 -->
+        <div
+          class="bg-white rounded-xl border border-slate-200/60 p-4 shadow-sm hover:shadow-md hover:border-slate-300 transition-all duration-300 cursor-pointer"
+          @click="router.push('/content')"
+        >
+          <div class="flex items-center justify-between mb-2">
+            <div class="w-9 h-9 rounded-lg flex items-center justify-center bg-cyan-50">
+              <svg class="w-5 h-5 text-cyan-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10" />
+              </svg>
+            </div>
+            <svg class="w-4 h-4 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+            </svg>
+          </div>
+          <div class="text-2xl font-bold tracking-tight text-cyan-700">
+            {{ loading || !behaviorStats ? '-' : (behaviorStats.note_count + behaviorStats.annotation_count) }}
+          </div>
+          <div class="text-sm text-slate-500 mt-0.5">笔记批注</div>
+        </div>
+      </div>
+
+      <!-- B2: 阅读活跃度热力图 -->
+      <div class="bg-white rounded-xl border border-slate-200/60 shadow-sm p-4">
+        <h3 class="text-sm font-semibold text-slate-700 mb-4">阅读活跃度</h3>
+
+        <div v-if="loading" class="flex items-center justify-center h-28">
+          <svg class="w-6 h-6 animate-spin text-slate-200" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+          </svg>
+        </div>
+
+        <div v-else-if="behaviorStats" class="relative">
+          <!-- Tooltip -->
+          <div
+            v-if="heatmapTooltip.visible"
+            class="absolute -top-8 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-xs px-2 py-1 rounded whitespace-nowrap pointer-events-none z-10"
+          >
+            {{ heatmapTooltip.text }}
+          </div>
+
+          <div class="flex gap-3">
+            <!-- 行标签（周一/周三/周五） -->
+            <div class="flex flex-col justify-around pt-6 pb-0 shrink-0" style="height: 105px;">
+              <span class="text-[10px] text-slate-400 leading-none" style="height: 15px; display: flex; align-items: center;">一</span>
+              <span class="text-[10px] text-slate-400 leading-none" style="height: 15px; display: flex; align-items: center;"></span>
+              <span class="text-[10px] text-slate-400 leading-none" style="height: 15px; display: flex; align-items: center;">三</span>
+              <span class="text-[10px] text-slate-400 leading-none" style="height: 15px; display: flex; align-items: center;"></span>
+              <span class="text-[10px] text-slate-400 leading-none" style="height: 15px; display: flex; align-items: center;">五</span>
+              <span class="text-[10px] text-slate-400 leading-none" style="height: 15px; display: flex; align-items: center;"></span>
+              <span class="text-[10px] text-slate-400 leading-none" style="height: 15px; display: flex; align-items: center;"></span>
+            </div>
+
+            <!-- 热力图 SVG -->
+            <div class="flex-1 overflow-x-auto">
+              <svg :width="12 * 15" :height="7 * 15 + 20" class="block">
+                <!-- 月份标签 -->
+                <text
+                  v-for="m in heatmapMonthLabels"
+                  :key="m.col"
+                  :x="m.col * 15 + 6"
+                  y="12"
+                  font-size="9"
+                  fill="#94a3b8"
+                  text-anchor="middle"
+                >{{ m.label }}</text>
+
+                <!-- 格子（过去/今天） -->
+                <rect
+                  v-for="cell in heatmapCells.filter(c => !c.isFuture)"
+                  :key="cell.dateStr"
+                  :x="cell.col * 15"
+                  :y="cell.row * 15 + 18"
+                  width="12"
+                  height="12"
+                  rx="2"
+                  :class="cell.colorClass"
+                  class="cursor-pointer hover:opacity-80 transition-opacity"
+                  @mouseenter="showHeatmapTooltip($event, cell)"
+                  @mouseleave="hideHeatmapTooltip"
+                />
+                <!-- 格子（未来，虚线边框） -->
+                <rect
+                  v-for="cell in heatmapCells.filter(c => c.isFuture)"
+                  :key="`future-${cell.dateStr}`"
+                  :x="cell.col * 15"
+                  :y="cell.row * 15 + 18"
+                  width="12"
+                  height="12"
+                  rx="2"
+                  fill="none"
+                  stroke="#e2e8f0"
+                  stroke-width="1"
+                  stroke-dasharray="3 2"
+                />
+              </svg>
+            </div>
+          </div>
+
+          <!-- 图例 -->
+          <div class="flex items-center justify-end gap-1.5 mt-2">
+            <span class="text-[10px] text-slate-400">少</span>
+            <svg width="60" height="12">
+              <rect x="0" y="0" width="12" height="12" rx="2" class="fill-slate-100" />
+              <rect x="16" y="0" width="12" height="12" rx="2" class="fill-emerald-200" />
+              <rect x="32" y="0" width="12" height="12" rx="2" class="fill-emerald-400" />
+              <rect x="48" y="0" width="12" height="12" rx="2" class="fill-emerald-600" />
+            </svg>
+            <span class="text-[10px] text-slate-400">多</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- B3 + B4: 趋势图 + 偏好 -->
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <!-- B3: 近期趋势折线图 -->
+        <div class="lg:col-span-2 bg-white rounded-xl border border-slate-200/60 shadow-sm p-4">
+          <h3 class="text-sm font-semibold text-slate-700 mb-4">近期阅读趋势</h3>
+
+          <div v-if="loading" class="flex items-center justify-center h-32">
+            <svg class="w-6 h-6 animate-spin text-slate-200" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
+          </div>
+
+          <div v-else-if="trendChartData" class="relative">
+            <!-- Tooltip -->
+            <div
+              v-if="trendTooltip.visible"
+              class="absolute -top-6 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-xs px-2 py-1 rounded whitespace-nowrap pointer-events-none z-10"
+            >
+              {{ trendTooltip.text }}
+            </div>
+
+            <svg :viewBox="`0 0 ${trendChartData.W} ${trendChartData.H}`" class="w-full" style="height: 120px;">
+              <!-- 阅读线 -->
+              <path :d="trendChartData.readPath" fill="none" stroke="#6366f1" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" />
+              <!-- 收藏线 -->
+              <path :d="trendChartData.favPath" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" />
+
+              <!-- 阅读数据点 -->
+              <circle
+                v-for="(pt, i) in trendChartData.readPoints"
+                :key="`r-${i}`"
+                :cx="pt.x"
+                :cy="pt.y"
+                r="3"
+                fill="#6366f1"
+                class="cursor-pointer hover:r-4 transition-all"
+                @mouseenter="showTrendTooltip($event, `${formatTrendDate(trendChartData.data[i].date)}：阅读 ${trendChartData.data[i].read_count} 篇`)"
+                @mouseleave="hideTrendTooltip"
+              />
+
+              <!-- 收藏数据点 -->
+              <circle
+                v-for="(pt, i) in trendChartData.favPoints"
+                :key="`f-${i}`"
+                :cx="pt.x"
+                :cy="pt.y"
+                r="3"
+                fill="#f59e0b"
+                class="cursor-pointer transition-all"
+                @mouseenter="showTrendTooltip($event, `${formatTrendDate(trendChartData.data[i].date)}：收藏 ${trendChartData.data[i].favorite_count} 篇`)"
+                @mouseleave="hideTrendTooltip"
+              />
+            </svg>
+
+            <!-- X 轴日期标签 -->
+            <div class="flex justify-between mt-1 px-2">
+              <span
+                v-for="(d, i) in trendChartData.data"
+                :key="i"
+                class="text-[10px] text-slate-400 text-center"
+                style="min-width: 0; flex: 1;"
+              >
+                {{ formatTrendDate(d.date) }}
+              </span>
+            </div>
+
+            <!-- 图例 -->
+            <div class="flex items-center gap-4 mt-3 justify-center">
+              <div class="flex items-center gap-1.5">
+                <div class="w-3 h-0.5 bg-indigo-500 rounded"></div>
+                <span class="text-[10px] text-slate-500">阅读</span>
+              </div>
+              <div class="flex items-center gap-1.5">
+                <div class="w-3 h-0.5 bg-amber-500 rounded"></div>
+                <span class="text-[10px] text-slate-500">收藏</span>
+              </div>
+            </div>
+          </div>
+
+          <div v-else class="flex items-center justify-center h-32 text-sm text-slate-400">
+            暂无数据
+          </div>
+        </div>
+
+        <!-- B4: 数据源消费偏好 -->
+        <div class="bg-white rounded-xl border border-slate-200/60 shadow-sm p-4">
+          <h3 class="text-sm font-semibold text-slate-700 mb-4">数据源偏好 Top 5</h3>
+
+          <div v-if="loading" class="flex items-center justify-center h-32">
+            <svg class="w-6 h-6 animate-spin text-slate-200" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
+          </div>
+
+          <div v-else-if="sourcePreferenceData.length > 0" class="space-y-3">
+            <div v-for="src in sourcePreferenceData" :key="src.source_id" class="space-y-1">
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-xs text-slate-700 truncate flex-1 min-w-0" :title="src.source_name">{{ src.source_name }}</span>
+                <div class="flex items-center gap-2 shrink-0">
+                  <span class="text-xs font-medium text-teal-600">{{ src.read_count }}</span>
+                  <span class="text-[10px] text-slate-400">阅读</span>
+                  <span class="text-xs font-medium text-pink-500">{{ src.favorite_count }}</span>
+                  <span class="text-[10px] text-slate-400">收藏</span>
+                </div>
+              </div>
+              <div class="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                <div
+                  class="h-1.5 rounded-full bg-teal-400 transition-all duration-500"
+                  :style="{ width: `${src.barWidth}%` }"
+                ></div>
+              </div>
+            </div>
+          </div>
+
+          <div v-else class="flex items-center justify-center h-32 text-sm text-slate-400">
+            暂无数据
+          </div>
         </div>
       </div>
     </div>

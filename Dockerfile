@@ -1,7 +1,7 @@
 # ============================================
 # Stage 1: Build Frontend
 # ============================================
-FROM node:22-alpine AS frontend-builder
+FROM docker.m.daocloud.io/node:22-alpine AS frontend-builder
 
 # 配置阿里云 Alpine 镜像源
 RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
@@ -26,12 +26,12 @@ RUN npm run build
 # ============================================
 # Stage 2: Docker CLI (for RSSHub container management)
 # ============================================
-FROM docker:cli AS docker-cli
+FROM docker.m.daocloud.io/docker:cli AS docker-cli
 
 # ============================================
 # Stage 3: Backend Runtime
 # ============================================
-FROM python:3.11-slim
+FROM docker.m.daocloud.io/python:3.11-slim
 
 # 配置阿里云 Debian 镜像源
 RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources && \

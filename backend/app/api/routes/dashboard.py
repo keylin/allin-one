@@ -13,6 +13,7 @@ from app.core.timezone_utils import (
     get_local_today, get_local_date_offset, get_local_date_range,
 )
 from app.models.content import SourceConfig, ContentItem, CollectionRecord
+from app.models.ebook import BookAnnotation
 from app.models.pipeline import PipelineExecution, PipelineStatus
 
 router = APIRouter()
@@ -427,6 +428,203 @@ async def get_dedup_stats(db: Session = Depends(get_db)):
             "dedup_rate": dedup_rate,
             "today_duplicates": today_duplicates,
             "by_source": by_source,
+        },
+        "message": "ok",
+    }
+
+
+def _query_behavior_overview(db: Session) -> dict:
+    """行为概览指标：阅读/收藏/对话/笔记/批注计数"""
+    no_dup = ContentItem.duplicate_of_id.is_(None)
+    today_start, today_end = get_local_day_boundaries()
+    yesterday_date = get_local_date_offset(-1)
+    yesterday_start, yesterday_end = get_local_day_boundaries(yesterday_date)
+
+    row = db.query(
+        func.count(case((ContentItem.view_count > 0, ContentItem.id))).label("read_total"),
+        func.count(case((
+            (ContentItem.last_viewed_at >= today_start) &
+            (ContentItem.last_viewed_at < today_end),
+            ContentItem.id,
+        ))).label("read_today"),
+        func.count(case((
+            (ContentItem.last_viewed_at >= yesterday_start) &
+            (ContentItem.last_viewed_at < yesterday_end),
+            ContentItem.id,
+        ))).label("read_yesterday"),
+        func.count(case((ContentItem.is_favorited.is_(True), ContentItem.id))).label("favorited_total"),
+        func.count(case((
+            (ContentItem.is_favorited.is_(True)) &
+            (ContentItem.favorited_at >= today_start) &
+            (ContentItem.favorited_at < today_end),
+            ContentItem.id,
+        ))).label("favorited_today"),
+        func.count(case((
+            (ContentItem.is_favorited.is_(True)) &
+            (ContentItem.favorited_at >= yesterday_start) &
+            (ContentItem.favorited_at < yesterday_end),
+            ContentItem.id,
+        ))).label("favorited_yesterday"),
+        func.count(case((ContentItem.chat_history.isnot(None), ContentItem.id))).label("chat_count"),
+        func.count(case((
+            (ContentItem.user_note.isnot(None)) & (ContentItem.user_note != ""),
+            ContentItem.id,
+        ))).label("note_count"),
+    ).filter(no_dup).one()
+
+    annotation_count = db.query(func.count(BookAnnotation.id)).scalar()
+
+    return {
+        "read_total": row.read_total,
+        "read_today": row.read_today,
+        "read_yesterday": row.read_yesterday,
+        "favorited_total": row.favorited_total,
+        "favorited_today": row.favorited_today,
+        "favorited_yesterday": row.favorited_yesterday,
+        "chat_count": row.chat_count,
+        "note_count": row.note_count,
+        "annotation_count": annotation_count,
+    }
+
+
+def _query_reading_heatmap(db: Session, tz_param, days: int) -> list[dict]:
+    """阅读活跃度热力图"""
+    no_dup = ContentItem.duplicate_of_id.is_(None)
+    start_date = get_local_date_offset(-(days - 1))
+    start_utc, _ = get_local_day_boundaries(start_date)
+
+    rows = (
+        db.query(
+            func.date(
+                func.timezone(tz_param, func.timezone("UTC", ContentItem.last_viewed_at))
+            ).label("day"),
+            func.count(ContentItem.id).label("read_count"),
+        )
+        .filter(
+            no_dup,
+            ContentItem.last_viewed_at >= start_utc,
+            ContentItem.last_viewed_at.isnot(None),
+        )
+        .group_by("day")
+        .all()
+    )
+    heatmap_map = {str(row.day): row.read_count for row in rows}
+    return [
+        {"date": day, "read_count": heatmap_map.get(day, 0)}
+        for day in get_local_date_range(days)
+    ]
+
+
+def _query_behavior_trend(db: Session, tz_param, days: int) -> list[dict]:
+    """近期行为趋势（已读 + 收藏）"""
+    no_dup = ContentItem.duplicate_of_id.is_(None)
+    start_date = get_local_date_offset(-(days - 1))
+    start_utc, _ = get_local_day_boundaries(start_date)
+
+    read_rows = (
+        db.query(
+            func.date(
+                func.timezone(tz_param, func.timezone("UTC", ContentItem.last_viewed_at))
+            ).label("day"),
+            func.count(ContentItem.id).label("read_count"),
+        )
+        .filter(
+            no_dup,
+            ContentItem.last_viewed_at >= start_utc,
+            ContentItem.last_viewed_at.isnot(None),
+        )
+        .group_by("day")
+        .all()
+    )
+    read_map = {str(row.day): row.read_count for row in read_rows}
+
+    fav_rows = (
+        db.query(
+            func.date(
+                func.timezone(tz_param, func.timezone("UTC", ContentItem.favorited_at))
+            ).label("day"),
+            func.count(ContentItem.id).label("favorite_count"),
+        )
+        .filter(
+            no_dup,
+            ContentItem.is_favorited.is_(True),
+            ContentItem.favorited_at >= start_utc,
+            ContentItem.favorited_at.isnot(None),
+        )
+        .group_by("day")
+        .all()
+    )
+    fav_map = {str(row.day): row.favorite_count for row in fav_rows}
+
+    return [
+        {
+            "date": day,
+            "read_count": read_map.get(day, 0),
+            "favorite_count": fav_map.get(day, 0),
+        }
+        for day in get_local_date_range(days)
+    ]
+
+
+def _query_source_preference(db: Session, top_n: int) -> list[dict]:
+    """数据源消费偏好 Top N"""
+    no_dup = ContentItem.duplicate_of_id.is_(None)
+    rows = (
+        db.query(
+            ContentItem.source_id,
+            func.count(ContentItem.id).label("read_count"),
+            func.sum(case((ContentItem.is_favorited.is_(True), 1), else_=0)).label("favorite_count"),
+        )
+        .filter(no_dup, ContentItem.view_count > 0, ContentItem.source_id.isnot(None))
+        .group_by(ContentItem.source_id)
+        .order_by(func.count(ContentItem.id).desc())
+        .limit(top_n)
+        .all()
+    )
+
+    source_ids = [r.source_id for r in rows]
+    sources = (
+        db.query(SourceConfig.id, SourceConfig.name)
+        .filter(SourceConfig.id.in_(source_ids))
+        .all()
+    )
+    name_map = {s.id: s.name for s in sources}
+
+    return [
+        {
+            "source_id": r.source_id,
+            "source_name": name_map.get(r.source_id, "未知数据源"),
+            "read_count": r.read_count,
+            "favorite_count": r.favorite_count or 0,
+        }
+        for r in rows
+    ]
+
+
+@router.get("/user-behavior-stats")
+async def get_user_behavior_stats(
+    heatmap_days: int = Query(84, ge=1, le=365),
+    trend_days: int = Query(7, ge=1, le=90),
+    top_n: int = Query(5, ge=1, le=20),
+    db: Session = Depends(get_db),
+):
+    """获取用户行为统计聚合数据（行为概览、热力图、趋势、数据源偏好）"""
+    tz_name = get_container_timezone_name()
+    tz_param = bindparam("tz_name", value=tz_name, type_=String)
+
+    overview = _query_behavior_overview(db)
+    heatmap = _query_reading_heatmap(db, tz_param, heatmap_days)
+    trend = _query_behavior_trend(db, tz_param, trend_days)
+    source_preference = _query_source_preference(db, top_n)
+
+    return {
+        "code": 0,
+        "data": {
+            **overview,
+            "heatmap": heatmap,
+            "trend": trend,
+            "source_preference": source_preference,
+            "today": get_local_today(),
         },
         "message": "ok",
     }

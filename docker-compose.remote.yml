@@ -8,7 +8,7 @@ x-proxy-env: &proxy-env
 services:
   # PostgreSQL - 主数据库
   postgres:
-    image: postgres:17-alpine
+    image: docker.m.daocloud.io/postgres:17-alpine
     container_name: allin-postgres
     restart: unless-stopped
     command: postgres -c timezone=UTC
@@ -29,7 +29,7 @@ services:
 
   # RSS Hub - RSS 聚合服务
   rsshub:
-    image: diygod/rsshub:latest
+    image: docker.m.daocloud.io/diygod/rsshub:latest
     container_name: allin-rsshub
     restart: unless-stopped
     ports:
@@ -50,7 +50,7 @@ services:
 
   # Browserless - 无头浏览器服务（用于 L2 内容抓取）
   browserless:
-    image: browserless/chrome:latest
+    image: docker.m.daocloud.io/browserless/chrome:latest
     container_name: allin-browserless
     restart: unless-stopped
     deploy:

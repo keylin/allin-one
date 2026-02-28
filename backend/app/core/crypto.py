@@ -32,5 +32,6 @@ def decrypt_credential(ciphertext: str) -> str:
         return ciphertext
     try:
         return f.decrypt(ciphertext.encode()).decode()
-    except (InvalidToken, Exception):
+    except InvalidToken:
+        # 非 Fernet 格式，视为历史明文数据
         return ciphertext

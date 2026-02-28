@@ -131,7 +131,7 @@ async fn sync_books(http: &reqwest::Client, api_client: &ApiClient, uid: &str) -
     for chunk in ebooks.chunks(BATCH) {
         let payload = json!({
             "source_id": source_id,
-            "ebooks": chunk,
+            "books": chunk,
         });
         api_client
             .ebook_sync(payload)

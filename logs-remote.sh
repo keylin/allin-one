@@ -26,7 +26,7 @@
 # ============================================================
 set -e
 
-REMOTE_HOST="${DEPLOY_HOST:-allin@192.168.31.158}"
+REMOTE_HOST="${DEPLOY_HOST:-allin@192.168.1.103}"
 REMOTE_DIR="${DEPLOY_DIR:-~/allin-one}"
 SSH="ssh -t -p ${SSH_PORT:-2222} ${REMOTE_HOST}"
 SSH_NT="ssh -T -p ${SSH_PORT:-2222} ${REMOTE_HOST}"

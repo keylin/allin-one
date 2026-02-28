@@ -12,6 +12,10 @@ export function toggleMediaFavorite(mediaId) {
   return api.post(`/media/${mediaId}/favorite`)
 }
 
+export function retryMedia(mediaId) {
+  return api.post(`/media/${mediaId}/retry`)
+}
+
 // 复用视频下载提交端点
 export function downloadMedia(url, sourceId = null) {
   return api.post('/video/download', { url, source_id: sourceId })

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-capture-twitter-ct0"
+description = "Enables the capture_twitter_ct0 command without any pre-configured scope."
+commands.allow = ["capture_twitter_ct0"]
+
+[[permission]]
+identifier = "deny-capture-twitter-ct0"
+description = "Denies the capture_twitter_ct0 command without any pre-configured scope."
+commands.deny = ["capture_twitter_ct0"]

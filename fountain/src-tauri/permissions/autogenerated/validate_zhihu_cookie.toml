@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-validate-zhihu-cookie"
+description = "Enables the validate_zhihu_cookie command without any pre-configured scope."
+commands.allow = ["validate_zhihu_cookie"]
+
+[[permission]]
+identifier = "deny-validate-zhihu-cookie"
+description = "Denies the validate_zhihu_cookie command without any pre-configured scope."
+commands.deny = ["validate_zhihu_cookie"]

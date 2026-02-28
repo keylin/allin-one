@@ -1,7 +1,8 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { invoke } from '@tauri-apps/api/core'
+import { tracedInvoke } from '../lib/logger'
 import { listen } from '@tauri-apps/api/event'
+import { error as logError } from '@tauri-apps/plugin-log'
 
 export const useSyncStore = defineStore('sync', () => {
   const status = ref({
@@ -63,29 +64,29 @@ export const useSyncStore = defineStore('sync', () => {
 
   async function loadStatus() {
     try {
-      const s = await invoke('get_sync_status')
+      const s = await tracedInvoke('get_sync_status')
       status.value = { ...status.value, ...s }
     } catch (e) {
-      console.error('Failed to load sync status:', e)
+      logError(`Failed to load sync status: ${e}`)
     }
   }
 
   async function syncNow() {
     try {
-      const results = await invoke('sync_now')
+      const results = await tracedInvoke('sync_now')
       return results
     } catch (e) {
-      console.error('Sync failed:', e)
+      logError(`Sync failed: ${e}`)
       throw e
     }
   }
 
   async function syncPlatform(platform) {
     try {
-      const result = await invoke('sync_platform', { platform })
+      const result = await tracedInvoke('sync_platform', { platform })
       return result
     } catch (e) {
-      console.error(`Sync ${platform} failed:`, e)
+      logError(`Sync ${platform} failed: ${e}`)
       throw e
     }
   }

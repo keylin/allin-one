@@ -22,24 +22,8 @@
         "decorations": false,
         "alwaysOnTop": true,
         "skipTaskbar": true
-      },
-      {
-        "label": "settings",
-        "title": "Settings",
-        "width": 560,
-        "height": 600,
-        "resizable": false,
-        "visible": false,
-        "center": true
       }
     ],
-    "trayIcon": {
-      "id": "main-tray",
-      "iconPath": "icons/tray-icon.png",
-      "iconAsTemplate": true,
-      "menuOnLeftClick": false,
-      "tooltip": "Fountain"
-    },
     "security": {
       "csp": null
     }

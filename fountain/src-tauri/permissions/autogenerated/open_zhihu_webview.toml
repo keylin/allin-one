@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-open-zhihu-webview"
+description = "Enables the open_zhihu_webview command without any pre-configured scope."
+commands.allow = ["open_zhihu_webview"]
+
+[[permission]]
+identifier = "deny-open-zhihu-webview"
+description = "Denies the open_zhihu_webview command without any pre-configured scope."
+commands.deny = ["open_zhihu_webview"]

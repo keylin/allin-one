@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-REMOTE_HOST="${DEPLOY_HOST:-allin@192.168.31.158}"
+REMOTE_HOST="${DEPLOY_HOST:-allin@192.168.1.103}"
 REMOTE_DIR="${DEPLOY_DIR:-~/allin-one}"
 SYNC_DATA="${SYNC_DATA:-}"
 SSH="ssh -T -p 2222 ${REMOTE_HOST}"
@@ -37,8 +37,8 @@ rsync -avz --delete -e 'ssh -p 2222' \
 
 # 3. Remote build & restart
 echo ">> [3/4] Building and restarting..."
-${SSH} "cd ${REMOTE_DIR} && docker compose -f docker-compose.remote.yml build allin-one" 2>&1 | tail -20
-${SSH} "cd ${REMOTE_DIR} && docker compose -f docker-compose.remote.yml up -d" 2>&1 | tail -10
+${SSH} "cd ${REMOTE_DIR} && docker compose -f docker-compose.remote.yml build allin-one" 2>&1
+${SSH} "cd ${REMOTE_DIR} && docker compose -f docker-compose.remote.yml up -d" 2>&1
 
 # 4. Wait for app healthy & run migrations
 echo ">> [4/4] Waiting for app to be healthy..."

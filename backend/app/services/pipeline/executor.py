@@ -130,7 +130,9 @@ class PipelineExecutor:
                 db.commit()
                 return None
 
-            next_index = execution.current_step + 1
+            # 使用参数中的 step_index 而非 execution.current_step，
+            # 避免非关键步骤跳过时 current_step 未更新导致计算错误
+            next_index = step_index + 1
 
             if next_index >= execution.total_steps:
                 execution.status = PipelineStatus.COMPLETED.value

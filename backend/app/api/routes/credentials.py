@@ -233,7 +233,7 @@ async def update_credential(credential_id: str, body: CredentialUpdate, db: Sess
         val = update_data["credential_data"]
         if val and _MASK_PATTERN.match(val):
             del update_data["credential_data"]
-        elif "credential_data" in update_data:
+        else:
             update_data["credential_data"] = encrypt_credential(update_data["credential_data"])
 
     for key, value in update_data.items():

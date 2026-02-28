@@ -150,7 +150,7 @@ pub async fn run_sync(
 
         let payload = json!({
             "source_id": source_id,
-            "ebooks": ebooks,
+            "books": ebooks,
         });
 
         client

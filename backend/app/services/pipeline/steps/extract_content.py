@@ -68,6 +68,11 @@ def _handle_extract_content(context: dict) -> dict:
             return {"status": "skipped", "reason": "no content in raw_data"}
 
         content.processed_content = raw_text
+
+        # 在 session 内计算 source 字段，避免 session 关闭后访问 ORM 属性
+        raw = json.loads(content.raw_data) if content.raw_data else {}
+        source_field = "raw_data.content[0].value" if "content" in raw else "raw_data.summary"
+
         db.commit()
 
         text_len = len(raw_text)
@@ -76,5 +81,5 @@ def _handle_extract_content(context: dict) -> dict:
         return {
             "status": "done",
             "text_length": text_len,
-            "source": "raw_data.content[0].value" if "content" in (json.loads(content.raw_data) or {}) else "raw_data.summary",
+            "source": source_field,
         }

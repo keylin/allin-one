@@ -2,26 +2,8 @@ use crate::credential_store::{self, *};
 use serde::{Deserialize, Serialize};
 use tauri::{command, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
-/// Initialization script injected into the WeChat Read WebView.
-/// Polls document.cookie every 1.5 s; when both wr_skey and wr_vid are
-/// visible (i.e., not HttpOnly), invokes the Rust command to capture them.
-const WECHAT_INIT_SCRIPT: &str = r#"
-(function () {
-  'use strict';
-  var _timer = setInterval(function () {
-    try {
-      var c = document.cookie || '';
-      if (c.indexOf('wr_skey=') >= 0 && c.indexOf('wr_vid=') >= 0) {
-        clearInterval(_timer);
-        if (window.__TAURI__ && window.__TAURI__.core) {
-          window.__TAURI__.core.invoke('capture_wechat_cookies', { cookies: c })
-            .catch(function (e) { console.error('[Fountain] cookie capture failed:', e); });
-        }
-      }
-    } catch (e) {}
-  }, 1500);
-})();
-"#;
+/// Poll interval for native cookie store checks (in seconds).
+const COOKIE_POLL_INTERVAL_SECS: u64 = 2;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BilibiliQrResponse {
@@ -149,10 +131,7 @@ pub async fn start_bilibili_qr_login() -> Result<BilibiliQrResponse, String> {
 /// Step 2: Poll QR code status; saves cookies to Keychain on success
 #[command]
 pub async fn poll_bilibili_qr_status(qrcode_key: String) -> Result<QrPollResponse, String> {
-    let client = reqwest::Client::builder()
-        .cookie_store(true)
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = reqwest::Client::new();
 
     let resp = client
         .get("https://passport.bilibili.com/x/passport-login/web/qrcode/poll")
@@ -235,8 +214,9 @@ fn qr_to_svg(qr: &qrcodegen::QrCode) -> String {
 }
 
 /// Open an in-app browser window pointing to WeChat Read for login.
-/// An initialization script polls document.cookie; on success it calls
-/// `capture_wechat_cookies` which saves the cookies and closes this window.
+/// A background task polls the native cookie store (via `cookies_for_url`)
+/// which can read HttpOnly cookies from WKWebView. When wr_skey + wr_vid
+/// appear, they are saved to Keychain and the window is closed automatically.
 #[command]
 pub async fn open_wechat_webview(app: tauri::AppHandle) -> Result<(), String> {
     // Close any pre-existing login window gracefully.
@@ -253,9 +233,54 @@ pub async fn open_wechat_webview(app: tauri::AppHandle) -> Result<(), String> {
         .title("微信读书 — Login")
         .inner_size(960.0, 680.0)
         .center()
-        .initialization_script(WECHAT_INIT_SCRIPT)
         .build()
         .map_err(|e| e.to_string())?;
+
+    // Poll the native cookie store for wr_skey + wr_vid (works for HttpOnly cookies)
+    let app_handle = app.clone();
+    tokio::spawn(async move {
+        let target_url: url::Url = "https://weread.qq.com/".parse().unwrap();
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(COOKIE_POLL_INTERVAL_SECS)).await;
+
+            let Some(w) = app_handle.get_webview_window("wechat-login") else {
+                break; // Window closed by user, stop polling
+            };
+
+            let cookies = match w.cookies_for_url(target_url.clone()) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            let mut wr_skey: Option<String> = None;
+            let mut wr_vid: Option<String> = None;
+            for c in &cookies {
+                match c.name() {
+                    "wr_skey" => wr_skey = Some(c.value().to_string()),
+                    "wr_vid" => wr_vid = Some(c.value().to_string()),
+                    _ => {}
+                }
+            }
+
+            let (Some(skey), Some(vid)) = (wr_skey, wr_vid) else {
+                continue;
+            };
+            if skey.is_empty() || vid.is_empty() {
+                continue;
+            }
+
+            // Save to Keychain
+            let _ = credential_store::set_credential(KEY_WECHAT_READ_SKEY, &skey);
+            let _ = credential_store::set_credential(KEY_WECHAT_READ_VID, &vid);
+
+            // Close the login window
+            let _ = w.close();
+
+            // Notify Vue (CredentialForm / TrayPopover listen for this)
+            let _ = app_handle.emit("wechat-cookies-captured", ());
+            break;
+        }
+    });
 
     Ok(())
 }
@@ -313,27 +338,6 @@ pub fn close_wechat_webview(app: tauri::AppHandle) {
 
 // ─── Douban WebView login ──────────────────────────────────────────────────
 
-/// Initialization script for the Douban login WebView.
-/// Polls document.cookie every 1.5 s; when dbcl2 is visible (not HttpOnly),
-/// invokes the Rust command to capture the cookies.
-const DOUBAN_INIT_SCRIPT: &str = r#"
-(function () {
-  'use strict';
-  var _timer = setInterval(function () {
-    try {
-      var c = document.cookie || '';
-      if (c.indexOf('dbcl2=') >= 0) {
-        clearInterval(_timer);
-        if (window.__TAURI__ && window.__TAURI__.core) {
-          window.__TAURI__.core.invoke('capture_douban_cookies', { cookies: c })
-            .catch(function (e) { console.error('[Fountain] Douban cookie capture failed:', e); });
-        }
-      }
-    } catch (e) {}
-  }, 1500);
-})();
-"#;
-
 #[command]
 pub async fn open_douban_webview(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(existing) = app.get_webview_window("douban-login") {
@@ -349,9 +353,63 @@ pub async fn open_douban_webview(app: tauri::AppHandle) -> Result<(), String> {
         .title("豆瓣 — Login")
         .inner_size(960.0, 680.0)
         .center()
-        .initialization_script(DOUBAN_INIT_SCRIPT)
         .build()
         .map_err(|e| e.to_string())?;
+
+    // Poll native cookie store for dbcl2 (works for HttpOnly cookies)
+    let app_handle = app.clone();
+    tokio::spawn(async move {
+        let target_url: url::Url = "https://www.douban.com/".parse().unwrap();
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(COOKIE_POLL_INTERVAL_SECS)).await;
+
+            let Some(w) = app_handle.get_webview_window("douban-login") else {
+                break;
+            };
+
+            let cookies = match w.cookies_for_url(target_url.clone()) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            let mut dbcl2: Option<String> = None;
+            let mut bid: Option<String> = None;
+            for c in &cookies {
+                match c.name() {
+                    "dbcl2" => dbcl2 = Some(c.value().to_string()),
+                    "bid" => bid = Some(c.value().to_string()),
+                    _ => {}
+                }
+            }
+
+            let Some(dbcl2_val) = dbcl2 else {
+                continue;
+            };
+            if dbcl2_val.is_empty() {
+                continue;
+            }
+
+            // Extract UID from dbcl2 (format: "uid:hash" — may have surrounding quotes)
+            let uid = dbcl2_val
+                .trim_matches('"')
+                .split(':')
+                .next()
+                .unwrap_or("")
+                .to_string();
+
+            let _ = credential_store::set_credential(KEY_DOUBAN_DBCL2, &dbcl2_val);
+            if let Some(bid_val) = bid {
+                let _ = credential_store::set_credential(KEY_DOUBAN_BID, &bid_val);
+            }
+            if !uid.is_empty() {
+                let _ = credential_store::set_credential(KEY_DOUBAN_UID, &uid);
+            }
+
+            let _ = w.close();
+            let _ = app_handle.emit("douban-cookies-captured", ());
+            break;
+        }
+    });
 
     Ok(())
 }
@@ -449,24 +507,6 @@ pub async fn validate_douban_cookie() -> Result<bool, String> {
 
 // ─── Zhihu WebView login ───────────────────────────────────────────────────
 
-const ZHIHU_INIT_SCRIPT: &str = r#"
-(function () {
-  'use strict';
-  var _timer = setInterval(function () {
-    try {
-      var c = document.cookie || '';
-      if (c.indexOf('z_c0=') >= 0) {
-        clearInterval(_timer);
-        if (window.__TAURI__ && window.__TAURI__.core) {
-          window.__TAURI__.core.invoke('capture_zhihu_cookies', { cookies: c })
-            .catch(function (e) { console.error('[Fountain] Zhihu cookie capture failed:', e); });
-        }
-      }
-    } catch (e) {}
-  }, 1500);
-})();
-"#;
-
 #[command]
 pub async fn open_zhihu_webview(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(existing) = app.get_webview_window("zhihu-login") {
@@ -482,9 +522,46 @@ pub async fn open_zhihu_webview(app: tauri::AppHandle) -> Result<(), String> {
         .title("知乎 — Login")
         .inner_size(960.0, 680.0)
         .center()
-        .initialization_script(ZHIHU_INIT_SCRIPT)
         .build()
         .map_err(|e| e.to_string())?;
+
+    // Poll native cookie store for z_c0 (works for HttpOnly cookies)
+    let app_handle = app.clone();
+    tokio::spawn(async move {
+        let target_url: url::Url = "https://www.zhihu.com/".parse().unwrap();
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(COOKIE_POLL_INTERVAL_SECS)).await;
+
+            let Some(w) = app_handle.get_webview_window("zhihu-login") else {
+                break;
+            };
+
+            let cookies = match w.cookies_for_url(target_url.clone()) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            let mut z_c0: Option<String> = None;
+            for c in &cookies {
+                if c.name() == "z_c0" {
+                    z_c0 = Some(c.value().to_string());
+                    break;
+                }
+            }
+
+            let Some(z_c0_val) = z_c0 else {
+                continue;
+            };
+            if z_c0_val.is_empty() {
+                continue;
+            }
+
+            let _ = credential_store::set_credential(KEY_ZHIHU_Z_C0, &z_c0_val);
+            let _ = w.close();
+            let _ = app_handle.emit("zhihu-cookies-captured", ());
+            break;
+        }
+    });
 
     Ok(())
 }
@@ -570,29 +647,6 @@ pub async fn validate_github_token() -> Result<bool, String> {
 
 // ─── Twitter/X WebView login ───────────────────────────────────────────────
 
-/// Initialization script for the Twitter login WebView.
-/// Polls document.cookie every 1.5 s; when ct0 is visible (not HttpOnly),
-/// invokes the Rust command to capture it.
-/// Note: auth_token IS HttpOnly and cannot be captured this way — user must
-/// enter it manually from DevTools.
-const TWITTER_INIT_SCRIPT: &str = r#"
-(function () {
-  'use strict';
-  var _timer = setInterval(function () {
-    try {
-      var c = document.cookie || '';
-      if (c.indexOf('ct0=') >= 0) {
-        clearInterval(_timer);
-        if (window.__TAURI__ && window.__TAURI__.core) {
-          window.__TAURI__.core.invoke('capture_twitter_ct0', { cookies: c })
-            .catch(function (e) { console.error('[Fountain] Twitter ct0 capture failed:', e); });
-        }
-      }
-    } catch (e) {}
-  }, 1500);
-})();
-"#;
-
 #[command]
 pub async fn open_twitter_webview(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(existing) = app.get_webview_window("twitter-login") {
@@ -608,16 +662,62 @@ pub async fn open_twitter_webview(app: tauri::AppHandle) -> Result<(), String> {
         .title("Twitter / X — Login")
         .inner_size(960.0, 680.0)
         .center()
-        .initialization_script(TWITTER_INIT_SCRIPT)
         .build()
         .map_err(|e| e.to_string())?;
+
+    // Poll native cookie store for auth_token + ct0 (both can be HttpOnly)
+    let app_handle = app.clone();
+    tokio::spawn(async move {
+        let target_url: url::Url = "https://x.com/".parse().unwrap();
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(COOKIE_POLL_INTERVAL_SECS)).await;
+
+            let Some(w) = app_handle.get_webview_window("twitter-login") else {
+                break;
+            };
+
+            let cookies = match w.cookies_for_url(target_url.clone()) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            let mut auth_token: Option<String> = None;
+            let mut ct0: Option<String> = None;
+            for c in &cookies {
+                match c.name() {
+                    "auth_token" => auth_token = Some(c.value().to_string()),
+                    "ct0" => ct0 = Some(c.value().to_string()),
+                    _ => {}
+                }
+            }
+
+            // Need both auth_token and ct0 to proceed
+            let (Some(at_val), Some(ct0_val)) = (auth_token, ct0) else {
+                continue;
+            };
+            if at_val.is_empty() || ct0_val.is_empty() {
+                continue;
+            }
+
+            let _ = credential_store::set_credential(KEY_TWITTER_AUTH_TOKEN, &at_val);
+            let _ = credential_store::set_credential(KEY_TWITTER_CT0, &ct0_val);
+
+            // Verify credentials and fetch user info
+            if let Ok(()) = verify_and_save_twitter_user(&at_val, &ct0_val).await {
+                let _ = w.close();
+                let _ = app_handle.emit("twitter-cookies-captured", ());
+            } else {
+                // Cookies saved but verification failed — emit partial event
+                let _ = app_handle.emit("twitter-ct0-captured", ());
+            }
+            break;
+        }
+    });
 
     Ok(())
 }
 
-/// Called by the initialization script when ct0 appears in document.cookie.
-/// Stores ct0 in Keychain and emits an event so the Vue form can react.
-/// auth_token is HttpOnly and must be entered manually by the user.
+/// Legacy command kept for manual fallback from the Vue form.
 #[command]
 pub async fn capture_twitter_ct0(
     cookies: String,
@@ -636,45 +736,26 @@ pub async fn capture_twitter_ct0(
     }
 
     let Some(ct0_val) = ct0 else {
-        return Ok(()); // ct0 not yet visible
+        return Ok(());
     };
 
     credential_store::set_credential(KEY_TWITTER_CT0, &ct0_val).map_err(|e| e.to_string())?;
 
-    // Keep the window open — user still needs to enter auth_token manually
     app.emit("twitter-ct0-captured", ())
         .map_err(|e| e.to_string())?;
 
     Ok(())
 }
 
-/// Save auth_token + ct0, then verify credentials and store screen_name/user_id.
-#[command]
-pub async fn save_twitter_cookies(
-    auth_token: String,
-    ct0: String,
-    app: tauri::AppHandle,
-) -> Result<(), String> {
-    if auth_token.is_empty() || ct0.is_empty() {
-        return Err("auth_token and ct0 are required".to_string());
-    }
-
-    credential_store::set_credential(KEY_TWITTER_AUTH_TOKEN, &auth_token)
-        .map_err(|e| e.to_string())?;
-    credential_store::set_credential(KEY_TWITTER_CT0, &ct0)
-        .map_err(|e| e.to_string())?;
-
-    // Verify credentials and fetch user info
+/// Verify Twitter credentials and store screen_name/user_id in Keychain.
+async fn verify_and_save_twitter_user(auth_token: &str, ct0: &str) -> Result<(), String> {
     let client = reqwest::Client::new();
     let resp = client
         .get("https://api.twitter.com/1.1/account/verify_credentials.json")
         .query(&[("skip_status", "1")])
-        .header(
-            "authorization",
-            format!("Bearer {}", TWITTER_BEARER),
-        )
+        .header("authorization", format!("Bearer {}", TWITTER_BEARER))
         .header("cookie", format!("auth_token={}; ct0={}", auth_token, ct0))
-        .header("x-csrf-token", ct0.as_str())
+        .header("x-csrf-token", ct0)
         .header("User-Agent", "Mozilla/5.0")
         .send()
         .await
@@ -696,6 +777,27 @@ pub async fn save_twitter_cookies(
         .map_err(|e| e.to_string())?;
     credential_store::set_credential(KEY_TWITTER_USER_ID, id_str)
         .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+/// Save auth_token + ct0, then verify credentials and store screen_name/user_id.
+#[command]
+pub async fn save_twitter_cookies(
+    auth_token: String,
+    ct0: String,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    if auth_token.is_empty() || ct0.is_empty() {
+        return Err("auth_token and ct0 are required".to_string());
+    }
+
+    credential_store::set_credential(KEY_TWITTER_AUTH_TOKEN, &auth_token)
+        .map_err(|e| e.to_string())?;
+    credential_store::set_credential(KEY_TWITTER_CT0, &ct0)
+        .map_err(|e| e.to_string())?;
+
+    verify_and_save_twitter_user(&auth_token, &ct0).await?;
 
     // Close login window if still open
     if let Some(w) = app.get_webview_window("twitter-login") {
@@ -760,10 +862,11 @@ fn save_bilibili_cookies(set_cookie_headers: &[String]) -> Result<(), String> {
         }
     }
 
-    // All three cookies must be present before writing any — avoids partial Keychain state
-    let (Some(sessdata), Some(bili_jct), Some(buvid3)) = (sessdata, bili_jct, buvid3) else {
+    // SESSDATA + bili_jct are required; buvid3 is a browser fingerprint cookie
+    // that the QR poll API does not return — save it only if present.
+    let (Some(sessdata), Some(bili_jct)) = (sessdata, bili_jct) else {
         return Err(
-            "Incomplete cookie set from QR login (missing SESSDATA, bili_jct, or buvid3)".into(),
+            "Incomplete cookie set from QR login (missing SESSDATA or bili_jct)".into(),
         );
     };
 
@@ -771,8 +874,10 @@ fn save_bilibili_cookies(set_cookie_headers: &[String]) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     credential_store::set_credential(KEY_BILIBILI_BILI_JCT, &bili_jct)
         .map_err(|e| e.to_string())?;
-    credential_store::set_credential(KEY_BILIBILI_BUVID3, &buvid3)
-        .map_err(|e| e.to_string())?;
+    if let Some(buvid3) = buvid3 {
+        credential_store::set_credential(KEY_BILIBILI_BUVID3, &buvid3)
+            .map_err(|e| e.to_string())?;
+    }
 
     Ok(())
 }

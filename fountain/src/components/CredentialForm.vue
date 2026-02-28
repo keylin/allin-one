@@ -2,6 +2,7 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import { error as logError } from '@tauri-apps/plugin-log'
 
 const props = defineProps({
   platform: { type: String, required: true }, // 'bilibili' | 'wechat_read' | 'douban' | 'zhihu' | 'github_stars' | 'twitter'
@@ -109,7 +110,7 @@ function startPolling() {
         setTimeout(() => emit('saved'), 1000)
       }
     } catch (e) {
-      console.error('QR poll error:', e)
+      logError(`QR poll error: ${e}`)
     }
   }, 2000)
 

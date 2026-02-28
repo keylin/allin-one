@@ -90,6 +90,7 @@ vim scripts/utils/cleanup_data.py
 - Worker 双进程队列隔离: `pipeline` 队列 (concurrency=4) 跑流水线步骤，`scheduled` 队列 (concurrency=2) 跑定时采集/报告/清理，互不阻塞
 - 定时任务由 Procrastinate worker 的 periodic 功能驱动，FastAPI 进程为纯 API 服务器
 - 前后端同容器: Vite 构建产物由 FastAPI 静态服务
+- 凭证加密: `platform_credentials.credential_data` 使用 Fernet 对称加密 (`CREDENTIAL_ENCRYPTION_KEY` 环境变量)，未配置时透传明文，兼容历史数据
 
 ## 文档导航
 

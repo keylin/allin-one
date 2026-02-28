@@ -387,6 +387,342 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the capture_douban_cookies command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-capture-douban-cookies",
+          "markdownDescription": "Enables the capture_douban_cookies command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the capture_twitter_ct0 command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-capture-twitter-ct0",
+          "markdownDescription": "Enables the capture_twitter_ct0 command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the capture_wechat_cookies command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-capture-wechat-cookies",
+          "markdownDescription": "Enables the capture_wechat_cookies command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the capture_zhihu_cookies command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-capture-zhihu-cookies",
+          "markdownDescription": "Enables the capture_zhihu_cookies command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the close_wechat_webview command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-close-wechat-webview",
+          "markdownDescription": "Enables the close_wechat_webview command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the delete_credential command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-credential",
+          "markdownDescription": "Enables the delete_credential command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_credential command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-credential",
+          "markdownDescription": "Enables the get_credential command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-settings",
+          "markdownDescription": "Enables the get_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_sync_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-sync-status",
+          "markdownDescription": "Enables the get_sync_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_douban_webview command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-douban-webview",
+          "markdownDescription": "Enables the open_douban_webview command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_settings_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-settings-window",
+          "markdownDescription": "Enables the open_settings_window command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_twitter_webview command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-twitter-webview",
+          "markdownDescription": "Enables the open_twitter_webview command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_wechat_webview command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-wechat-webview",
+          "markdownDescription": "Enables the open_wechat_webview command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_zhihu_webview command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-zhihu-webview",
+          "markdownDescription": "Enables the open_zhihu_webview command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the poll_bilibili_qr_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-poll-bilibili-qr-status",
+          "markdownDescription": "Enables the poll_bilibili_qr_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-save-settings",
+          "markdownDescription": "Enables the save_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save_twitter_cookies command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-save-twitter-cookies",
+          "markdownDescription": "Enables the save_twitter_cookies command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_credential command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-credential",
+          "markdownDescription": "Enables the set_credential command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the start_bilibili_qr_login command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-start-bilibili-qr-login",
+          "markdownDescription": "Enables the start_bilibili_qr_login command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the sync_now command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-sync-now",
+          "markdownDescription": "Enables the sync_now command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the sync_platform command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-sync-platform",
+          "markdownDescription": "Enables the sync_platform command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the test_server_connection command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-test-server-connection",
+          "markdownDescription": "Enables the test_server_connection command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the validate_bilibili_cookie command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-validate-bilibili-cookie",
+          "markdownDescription": "Enables the validate_bilibili_cookie command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the validate_douban_cookie command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-validate-douban-cookie",
+          "markdownDescription": "Enables the validate_douban_cookie command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the validate_github_token command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-validate-github-token",
+          "markdownDescription": "Enables the validate_github_token command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the validate_twitter_cookie command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-validate-twitter-cookie",
+          "markdownDescription": "Enables the validate_twitter_cookie command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the validate_wechat_read_cookie command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-validate-wechat-read-cookie",
+          "markdownDescription": "Enables the validate_wechat_read_cookie command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the validate_zhihu_cookie command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-validate-zhihu-cookie",
+          "markdownDescription": "Enables the validate_zhihu_cookie command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the capture_douban_cookies command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-capture-douban-cookies",
+          "markdownDescription": "Denies the capture_douban_cookies command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the capture_twitter_ct0 command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-capture-twitter-ct0",
+          "markdownDescription": "Denies the capture_twitter_ct0 command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the capture_wechat_cookies command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-capture-wechat-cookies",
+          "markdownDescription": "Denies the capture_wechat_cookies command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the capture_zhihu_cookies command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-capture-zhihu-cookies",
+          "markdownDescription": "Denies the capture_zhihu_cookies command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the close_wechat_webview command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-close-wechat-webview",
+          "markdownDescription": "Denies the close_wechat_webview command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_credential command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-credential",
+          "markdownDescription": "Denies the delete_credential command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_credential command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-credential",
+          "markdownDescription": "Denies the get_credential command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-settings",
+          "markdownDescription": "Denies the get_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_sync_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-sync-status",
+          "markdownDescription": "Denies the get_sync_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_douban_webview command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-douban-webview",
+          "markdownDescription": "Denies the open_douban_webview command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_settings_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-settings-window",
+          "markdownDescription": "Denies the open_settings_window command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_twitter_webview command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-twitter-webview",
+          "markdownDescription": "Denies the open_twitter_webview command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_wechat_webview command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-wechat-webview",
+          "markdownDescription": "Denies the open_wechat_webview command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_zhihu_webview command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-zhihu-webview",
+          "markdownDescription": "Denies the open_zhihu_webview command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the poll_bilibili_qr_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-poll-bilibili-qr-status",
+          "markdownDescription": "Denies the poll_bilibili_qr_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-save-settings",
+          "markdownDescription": "Denies the save_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_twitter_cookies command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-save-twitter-cookies",
+          "markdownDescription": "Denies the save_twitter_cookies command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_credential command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-credential",
+          "markdownDescription": "Denies the set_credential command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the start_bilibili_qr_login command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-start-bilibili-qr-login",
+          "markdownDescription": "Denies the start_bilibili_qr_login command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the sync_now command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-sync-now",
+          "markdownDescription": "Denies the sync_now command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the sync_platform command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-sync-platform",
+          "markdownDescription": "Denies the sync_platform command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the test_server_connection command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-test-server-connection",
+          "markdownDescription": "Denies the test_server_connection command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the validate_bilibili_cookie command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-validate-bilibili-cookie",
+          "markdownDescription": "Denies the validate_bilibili_cookie command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the validate_douban_cookie command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-validate-douban-cookie",
+          "markdownDescription": "Denies the validate_douban_cookie command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the validate_github_token command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-validate-github-token",
+          "markdownDescription": "Denies the validate_github_token command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the validate_twitter_cookie command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-validate-twitter-cookie",
+          "markdownDescription": "Denies the validate_twitter_cookie command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the validate_wechat_read_cookie command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-validate-wechat-read-cookie",
+          "markdownDescription": "Denies the validate_wechat_read_cookie command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the validate_zhihu_cookie command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-validate-zhihu-cookie",
+          "markdownDescription": "Denies the validate_zhihu_cookie command without any pre-configured scope."
+        },
+        {
           "description": "This permission set configures if your\napplication can enable or disable auto\nstarting the application on boot.\n\n#### Granted Permissions\n\nIt allows all to check, enable and\ndisable the automatic start on boot.\n\n\n#### This default permission set includes:\n\n- `allow-enable`\n- `allow-disable`\n- `allow-is-enabled`",
           "type": "string",
           "const": "autostart:default",
@@ -2461,6 +2797,24 @@
           "type": "string",
           "const": "dialog:deny-save",
           "markdownDescription": "Denies the save command without any pre-configured scope."
+        },
+        {
+          "description": "Allows the log command\n#### This default permission set includes:\n\n- `allow-log`",
+          "type": "string",
+          "const": "log:default",
+          "markdownDescription": "Allows the log command\n#### This default permission set includes:\n\n- `allow-log`"
+        },
+        {
+          "description": "Enables the log command without any pre-configured scope.",
+          "type": "string",
+          "const": "log:allow-log",
+          "markdownDescription": "Enables the log command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the log command without any pre-configured scope.",
+          "type": "string",
+          "const": "log:deny-log",
+          "markdownDescription": "Denies the log command without any pre-configured scope."
         },
         {
           "description": "This permission set configures which\nnotification features are by default exposed.\n\n#### Granted Permissions\n\nIt allows all notification related features.\n\n\n#### This default permission set includes:\n\n- `allow-is-permission-granted`\n- `allow-request-permission`\n- `allow-notify`\n- `allow-register-action-types`\n- `allow-register-listener`\n- `allow-cancel`\n- `allow-get-pending`\n- `allow-remove-active`\n- `allow-get-active`\n- `allow-check-permissions`\n- `allow-show`\n- `allow-batch`\n- `allow-list-channels`\n- `allow-delete-channel`\n- `allow-create-channel`\n- `allow-permission-state`",

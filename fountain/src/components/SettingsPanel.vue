@@ -54,7 +54,12 @@ async function handleSave() {
   try {
     await save()
     originalSettings.value = JSON.parse(JSON.stringify(settings))
-    setTimeout(() => { saving.value = false }, 500)
+    // Brief visual feedback then close
+    setTimeout(async () => {
+      saving.value = false
+      skipCloseCheck = true
+      await getCurrentWebviewWindow().close()
+    }, 400)
   } catch (e) {
     alert('Failed to save settings: ' + e)
     saving.value = false

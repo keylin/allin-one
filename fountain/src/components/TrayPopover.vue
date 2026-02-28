@@ -1,7 +1,9 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
+import { listen } from '@tauri-apps/api/event'
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
+import { error as logError } from '@tauri-apps/plugin-log'
 import SyncStatus from './SyncStatus.vue'
 import CredentialForm from './CredentialForm.vue'
 import { useSyncStore } from '../stores/sync.js'
@@ -13,27 +15,47 @@ const settingsStore = useSettingsStore()
 const showCredForm = ref(false)
 const credPlatform = ref('')
 const serverOk = ref(null)
+let unlistenSettings = null
+let unlistenFocus = null
 
-onMounted(async () => {
+async function refreshSettings() {
   await settingsStore.load()
-  await syncStore.loadStatus()
-  await syncStore.startListening()
-
-  // Check server connection
   if (settingsStore.settings.server_url) {
     const result = await settingsStore.testConnection(
       settingsStore.settings.server_url,
       settingsStore.settings.api_key
     )
     serverOk.value = result.ok
+  } else {
+    serverOk.value = null
   }
+}
+
+onMounted(async () => {
+  await refreshSettings()
+  await syncStore.loadStatus()
+  await syncStore.startListening()
+
+  // Reload settings when changed from Settings window
+  unlistenSettings = await listen('settings-changed', () => refreshSettings())
+
+  // Reload settings when popover gains focus (most reliable cross-webview mechanism)
+  const appWindow = getCurrentWebviewWindow()
+  unlistenFocus = await appWindow.onFocusChanged(({ payload: focused }) => {
+    if (focused) refreshSettings()
+  })
+})
+
+onUnmounted(() => {
+  if (unlistenSettings) unlistenSettings()
+  if (unlistenFocus) unlistenFocus()
 })
 
 async function syncAll() {
   try {
     await syncStore.syncNow()
   } catch (e) {
-    console.error(e)
+    logError(`syncAll failed: ${e}`)
   }
 }
 
@@ -41,7 +63,7 @@ async function syncOne(platform) {
   try {
     await syncStore.syncPlatform(platform)
   } catch (e) {
-    console.error(e)
+    logError(`syncOne(${platform}) failed: ${e}`)
   }
 }
 
@@ -59,10 +81,8 @@ async function onCredSaved() {
   await syncStore.loadStatus()
 }
 
-function openSettings() {
-  const win = new WebviewWindow('settings')
-  win.show()
-  win.setFocus()
+async function openSettings() {
+  await invoke('open_settings_window')
 }
 
 const serverHost = computed(() => {

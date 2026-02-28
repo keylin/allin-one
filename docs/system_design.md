@@ -704,6 +704,7 @@ GET  /api/dashboard/content-status-distribution → 内容状态分布
 GET  /api/dashboard/storage-stats      → 存储统计
 GET  /api/dashboard/today-summary      → 今日概要
 GET  /api/dashboard/recent-activity    → 最近活动
+GET  /api/dashboard/user-behavior-stats → 用户行为统计（阅读/收藏/热力图/趋势/偏好）
 ```
 
 #### Sources
@@ -735,6 +736,7 @@ POST   /api/content/delete-all         → { deleted } (清空全部内容)
 POST   /api/content/batch-delete       → { deleted } (批量删除, body: {ids})
 POST   /api/content/batch-read         → 批量标记已读
 POST   /api/content/batch-favorite     → 批量收藏
+POST   /api/content/batch-unfavorite   → 批量取消收藏
 POST   /api/content/mark-all-read      → 全部标记已读
 GET    /api/content/stats              → { total, today, pending, processing, ready, analyzed, failed }
 POST   /api/content/submit             → ContentSubmitResponse (用户提交文本内容)
@@ -822,6 +824,7 @@ PUT    /api/media/{content_id}/progress → 更新播放进度
 DELETE /api/media/{content_id}          → 删除媒体
 GET    /api/media/{content_id}/thumbnail → 封面图
 GET    /api/media/{content_id}/{file_path} → FileResponse (从 MEDIA_DIR 读取)
+POST   /api/media/{content_id}/retry    → 重试媒体下载
 ```
 
 #### Audio

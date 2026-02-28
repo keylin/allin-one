@@ -9,7 +9,7 @@ x-proxy-env: &proxy-env
 services:
   # ---- 基础设施 ----
   postgres:
-    image: postgres:17-alpine
+    image: docker.m.daocloud.io/postgres:17-alpine
     container_name: allin-dev-postgres
     restart: unless-stopped
     command: postgres -c timezone=UTC
@@ -32,7 +32,7 @@ services:
 
   # ---- 依赖服务 ----
   rsshub:
-    image: diygod/rsshub:latest
+    image: docker.m.daocloud.io/diygod/rsshub:latest
     container_name: allin-dev-rsshub
     restart: unless-stopped
     ports:
@@ -59,7 +59,7 @@ services:
       - allin-dev
 
   browserless:
-    image: browserless/chrome:latest
+    image: docker.m.daocloud.io/browserless/chrome:latest
     container_name: allin-dev-browserless
     restart: unless-stopped
     deploy:

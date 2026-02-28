@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-validate-douban-cookie"
+description = "Enables the validate_douban_cookie command without any pre-configured scope."
+commands.allow = ["validate_douban_cookie"]
+
+[[permission]]
+identifier = "deny-validate-douban-cookie"
+description = "Denies the validate_douban_cookie command without any pre-configured scope."
+commands.deny = ["validate_douban_cookie"]

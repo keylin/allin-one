@@ -1,7 +1,8 @@
 use crate::config::AppSettings;
 use crate::credential_store;
 use serde::{Deserialize, Serialize};
-use tauri::{command, AppHandle, Emitter};
+use tauri::webview::WebviewWindowBuilder;
+use tauri::{command, AppHandle, Emitter, Manager};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_store::StoreExt;
 
@@ -15,22 +16,64 @@ pub struct ConnectionTestResult {
 }
 
 #[command]
+pub async fn open_settings_window(app: AppHandle) -> Result<(), String> {
+    // Hide the popover so it doesn't cover the settings window
+    if let Some(main_win) = app.get_webview_window("main") {
+        let _ = main_win.hide();
+    }
+
+    if let Some(existing) = app.get_webview_window("settings") {
+        let _ = existing.show();
+        let _ = existing.set_focus();
+        return Ok(());
+    }
+
+    WebviewWindowBuilder::new(
+        &app,
+        "settings",
+        tauri::WebviewUrl::App("index.html#/settings".into()),
+    )
+    .title("Settings")
+    .inner_size(560.0, 600.0)
+    .resizable(false)
+    .center()
+    .build()
+    .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[command]
 pub fn get_settings(app: AppHandle) -> Result<AppSettings, String> {
     let store = app.store(SETTINGS_STORE).map_err(|e| e.to_string())?;
-    let settings = store
-        .get(SETTINGS_KEY)
-        .and_then(|v| serde_json::from_value(v).ok())
-        .unwrap_or_default();
+    let settings = match store.get(SETTINGS_KEY) {
+        Some(v) => match serde_json::from_value::<AppSettings>(v.clone()) {
+            Ok(s) => s,
+            Err(e) => {
+                log::error!("Failed to deserialize app_settings from store: {e}. Raw JSON: {v}");
+                AppSettings::default()
+            }
+        },
+        None => {
+            log::info!("No app_settings found in store, using defaults");
+            AppSettings::default()
+        }
+    };
     Ok(settings)
 }
 
 #[command]
 pub fn save_settings(app: AppHandle, settings: AppSettings) -> Result<(), String> {
+    log::debug!("save_settings called: apple_books_enabled={}", settings.apple_books_enabled);
     let store = app.store(SETTINGS_STORE).map_err(|e| e.to_string())?;
 
     let val = serde_json::to_value(&settings).map_err(|e| e.to_string())?;
-    store.set(SETTINGS_KEY, val.clone());
-    store.save().map_err(|e| e.to_string())?;
+    store.set(SETTINGS_KEY, val);
+    store.save().map_err(|e| {
+        log::error!("Failed to save store to disk: {e}");
+        e.to_string()
+    })?;
+    log::info!("Settings saved to store successfully");
 
     // Save API key to Keychain
     if !settings.api_key.is_empty() {

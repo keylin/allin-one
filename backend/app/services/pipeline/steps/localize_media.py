@@ -199,6 +199,8 @@ def _handle_localize_media(context: dict) -> dict:
                     if upload_date and not content.published_at:
                         try:
                             from datetime import datetime
+                            # strptime 返回 naive datetime (无 tzinfo)，
+                            # 与 PG TIMESTAMP WITHOUT TIME ZONE 兼容 (PG 容器 TZ=UTC)
                             content.published_at = datetime.strptime(upload_date, "%Y%m%d")
                         except ValueError:
                             pass
@@ -209,7 +211,7 @@ def _handle_localize_media(context: dict) -> dict:
 
                 db.commit()
 
-            result["has_video"] = True
+            result["has_video"] = video_path is not None
             result["file_path"] = video_path or ""
             result["subtitle_path"] = subtitle_path or ""
             result["thumbnail_path"] = thumbnail_path or ""

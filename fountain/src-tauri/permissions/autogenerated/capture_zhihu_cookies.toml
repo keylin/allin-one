@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-capture-zhihu-cookies"
+description = "Enables the capture_zhihu_cookies command without any pre-configured scope."
+commands.allow = ["capture_zhihu_cookies"]
+
+[[permission]]
+identifier = "deny-capture-zhihu-cookies"
+description = "Denies the capture_zhihu_cookies command without any pre-configured scope."
+commands.deny = ["capture_zhihu_cookies"]

@@ -6,11 +6,11 @@ set -e
 #   bash scripts/migration/sync-data.sh [db|media|all]
 #
 # 环境变量:
-#   DEPLOY_HOST  — 目标主机 (默认 allin@192.168.31.158)
+#   DEPLOY_HOST  — 目标主机 (默认 allin@192.168.1.103)
 #   DEPLOY_DIR   — 目标目录 (默认 ~/allin-one)
 #   SSH_PORT     — SSH 端口 (默认 2222)
 
-REMOTE_HOST="${DEPLOY_HOST:-allin@192.168.31.158}"
+REMOTE_HOST="${DEPLOY_HOST:-allin@192.168.1.103}"
 REMOTE_DIR="${DEPLOY_DIR:-~/allin-one}"
 SSH_PORT="${SSH_PORT:-2222}"
 SSH_CMD="ssh -T -p ${SSH_PORT}"

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-save-twitter-cookies"
+description = "Enables the save_twitter_cookies command without any pre-configured scope."
+commands.allow = ["save_twitter_cookies"]
+
+[[permission]]
+identifier = "deny-save-twitter-cookies"
+description = "Denies the save_twitter_cookies command without any pre-configured scope."
+commands.deny = ["save_twitter_cookies"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-validate-twitter-cookie"
+description = "Enables the validate_twitter_cookie command without any pre-configured scope."
+commands.allow = ["validate_twitter_cookie"]
+
+[[permission]]
+identifier = "deny-validate-twitter-cookie"
+description = "Denies the validate_twitter_cookie command without any pre-configured scope."
+commands.deny = ["validate_twitter_cookie"]

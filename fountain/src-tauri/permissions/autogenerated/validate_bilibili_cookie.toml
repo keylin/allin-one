@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-validate-bilibili-cookie"
+description = "Enables the validate_bilibili_cookie command without any pre-configured scope."
+commands.allow = ["validate_bilibili_cookie"]
+
+[[permission]]
+identifier = "deny-validate-bilibili-cookie"
+description = "Denies the validate_bilibili_cookie command without any pre-configured scope."
+commands.deny = ["validate_bilibili_cookie"]

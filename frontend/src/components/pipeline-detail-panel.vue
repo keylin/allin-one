@@ -42,7 +42,8 @@ const statusLabels = {
 }
 
 const stepTypeLabels = {
-  enrich_content: '内容富化',
+  extract_content: '提取内容',
+  enrich_content: '抓取全文',
   localize_media: '媒体本地化',
   extract_audio: '音频提取',
   transcribe_content: '语音转文字',
@@ -93,6 +94,9 @@ async function handleRetry() {
     if (res.code === 0) {
       toast.success(res.message || '流水线已重试')
       emit('retry')
+      // 刷新详情面板，避免用户看到旧的 failed 状态
+      const refreshRes = await getPipeline(detail.value.id)
+      if (refreshRes.code === 0) detail.value = refreshRes.data
     } else {
       toast.error(res.message || '重试失败')
     }
