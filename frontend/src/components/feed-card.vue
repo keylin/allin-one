@@ -83,7 +83,7 @@ function onThumbError(e) {
   <!-- 紧凑模式 -->
   <article
     v-if="compact"
-    class="group bg-white rounded-lg border border-slate-200/80 border-l-2 overflow-hidden cursor-pointer relative transition-all duration-150 ease-out"
+    class="group bg-white rounded-lg border border-slate-200/80 border-l-2 overflow-hidden cursor-pointer relative transition-colors duration-150 ease-out"
     :class="[
       (selected || !isRead) ? 'border-l-indigo-500' : 'border-l-transparent',
       selected
@@ -133,7 +133,7 @@ function onThumbError(e) {
     v-else
     class="group bg-white rounded-xl border border-slate-200/80 border-l-[3px] overflow-hidden cursor-pointer relative"
     :class="[
-      'transition-all duration-200 ease-out',
+      'transition-[border-color,box-shadow] duration-200 ease-out md:transition-all md:duration-200 md:ease-out',
       (selected || !isRead) ? 'border-l-indigo-500' : 'border-l-transparent',
       selected
         ? 'bg-indigo-50/60 border-indigo-200 ring-1 ring-indigo-200/50 shadow-sm'

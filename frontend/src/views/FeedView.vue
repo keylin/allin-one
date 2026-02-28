@@ -802,10 +802,10 @@ onUnmounted(() => {
 
         <!-- 内容 wrapper，拉动时 translateY 下移 -->
         <div
-          :style="{
+          :style="pullOffset > 0 ? {
             transform: `translateY(${pullOffset}px)`,
-            transition: (isPulling ? 'none' : 'transform 0.3s ease-out')
-          }"
+            transition: isPulling ? 'none' : 'transform 0.3s ease-out'
+          } : undefined"
         >
         <div class="relative px-3 md:px-4 pt-2 md:pt-3 pb-1.5 md:pb-2 space-y-1.5 md:space-y-2.5 sticky top-0 bg-white z-10 border-b border-slate-100">
           <!-- 计数 + 排序 + 密度切换 -->

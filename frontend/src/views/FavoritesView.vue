@@ -746,7 +746,7 @@ onUnmounted(() => {
             <div
               v-for="item in items"
               :key="item.id"
-              class="group relative bg-white rounded-xl border overflow-hidden cursor-pointer transition-all duration-200 border-slate-200/60 hover:border-slate-300 hover:shadow-md hover:-translate-y-0.5 active:scale-[0.99]"
+              class="group relative bg-white rounded-xl border overflow-hidden cursor-pointer transition-[border-color,box-shadow] duration-200 md:transition-all md:duration-200 border-slate-200/60 hover:border-slate-300 hover:shadow-md md:hover:-translate-y-0.5 md:active:scale-[0.99]"
               :class="selectedIds.includes(item.id) ? 'ring-2 ring-indigo-400 border-indigo-300 shadow-sm' : ''"
               @click="selectItem(item)"
             >
