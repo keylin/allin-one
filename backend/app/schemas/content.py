@@ -13,6 +13,7 @@ class MediaItemSummary(BaseModel):
     original_url: Optional[str] = None
     local_path: Optional[str] = None
     thumbnail_path: Optional[str] = None  # 从 metadata_json 提取
+    duration: Optional[float] = None      # 视频/音频时长（秒）
     status: str = "pending"
     playback_position: int = 0
     last_played_at: Optional[datetime] = None

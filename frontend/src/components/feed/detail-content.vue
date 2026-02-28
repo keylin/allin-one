@@ -40,6 +40,31 @@ const dupExpanded = ref(false)
 
 
 // --- Computed ---
+
+// 从 raw_data 或 media_items 提取可嵌入的视频 URL（Bilibili / YouTube）
+const embeddableVideoUrl = computed(() => {
+  if (!props.item) return null
+  // 1. 从 raw_data 中提取
+  try {
+    const raw = typeof props.item.raw_data === 'string'
+      ? JSON.parse(props.item.raw_data)
+      : props.item.raw_data
+    if (raw?.url && (raw.url.includes('bilibili.com') || raw.url.includes('youtube.com') || raw.url.includes('youtu.be'))) {
+      return raw.url
+    }
+  } catch { /* ignore */ }
+  // 2. 从 media_items 中提取
+  const videoItem = props.item.media_items?.find(m =>
+    m.media_type === 'video' && m.original_url && (
+      m.original_url.includes('bilibili.com') ||
+      m.original_url.includes('youtube.com') ||
+      m.original_url.includes('youtu.be')
+    )
+  )
+  if (videoItem) return videoItem.original_url
+  return null
+})
+
 const renderedAnalysis = computed(() => {
   if (!props.item?.analysis_result) return ''
   const analysis = props.item.analysis_result
@@ -54,9 +79,9 @@ const renderedAnalysis = computed(() => {
         markdown += `**${key}:** ${value}\n\n`
       }
     }
-    return md.render(markdown)
+    return DOMPurify.sanitize(md.render(markdown))
   }
-  return md.render(String(analysis))
+  return DOMPurify.sanitize(md.render(String(analysis)))
 })
 
 const renderedContent = computed(() => {
@@ -436,9 +461,9 @@ defineExpose({ resetViewMode })
     <!-- 视频播放器 -->
     <div :class="isMobileOverlay ? 'px-4 py-2' : ''">
       <IframeVideoPlayer
-        v-if="item.media_items?.some(m => m.media_type === 'video')"
+        v-if="embeddableVideoUrl"
         :key="'vp-' + item.id"
-        :video-url="item.url"
+        :video-url="embeddableVideoUrl"
         :title="item.title || '视频播放'"
       />
     </div>

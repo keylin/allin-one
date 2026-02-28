@@ -2,11 +2,12 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { formatTimeShort } from '@/utils/time'
-import { listMedia, deleteMedia, downloadMedia } from '@/api/media'
-import { incrementView, toggleFavorite } from '@/api/content'
+import { listMedia, deleteMedia, downloadMedia, toggleMediaFavorite, retryMedia } from '@/api/media'
+import { incrementView } from '@/api/content'
 import { listSources } from '@/api/sources'
 import ConfirmDialog from '@/components/confirm-dialog.vue'
 import VideoPlayer from '@/components/video-player.vue'
+import IframeVideoPlayer from '@/components/iframe-video-player.vue'
 import PodcastPlayer from '@/components/podcast-player.vue'
 import ImageLightbox from '@/components/image-lightbox.vue'
 import { useToast } from '@/composables/useToast'
@@ -70,6 +71,11 @@ useScrollLock(playerVisible)
 const showDeleteDialog = ref(false)
 const deletingItem = ref(null)
 
+// --- 失败详情弹窗 ---
+const showErrorDialog = ref(false)
+const errorItem = ref(null)
+const retrying = ref(false)
+
 // Mobile filter collapse
 const showMobileFilters = ref(false)
 const activeFilterCount = computed(() => {
@@ -85,10 +91,11 @@ const allSortOptions = [
   { value: 'published_at:desc', label: '最新发布' },
   { value: 'collected_at:desc', label: '最新采集' },
   { value: 'duration:desc', label: '时长最长' },
+  { value: 'last_played_at:desc', label: '最近播放' },
 ]
 const sortOptions = computed(() =>
   activeTab.value === 'image'
-    ? allSortOptions.filter(o => !o.value.startsWith('duration'))
+    ? allSortOptions.filter(o => !o.value.startsWith('duration') && !o.value.startsWith('last_played_at'))
     : allSortOptions
 )
 
@@ -103,29 +110,44 @@ const currentSort = computed({
 
 const hasMore = computed(() => mediaItems.value.length < totalCount.value)
 
+const hasActiveFilters = computed(() => {
+  return filterPlatform.value || filterSourceId.value || (filterStatus.value && filterStatus.value !== 'completed')
+})
+
+const emptyStateType = computed(() => {
+  if (searchQuery.value.trim()) return 'search'
+  if (hasActiveFilters.value) return 'filter'
+  return 'empty'
+})
+
 const selectedItem = computed(() => {
   if (!selectedId.value) return null
   return mediaItems.value.find(d => d.id === selectedId.value) || null
 })
 
+// --- 播放器导航 ---
+const currentPlayerIndex = computed(() => {
+  if (!selectedId.value) return -1
+  return mediaItems.value.findIndex(d => d.id === selectedId.value)
+})
+const hasPrevMedia = computed(() => currentPlayerIndex.value > 0)
+const hasNextMedia = computed(() => currentPlayerIndex.value >= 0 && currentPlayerIndex.value < mediaItems.value.length - 1)
+
 const statusOptions = [
   { value: '', label: '全部' },
   { value: 'completed', label: '已完成' },
-  { value: 'running', label: '下载中' },
-  { value: 'pending', label: '等待中' },
+  { value: 'pending', label: '排队中' },
   { value: 'failed', label: '失败' },
 ]
 
 const statusStyles = {
   pending: 'bg-slate-100 text-slate-600',
-  running: 'bg-indigo-50 text-indigo-700',
   completed: 'bg-emerald-50 text-emerald-700',
-  failed: 'bg-rose-50 text-rose-700',
+  failed: 'bg-rose-100 text-rose-700 ring-1 ring-rose-200',
 }
 
 const statusLabels = {
-  pending: '等待中',
-  running: '下载中',
+  pending: '排队中',
   completed: '已完成',
   failed: '失败',
 }
@@ -203,8 +225,8 @@ function syncQueryParams() {
 }
 
 watch(activeTab, () => {
-  // 切到图片 Tab 时，duration 排序不可用，自动重置
-  if (activeTab.value === 'image' && sortBy.value === 'duration') {
+  // 切到图片 Tab 时，duration/last_played_at 排序不可用，自动重置
+  if (activeTab.value === 'image' && (sortBy.value === 'duration' || sortBy.value === 'last_played_at')) {
     sortBy.value = 'published_at'
     sortOrder.value = 'desc'
   }
@@ -236,7 +258,8 @@ async function handleSubmit() {
       toast.success('媒体下载任务已提交')
       mediaUrl.value = ''
       showDownloadForm.value = false
-      await fetchMedia()
+      // 切到"排队中"筛选以查看新提交的任务
+      filterStatus.value = 'pending'
     } else {
       toast.error(res.message || '提交失败')
     }
@@ -249,6 +272,12 @@ async function handleSubmit() {
 
 // --- 选中媒体 ---
 function selectItem(item) {
+  // 失败项：打开错误详情弹窗而非播放器
+  if (item.status === 'failed') {
+    errorItem.value = item
+    showErrorDialog.value = true
+    return
+  }
   if (item.media_type === 'image') {
     // 图片：直接打开 Lightbox（不用全屏 overlay）
     const imgUrl = item.media_info?.file_url || `/api/media/${item.content_id}/thumbnail`
@@ -272,13 +301,50 @@ function closePlayer() {
   playerVisible.value = false
 }
 
+function goToPrevMedia() {
+  const idx = currentPlayerIndex.value
+  if (idx <= 0) return
+  const prev = mediaItems.value[idx - 1]
+  if (prev.status === 'failed') return
+  if (videoPlayerRef.value) videoPlayerRef.value.destroy()
+  selectedId.value = prev.id
+  if (prev.status === 'completed' && prev.content_id) {
+    incrementView(prev.content_id).catch(() => {})
+  }
+}
+
+function goToNextMedia() {
+  const idx = currentPlayerIndex.value
+  if (idx < 0 || idx >= mediaItems.value.length - 1) return
+  const next = mediaItems.value[idx + 1]
+  if (next.status === 'failed') return
+  if (videoPlayerRef.value) videoPlayerRef.value.destroy()
+  selectedId.value = next.id
+  if (next.status === 'completed' && next.content_id) {
+    incrementView(next.content_id).catch(() => {})
+  }
+  // 预加载更多
+  if (idx + 1 >= mediaItems.value.length - 3 && hasMore.value) loadMore()
+}
+
 // --- 收藏 ---
 async function handleFavorite(d, event) {
   if (event) event.stopPropagation()
-  if (!d.content_id) return
-  const res = await toggleFavorite(d.content_id)
-  if (res.code === 0) {
-    d.is_favorited = res.data.is_favorited
+  if (!d.id) return
+  const prev = d.is_favorited
+  d.is_favorited = !prev
+  try {
+    const res = await toggleMediaFavorite(d.id)
+    if (res.code === 0) {
+      d.is_favorited = res.data.is_favorited
+      toast.success(res.data.is_favorited ? '已收藏' : '已取消收藏')
+    } else {
+      d.is_favorited = prev
+      toast.error('操作失败')
+    }
+  } catch {
+    d.is_favorited = prev
+    toast.error('网络错误')
   }
 }
 
@@ -307,6 +373,33 @@ async function handleDelete() {
   } catch {
     toast.error('删除请求失败')
   }
+}
+
+// --- 重试下载 ---
+async function handleRetry() {
+  if (!errorItem.value?.id) return
+  retrying.value = true
+  try {
+    const res = await retryMedia(errorItem.value.id)
+    if (res.code === 0) {
+      toast.success('已重新提交下载')
+      showErrorDialog.value = false
+      errorItem.value = null
+      await fetchMedia()
+    } else {
+      toast.error(res.message || '重试失败')
+    }
+  } catch {
+    toast.error('重试请求失败')
+  } finally {
+    retrying.value = false
+  }
+}
+
+function handleErrorDialogDelete() {
+  showErrorDialog.value = false
+  deletingItem.value = errorItem.value
+  showDeleteDialog.value = true
 }
 
 // --- 键盘 ---
@@ -345,9 +438,45 @@ function formatDurationForPlayer(seconds) {
   return String(Math.floor(seconds))
 }
 
+function clearSearch() {
+  searchQuery.value = ''
+}
+
+function resetFilters() {
+  filterStatus.value = 'completed'
+  filterPlatform.value = ''
+  filterSourceId.value = ''
+}
+
 function formatTime(t) {
   return formatTimeShort(t)
 }
+
+function formatFileSize(bytes) {
+  if (!bytes) return ''
+  if (bytes < 1024) return bytes + ' B'
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+  if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+  return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB'
+}
+
+// --- pending 状态自动轮询 ---
+let pendingPollTimer = null
+function startPendingPoll() {
+  stopPendingPoll()
+  pendingPollTimer = setInterval(() => {
+    const hasPending = mediaItems.value.some(d => d.status === 'pending')
+    if (hasPending) fetchMedia()
+    else stopPendingPoll()
+  }, 15000)
+}
+function stopPendingPoll() {
+  clearInterval(pendingPollTimer)
+  pendingPollTimer = null
+}
+watch(mediaItems, (items) => {
+  if (items.some(d => d.status === 'pending') && !pendingPollTimer) startPendingPoll()
+}, { deep: false })
 
 onMounted(async () => {
   fetchMedia()
@@ -361,6 +490,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   if (videoPlayerRef.value) videoPlayerRef.value.destroy()
   clearTimeout(searchTimer)
+  stopPendingPoll()
   document.removeEventListener('keydown', onKeydown)
   if (observer) observer.disconnect()
 })
@@ -593,21 +723,64 @@ onBeforeUnmount(() => {
         <!-- Empty -->
         <div v-else-if="mediaItems.length === 0" class="text-center py-24">
           <div class="w-16 h-16 mx-auto mb-4 bg-slate-100 rounded-2xl flex items-center justify-center">
-            <svg class="w-8 h-8 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
+            <!-- 搜索无结果图标 -->
+            <svg v-if="emptyStateType === 'search'" class="w-8 h-8 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+            </svg>
+            <!-- 筛选无结果图标 -->
+            <svg v-else-if="emptyStateType === 'filter'" class="w-8 h-8 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 3c2.755 0 5.455.232 8.083.678.533.09.917.556.917 1.096v1.044a2.25 2.25 0 01-.659 1.591l-5.432 5.432a2.25 2.25 0 00-.659 1.591v2.927a2.25 2.25 0 01-1.244 2.013L9.75 21v-6.568a2.25 2.25 0 00-.659-1.591L3.659 7.409A2.25 2.25 0 013 5.818V4.774c0-.54.384-1.006.917-1.096A48.32 48.32 0 0112 3z" />
+            </svg>
+            <!-- 默认空状态图标 -->
+            <svg v-else class="w-8 h-8 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
               <path stroke-linecap="round" stroke-linejoin="round" d="M3.375 19.5h17.25m-17.25 0a1.125 1.125 0 01-1.125-1.125M3.375 19.5h7.5c.621 0 1.125-.504 1.125-1.125m-9.75 0V5.625m0 12.75v-1.5c0-.621.504-1.125 1.125-1.125m18.375 2.625V5.625m0 12.75c0 .621-.504 1.125-1.125 1.125m1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125m0 3.75h-7.5A1.125 1.125 0 0112 18.375m9.75-12.75c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125m19.5 0v1.5c0 .621-.504 1.125-1.125 1.125M2.25 5.625v1.5c0 .621.504 1.125 1.125 1.125m0 0h17.25m-17.25 0h7.5c.621 0 1.125.504 1.125 1.125M3.375 8.25c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125m17.25-3.75h-7.5c-.621 0-1.125.504-1.125 1.125m8.625-1.125c.621 0 1.125.504 1.125 1.125v1.5c0 .621-.504 1.125-1.125 1.125m-1.5-3.75h1.5m-1.5 0c-.621 0-1.125.504-1.125 1.125v1.5" />
             </svg>
           </div>
-          <p class="text-sm text-slate-500 font-medium mb-1">暂无{{ tabTypeLabel }}</p>
-          <p class="text-xs text-slate-400 mb-5">点击上方「下载媒体」按钮添加视频/音频</p>
-          <button
-            class="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-indigo-600 bg-indigo-50 rounded-lg hover:bg-indigo-100 transition-colors"
-            @click="showDownloadForm = true"
-          >
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
-            </svg>
-            下载媒体
-          </button>
+
+          <!-- 搜索无结果 -->
+          <template v-if="emptyStateType === 'search'">
+            <p class="text-sm text-slate-500 font-medium mb-1">未找到「{{ searchQuery }}」相关的{{ tabTypeLabel }}</p>
+            <p class="text-xs text-slate-400 mb-5">尝试其他关键词或清除搜索</p>
+            <button
+              class="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-indigo-600 bg-indigo-50 rounded-lg hover:bg-indigo-100 transition-colors"
+              @click="clearSearch"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+              清除搜索
+            </button>
+          </template>
+
+          <!-- 筛选无结果 -->
+          <template v-else-if="emptyStateType === 'filter'">
+            <p class="text-sm text-slate-500 font-medium mb-1">当前筛选条件下没有{{ tabTypeLabel }}</p>
+            <p class="text-xs text-slate-400 mb-5">尝试调整筛选条件</p>
+            <button
+              class="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-indigo-600 bg-indigo-50 rounded-lg hover:bg-indigo-100 transition-colors"
+              @click="resetFilters"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182" />
+              </svg>
+              重置筛选
+            </button>
+          </template>
+
+          <!-- 无任何内容 -->
+          <template v-else>
+            <p class="text-sm text-slate-500 font-medium mb-1">还没有媒体内容</p>
+            <p class="text-xs text-slate-400 mb-5">点击「下载媒体」开始添加视频/音频</p>
+            <button
+              class="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-indigo-600 bg-indigo-50 rounded-lg hover:bg-indigo-100 transition-colors"
+              @click="showDownloadForm = true"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+              </svg>
+              下载媒体
+            </button>
+          </template>
         </div>
 
         <!-- 媒体卡片网格 -->
@@ -621,7 +794,7 @@ onBeforeUnmount(() => {
                 selectedId === d.id && playerVisible
                   ? 'border-indigo-400 ring-1 ring-indigo-400/30 shadow-md'
                   : 'border-slate-200/60 hover:border-indigo-300 hover:shadow-md',
-                { 'opacity-60': d.status !== 'completed' }
+                { 'opacity-60': d.status === 'failed' && d.media_type !== 'video' }
               ]"
               @click="selectItem(d)"
             >
@@ -630,7 +803,7 @@ onBeforeUnmount(() => {
                 <div class="aspect-video bg-gradient-to-br from-slate-800 to-slate-900 relative overflow-hidden">
                   <img
                     v-if="d.content_id && d.media_info?.has_thumbnail"
-                    :src="`/api/media/${d.content_id}/thumbnail`"
+                    :src="d.media_info?.thumbnail_url || `/api/media/${d.content_id}/thumbnail`"
                     class="absolute inset-0 w-full h-full"
                     :class="isPortrait(d) ? 'object-contain' : 'object-cover'"
                     loading="lazy"
@@ -645,7 +818,7 @@ onBeforeUnmount(() => {
 
                   <!-- 悬浮播放按钮 -->
                   <div
-                    v-if="d.status === 'completed'"
+                    v-if="d.status !== 'failed' && (d.status === 'completed' || (d.media_type === 'video' && d.content_url))"
                     class="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-all duration-300 flex items-center justify-center"
                   >
                     <div class="w-12 h-12 bg-white/95 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transform scale-75 group-hover:scale-100 transition-all duration-300 shadow-xl">
@@ -655,12 +828,27 @@ onBeforeUnmount(() => {
                     </div>
                   </div>
 
+                  <!-- 失败重试提示 -->
+                  <div
+                    v-if="d.status === 'failed'"
+                    class="absolute inset-0 bg-black/40 group-hover:bg-black/50 transition-all duration-200 flex items-center justify-center"
+                  >
+                    <div class="w-10 h-10 bg-white/80 group-hover:bg-white/95 rounded-full flex items-center justify-center transition-all duration-200 shadow-lg">
+                      <svg class="w-5 h-5 text-rose-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182" />
+                      </svg>
+                    </div>
+                  </div>
+
                   <!-- 状态标签 -->
                   <span
                     v-if="d.status !== 'completed'"
-                    class="absolute top-2 left-2 px-2 py-0.5 text-xs font-medium rounded-md shadow-sm"
+                    class="absolute top-2 left-2 px-2 py-0.5 text-xs font-medium rounded-md shadow-sm inline-flex items-center gap-1"
                     :class="statusStyles[d.status] || 'bg-slate-100 text-slate-600'"
                   >
+                    <svg v-if="d.status === 'pending'" class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
                     {{ statusLabels[d.status] || d.status }}
                   </span>
 
@@ -670,14 +858,6 @@ onBeforeUnmount(() => {
                     class="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 text-[10px] font-medium bg-black/70 text-white rounded"
                   >
                     {{ formatDuration(d.media_info.duration) }}
-                  </span>
-
-                  <!-- 平台角标 -->
-                  <span
-                    v-if="d.media_info?.platform"
-                    class="absolute top-2 right-2 px-1.5 py-0.5 text-[10px] font-medium bg-white/80 text-slate-600 rounded capitalize backdrop-blur-sm group-hover:opacity-0 transition-opacity duration-200"
-                  >
-                    {{ d.media_info.platform }}
                   </span>
 
                   <!-- 删除按钮 -->
@@ -704,6 +884,17 @@ onBeforeUnmount(() => {
                       <path stroke-linecap="round" stroke-linejoin="round" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
                     </svg>
                   </button>
+
+                  <!-- 播放进度条 -->
+                  <div
+                    v-if="d.playback_position > 0 && d.media_info?.duration > 0"
+                    class="absolute bottom-0 left-0 right-0 h-0.5 bg-black/20"
+                  >
+                    <div
+                      class="h-full bg-indigo-500"
+                      :style="{ width: Math.min(100, (d.playback_position / d.media_info.duration) * 100) + '%' }"
+                    />
+                  </div>
                 </div>
               </template>
 
@@ -749,9 +940,12 @@ onBeforeUnmount(() => {
                   <!-- 状态标签 -->
                   <span
                     v-if="d.status !== 'completed'"
-                    class="absolute top-2 left-2 px-2 py-0.5 text-xs font-medium rounded-md"
+                    class="absolute top-2 left-2 px-2 py-0.5 text-xs font-medium rounded-md inline-flex items-center gap-1"
                     :class="statusStyles[d.status] || 'bg-slate-100 text-slate-600'"
                   >
+                    <svg v-if="d.status === 'pending'" class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
                     {{ statusLabels[d.status] || d.status }}
                   </span>
 
@@ -779,12 +973,23 @@ onBeforeUnmount(() => {
                       <path stroke-linecap="round" stroke-linejoin="round" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
                     </svg>
                   </button>
+
+                  <!-- 播放进度条 -->
+                  <div
+                    v-if="d.playback_position > 0 && d.media_info?.duration > 0"
+                    class="absolute bottom-0 left-0 right-0 h-0.5 bg-black/20"
+                  >
+                    <div
+                      class="h-full bg-indigo-500"
+                      :style="{ width: Math.min(100, (d.playback_position / d.media_info.duration) * 100) + '%' }"
+                    />
+                  </div>
                 </div>
               </template>
 
               <!-- ===== 图片卡片封面 ===== -->
               <template v-else-if="d.media_type === 'image'">
-                <div class="aspect-square bg-slate-100 relative overflow-hidden">
+                <div :class="[activeTab === 'image' ? 'aspect-square' : 'aspect-video', 'bg-slate-100 relative overflow-hidden']">
                   <img
                     v-if="d.content_id"
                     :src="d.media_info?.file_url || `/api/media/${d.content_id}/thumbnail`"
@@ -821,6 +1026,19 @@ onBeforeUnmount(() => {
                       <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                     </svg>
                   </button>
+
+                  <!-- 收藏按钮 -->
+                  <button
+                    v-if="d.content_id"
+                    class="absolute bottom-1.5 left-1.5 w-6 h-6 flex items-center justify-center rounded-lg transition-all duration-200"
+                    :class="d.is_favorited ? 'text-amber-500 bg-black/50' : 'bg-black/50 hover:bg-amber-500/80 text-white opacity-0 group-hover:opacity-100'"
+                    :title="d.is_favorited ? '取消收藏' : '收藏'"
+                    @click="handleFavorite(d, $event)"
+                  >
+                    <svg class="w-3.5 h-3.5" :fill="d.is_favorited ? 'currentColor' : 'none'" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
+                    </svg>
+                  </button>
                 </div>
               </template>
 
@@ -829,11 +1047,17 @@ onBeforeUnmount(() => {
                 <h4 class="text-sm font-medium text-slate-800 line-clamp-2 leading-snug min-h-[2.5rem]">
                   {{ d.title || d.media_info?.title || '未知标题' }}
                 </h4>
-                <div class="mt-1.5 flex items-center gap-1 text-[11px] text-slate-400">
+                <div class="mt-1.5 flex items-center gap-1 text-[11px] text-slate-400 flex-wrap">
+                  <span v-if="d.media_info?.platform" class="capitalize">{{ d.media_info.platform }}</span>
+                  <span v-if="d.media_info?.platform && d.source_name" class="text-slate-200 shrink-0">·</span>
                   <span class="truncate">{{ d.source_name || '手动下载' }}</span>
                   <template v-if="d.published_at || d.created_at">
                     <span class="text-slate-200 shrink-0">·</span>
                     <span class="shrink-0">{{ formatTime(d.published_at || d.created_at) }}</span>
+                  </template>
+                  <template v-if="d.media_info?.file_size">
+                    <span class="text-slate-200 shrink-0">·</span>
+                    <span class="shrink-0">{{ formatFileSize(d.media_info.file_size) }}</span>
                   </template>
                 </div>
                 <p v-if="d.error_message" class="mt-1 text-[10px] text-rose-500 line-clamp-1" :title="d.error_message">
@@ -880,15 +1104,40 @@ onBeforeUnmount(() => {
           v-if="playerVisible && selectedItem"
           class="fixed inset-0 z-50 bg-black/90 backdrop-blur-sm flex flex-col"
         >
-          <!-- 关闭按钮 -->
-          <button
-            class="absolute top-4 right-4 z-10 p-2 text-white/60 hover:text-white hover:bg-white/10 rounded-lg transition-all"
-            @click="closePlayer"
-          >
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+          <!-- 顶部操作栏 -->
+          <div class="absolute top-4 right-4 z-10 flex items-center gap-1">
+            <!-- 上一条 -->
+            <button
+              v-if="hasPrevMedia"
+              class="p-2 text-white/60 hover:text-white hover:bg-white/10 rounded-lg transition-all"
+              title="上一条"
+              @click="goToPrevMedia"
+            >
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+              </svg>
+            </button>
+            <!-- 下一条 -->
+            <button
+              v-if="hasNextMedia"
+              class="p-2 text-white/60 hover:text-white hover:bg-white/10 rounded-lg transition-all"
+              title="下一条"
+              @click="goToNextMedia"
+            >
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+              </svg>
+            </button>
+            <!-- 关闭 -->
+            <button
+              class="p-2 text-white/60 hover:text-white hover:bg-white/10 rounded-lg transition-all"
+              @click="closePlayer"
+            >
+              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
 
           <!-- 视频播放器 -->
           <template v-if="selectedItem.media_type === 'video'">
@@ -900,6 +1149,12 @@ onBeforeUnmount(() => {
                     :content-id="selectedItem.content_id"
                     :title="selectedItem.title || '视频播放'"
                     :saved-position="selectedItem.playback_position || 0"
+                  />
+                </div>
+                <div v-else-if="selectedItem.content_url" class="shadow-2xl">
+                  <IframeVideoPlayer
+                    :video-url="selectedItem.content_url"
+                    :title="selectedItem.title || '视频播放'"
                   />
                 </div>
                 <div v-else class="aspect-video bg-gradient-to-br from-slate-800 to-slate-900 rounded-xl flex items-center justify-center shadow-2xl">
@@ -1016,5 +1271,86 @@ onBeforeUnmount(() => {
       @confirm="handleDelete"
       @cancel="showDeleteDialog = false"
     />
+
+    <!-- 失败详情弹窗 -->
+    <Teleport to="body">
+      <Transition
+        enter-active-class="transition-opacity duration-200 ease-out"
+        enter-from-class="opacity-0"
+        enter-to-class="opacity-100"
+        leave-active-class="transition-opacity duration-150 ease-in"
+        leave-from-class="opacity-100"
+        leave-to-class="opacity-0"
+      >
+        <div
+          v-if="showErrorDialog && errorItem"
+          class="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4"
+          @click.self="showErrorDialog = false"
+        >
+          <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+            <!-- 头部 -->
+            <div class="px-5 pt-5 pb-3 flex items-start justify-between">
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 mb-1">
+                  <span class="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium bg-rose-100 text-rose-700 rounded-md ring-1 ring-rose-200">
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                      <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+                    </svg>
+                    下载失败
+                  </span>
+                </div>
+                <h3 class="text-base font-semibold text-slate-800 line-clamp-2">{{ errorItem.title || '未知标题' }}</h3>
+              </div>
+              <button
+                class="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors ml-3 shrink-0"
+                @click="showErrorDialog = false"
+              >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <!-- 错误信息 -->
+            <div class="px-5 pb-4 space-y-3">
+              <div v-if="errorItem.error_message" class="bg-rose-50 border border-rose-100 rounded-lg p-3">
+                <p class="text-xs font-medium text-rose-600 mb-1">错误信息</p>
+                <p class="text-sm text-rose-700 whitespace-pre-wrap break-words">{{ errorItem.error_message }}</p>
+              </div>
+              <div v-if="errorItem.content_url" class="bg-slate-50 border border-slate-100 rounded-lg p-3">
+                <p class="text-xs font-medium text-slate-500 mb-1">原始 URL</p>
+                <a :href="errorItem.content_url" target="_blank" rel="noopener" class="text-sm text-indigo-600 hover:text-indigo-700 break-all">
+                  {{ errorItem.content_url }}
+                </a>
+              </div>
+            </div>
+
+            <!-- 操作按钮 -->
+            <div class="px-5 pb-5 flex items-center gap-3">
+              <button
+                class="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-all duration-200"
+                :disabled="retrying"
+                @click="handleRetry"
+              >
+                <svg v-if="retrying" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                </svg>
+                <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182" />
+                </svg>
+                {{ retrying ? '重试中...' : '重新下载' }}
+              </button>
+              <button
+                class="px-4 py-2 text-sm font-medium text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                @click="handleErrorDialogDelete"
+              >
+                删除
+              </button>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>

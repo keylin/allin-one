@@ -1,13 +1,14 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { listContent, toggleFavorite, batchMarkRead, incrementView } from '@/api/content'
+import { listContent, toggleFavorite, batchMarkRead, batchUnfavorite, incrementView } from '@/api/content'
 import { listMedia, toggleMediaFavorite } from '@/api/media'
 import { listSources } from '@/api/sources'
 import { useToast } from '@/composables/useToast'
 import { formatTimeShort } from '@/utils/time'
 import ContentDetailModal from '@/components/content-detail-modal.vue'
 import ImageLightbox from '@/components/image-lightbox.vue'
+import ConfirmDialog from '@/components/confirm-dialog.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -39,9 +40,6 @@ function handleScroll() {
   lastScrollTop = st
 }
 
-// --- 视图切换：内容 / 媒体项 ---
-const activeView = ref(route.query.view || 'content')
-
 // --- 媒体项视图状态 ---
 const mediaItems = ref([])
 const mediaTotalCount = ref(0)
@@ -71,6 +69,7 @@ async function fetchMediaItems(reset = false) {
     mediaHasMore.value = true
     mediaLoading.value = true
   } else {
+    mediaPage.value++
     mediaLoadingMore.value = true
   }
   try {
@@ -91,8 +90,7 @@ async function fetchMediaItems(reset = false) {
       } else {
         mediaItems.value = [...mediaItems.value, ...res.data]
       }
-      mediaHasMore.value = res.data.length >= 24
-      if (!reset) mediaPage.value++
+      mediaHasMore.value = mediaItems.value.length < res.total
     }
   } finally {
     mediaLoading.value = false
@@ -135,12 +133,6 @@ function openMediaLightbox(item, index) {
   mediaLightboxIndex.value = imageIdx >= 0 ? imageIdx : 0
   mediaLightboxVisible.value = true
 }
-
-watch(activeView, (val) => {
-  if (val === 'media' && mediaItems.value.length === 0) {
-    fetchMediaItems(true)
-  }
-})
 
 // --- 筛选 ---
 const searchQuery = ref(route.query.q || '')
@@ -203,15 +195,11 @@ function getContentId(item) {
 }
 function getVideoInfo(item) {
   const videoMedia = item.media_items?.find(m => m.media_type === 'video') || {}
-  let duration = null
-  if (videoMedia.metadata_json) {
-    try { duration = JSON.parse(videoMedia.metadata_json).duration || null } catch { /* ignore */ }
-  }
   return {
     platform: item.url?.includes('youtube') ? 'youtube' : item.url?.includes('bilibili') ? 'bilibili' : '',
     has_thumbnail: item.has_thumbnail,
     thumbnail_path: videoMedia.thumbnail_path,
-    duration,
+    duration: videoMedia.duration || null,
   }
 }
 function formatDuration(seconds) {
@@ -266,6 +254,7 @@ function clearFilters() {
 // --- 批量操作 ---
 const selectedIds = ref([])
 const showBatchBar = computed(() => selectedIds.value.length > 0)
+const showBatchUnfavoriteDialog = ref(false)
 
 // --- 详情弹层 ---
 const modalVisible = ref(false)
@@ -293,7 +282,6 @@ function onThumbnailLoad(event, itemId) {
 // --- URL 同步 ---
 function syncQueryParams() {
   const query = {}
-  if (activeView.value !== 'content') query.view = activeView.value
   if (searchQuery.value) query.q = searchQuery.value
   if (activeMediaType.value) query.media_type = activeMediaType.value
   if (filterSourceId.value) query.source_id = filterSourceId.value
@@ -313,8 +301,8 @@ function getDateRange() {
   from.setDate(from.getDate() - days + 1)
   from.setHours(0, 0, 0, 0)
   return {
-    date_from: from.toISOString().split('T')[0],
-    date_to: new Date().toISOString().split('T')[0],
+    favorited_from: from.toISOString().split('T')[0],
+    favorited_to: new Date().toISOString().split('T')[0],
   }
 }
 
@@ -358,7 +346,7 @@ async function fetchItems(reset = false) {
       } else {
         items.value = [...items.value, ...res.data]
       }
-      hasMore.value = res.data.length >= pageSize
+      hasMore.value = items.value.length < res.total
     }
   } finally {
     loading.value = false
@@ -377,10 +365,11 @@ watch(searchQuery, () => {
   clearTimeout(searchTimer)
   searchTimer = setTimeout(() => { fetchItems(true); fetchTabCounts() }, 300)
 })
-watch([() => filterSourceId.value, () => dateRange.value], () => {
+watch([filterSourceId, dateRange], () => {
   fetchTabCounts()
+  fetchItems(true)
 })
-watch([() => activeMediaType.value, () => filterSourceId.value, () => dateRange.value, currentSort], () => {
+watch([activeMediaType, currentSort], () => {
   fetchItems(true)
 })
 
@@ -405,10 +394,10 @@ async function handleFavorite(id) {
         const removedItem = items.value.find(i => i.id === id)
         if (removedItem) {
           if (hasVideo(removedItem) && tabCounts.value.video != null) tabCounts.value.video = Math.max(0, tabCounts.value.video - 1)
-          else if (hasAudio(removedItem) && tabCounts.value.audio != null) tabCounts.value.audio = Math.max(0, tabCounts.value.audio - 1)
-          else if (hasImage(removedItem) && tabCounts.value.image != null) tabCounts.value.image = Math.max(0, tabCounts.value.image - 1)
-          else if (removedItem.content_type === 'ebook' && tabCounts.value.ebook != null) tabCounts.value.ebook = Math.max(0, tabCounts.value.ebook - 1)
-          else if (tabCounts.value.article != null) tabCounts.value.article = Math.max(0, tabCounts.value.article - 1)
+          if (hasAudio(removedItem) && tabCounts.value.audio != null) tabCounts.value.audio = Math.max(0, tabCounts.value.audio - 1)
+          if (hasImage(removedItem) && tabCounts.value.image != null) tabCounts.value.image = Math.max(0, tabCounts.value.image - 1)
+          if (removedItem.content_type === 'ebook' && tabCounts.value.ebook != null) tabCounts.value.ebook = Math.max(0, tabCounts.value.ebook - 1)
+          if (!hasVideo(removedItem) && !hasAudio(removedItem) && !hasImage(removedItem) && removedItem.content_type !== 'ebook' && tabCounts.value.article != null) tabCounts.value.article = Math.max(0, tabCounts.value.article - 1)
         }
         items.value = items.value.filter(i => i.id !== id)
         totalCount.value = Math.max(0, totalCount.value - 1)
@@ -440,16 +429,28 @@ function toggleSelectAll() {
   }
 }
 
-async function handleBatchUnfavorite() {
+function handleBatchUnfavorite() {
+  showBatchUnfavoriteDialog.value = true
+}
+
+async function confirmBatchUnfavorite() {
+  showBatchUnfavoriteDialog.value = false
   const ids = [...selectedIds.value]
-  for (const id of ids) {
-    try { await toggleFavorite(id) } catch { /* continue */ }
+  try {
+    const res = await batchUnfavorite(ids)
+    if (res.code === 0) {
+      const count = res.data.updated
+      items.value = items.value.filter(i => !ids.includes(i.id))
+      totalCount.value = Math.max(0, totalCount.value - count)
+      selectedIds.value = []
+      fetchTabCounts()
+      toast.success(`已取消 ${count} 条收藏`)
+    } else {
+      toast.error(res.message || '操作失败')
+    }
+  } catch {
+    toast.error('网络错误')
   }
-  items.value = items.value.filter(i => !ids.includes(i.id))
-  totalCount.value = Math.max(0, totalCount.value - ids.length)
-  selectedIds.value = []
-  fetchTabCounts()
-  toast.success(`已取消 ${ids.length} 条收藏`)
 }
 
 async function handleBatchRead() {
@@ -528,27 +529,8 @@ onUnmounted(() => {
          ══════════════════════════════════════════════ -->
     <div class="sticky top-0 z-10 bg-white/95 backdrop-blur-sm border-b border-slate-100 shrink-0">
 
-      <!-- ── 视图切换：内容 / 媒体项 ── -->
-      <div class="flex items-center gap-1 px-4 pt-2.5 pb-0">
-        <button
-          class="px-3 py-1 text-xs font-medium rounded-lg transition-all"
-          :class="activeView === 'content'
-            ? 'bg-indigo-600 text-white shadow-sm'
-            : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100'"
-          @click="activeView = 'content'"
-        >内容</button>
-        <button
-          class="px-3 py-1 text-xs font-medium rounded-lg transition-all"
-          :class="activeView === 'media'
-            ? 'bg-indigo-600 text-white shadow-sm'
-            : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100'"
-          @click="activeView = 'media'"
-        >媒体项</button>
-      </div>
-
-      <!-- ── 移动端搜索框（仅移动端独占一行，内容视图） ── -->
+      <!-- ── 移动端搜索框（仅移动端独占一行） ── -->
       <div
-        v-if="activeView === 'content'"
         class="px-4 pt-2.5 md:hidden transition-all duration-300 ease-in-out overflow-hidden"
         :class="toolbarCollapsed ? 'max-h-0 !pt-0 opacity-0' : 'max-h-20 opacity-100'"
       >
@@ -576,7 +558,6 @@ onUnmounted(() => {
 
       <!-- ── 筛选工具栏（内容视图） ── -->
       <div
-        v-if="activeView === 'content'"
         class="flex items-center gap-1.5 px-4 pt-2 pb-2.5 md:px-5 overflow-x-auto scrollbar-hide transition-all duration-300 ease-in-out md:!max-h-none md:!opacity-100 md:!pt-2.5 md:!pb-2.5"
         :class="toolbarCollapsed ? 'max-h-0 !pt-0 !pb-0 opacity-0 !overflow-hidden' : 'max-h-16 opacity-100'"
       >
@@ -661,31 +642,6 @@ onUnmounted(() => {
           @click="clearFilters"
         >清除</button>
       </div>
-      <!-- ── 媒体项筛选工具栏 ── -->
-      <div v-if="activeView === 'media'" class="flex items-center gap-1.5 px-4 pt-2 pb-2.5 md:px-5 overflow-x-auto scrollbar-hide">
-        <!-- 类型 -->
-        <div class="flex items-center gap-1 flex-shrink-0">
-          <button
-            v-for="mt in mediaTypeFilters"
-            :key="mt.value"
-            class="px-2.5 py-1 text-xs font-medium rounded-lg border transition-all whitespace-nowrap"
-            :class="mediaFilterType === mt.value
-              ? 'bg-indigo-50 border-indigo-300 text-indigo-700'
-              : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300 hover:text-slate-700'"
-            @click="mediaFilterType = mt.value"
-          >{{ mt.label }}</button>
-        </div>
-        <!-- 排序 -->
-        <select
-          v-model="mediaSortBy"
-          class="flex-shrink-0 ml-auto pl-2.5 pr-6 py-1 text-xs font-medium border rounded-lg outline-none transition-all cursor-pointer border-slate-200 text-slate-500 bg-white"
-          :style="selectArrowStyle"
-        >
-          <option value="favorited_at">最近收藏</option>
-          <option value="published_at">最新发布</option>
-          <option value="collected_at">最新采集</option>
-        </select>
-      </div>
     </div>
 
     <!-- ══════════════════════════════════════════════
@@ -693,141 +649,8 @@ onUnmounted(() => {
          ══════════════════════════════════════════════ -->
     <div ref="scrollContainerRef" class="flex-1 overflow-y-auto overscroll-contain">
 
-      <!-- ══ 媒体项视图 ══ -->
-      <div v-if="activeView === 'media'" class="px-3 py-4 md:px-5 md:py-5">
-        <!-- 骨架屏 -->
-        <div v-if="mediaLoading" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-          <div v-for="i in 10" :key="i" class="bg-white rounded-xl border border-slate-200/60 overflow-hidden animate-pulse">
-            <div class="aspect-square bg-slate-100"/>
-            <div class="p-2 space-y-1.5">
-              <div class="h-3 bg-slate-100 rounded w-3/4"/>
-              <div class="h-2.5 bg-slate-100 rounded w-1/2"/>
-            </div>
-          </div>
-        </div>
-
-        <!-- 空状态 -->
-        <div v-else-if="mediaItems.length === 0" class="flex flex-col items-center justify-center py-20 px-6">
-          <div class="w-20 h-20 bg-amber-50 rounded-2xl flex items-center justify-center mb-5">
-            <svg class="w-9 h-9 text-amber-200" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>
-            </svg>
-          </div>
-          <h3 class="text-base font-semibold text-slate-700 mb-2">还没有收藏的媒体项</h3>
-          <p class="text-sm text-slate-400 text-center max-w-xs leading-relaxed">在内容详情中点击媒体项旁的 ★ 即可单独收藏</p>
-        </div>
-
-        <!-- 网格（图片） / 列表（视频/音频） -->
-        <template v-else>
-          <!-- 图片网格 -->
-          <div v-if="!mediaFilterType || mediaFilterType === 'image'" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 mb-4">
-            <div
-              v-for="item in mediaItems.filter(m => m.media_type === 'image')"
-              :key="item.id"
-              class="group relative bg-white rounded-xl border border-slate-200/60 overflow-hidden cursor-pointer hover:border-slate-300 hover:shadow-md transition-all"
-              @click="openMediaLightbox(item)"
-            >
-              <div class="aspect-square bg-slate-100 overflow-hidden">
-                <img
-                  v-if="item.media_info?.file_url"
-                  :src="item.media_info.file_url"
-                  class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                  loading="lazy"
-                />
-                <div v-else class="w-full h-full flex items-center justify-center text-slate-300">
-                  <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5z"/>
-                  </svg>
-                </div>
-              </div>
-              <!-- 收藏/取消按钮 -->
-              <button
-                class="absolute top-1.5 right-1.5 p-1 rounded-full bg-white/80 text-amber-500 opacity-0 group-hover:opacity-100 transition-opacity shadow-sm"
-                @click.stop="handleMediaUnfavorite(item)"
-                title="取消收藏"
-              >
-                <svg class="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>
-                </svg>
-              </button>
-              <div class="p-2">
-                <p class="text-[10px] text-slate-400 truncate">{{ item.title }}</p>
-                <p class="text-[10px] text-slate-300">{{ formatTimeShort(item.favorited_at || item.collected_at) }}</p>
-              </div>
-            </div>
-          </div>
-
-          <!-- 视频/音频列表 -->
-          <div v-if="!mediaFilterType || mediaFilterType === 'video' || mediaFilterType === 'audio'" class="space-y-2">
-            <div
-              v-for="item in mediaItems.filter(m => m.media_type === 'video' || m.media_type === 'audio')"
-              :key="item.id"
-              class="group flex items-center gap-3 p-3 bg-white rounded-xl border border-slate-200/60 hover:border-slate-300 hover:shadow-sm transition-all cursor-pointer"
-              @click="$router.push(`/feed?content_id=${item.content_id}`)"
-            >
-              <!-- 图标 -->
-              <div class="w-10 h-10 rounded-lg flex items-center justify-center shrink-0"
-                :class="item.media_type === 'video' ? 'bg-indigo-50' : 'bg-emerald-50'"
-              >
-                <svg v-if="item.media_type === 'video'" class="w-5 h-5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/>
-                </svg>
-                <svg v-else class="w-5 h-5 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M9 9l10.5-3m0 6.553v3.75a2.25 2.25 0 01-1.632 2.163l-1.32.377a1.803 1.803 0 11-.99-3.467l2.31-.66a2.25 2.25 0 001.632-2.163zm0 0V2.25L9 5.25v10.303m0 0v3.75a2.25 2.25 0 01-1.632 2.163l-1.32.377a1.803 1.803 0 01-.99-3.467l2.31-.66A2.25 2.25 0 009 15.553z"/>
-                </svg>
-              </div>
-              <!-- 信息 -->
-              <div class="flex-1 min-w-0">
-                <p class="text-sm font-medium text-slate-800 truncate">{{ item.title }}</p>
-                <div class="flex items-center gap-2 text-[11px] text-slate-400 mt-0.5">
-                  <span v-if="item.source_name">{{ item.source_name }}</span>
-                  <span v-if="item.favorited_at">收藏于 {{ formatTimeShort(item.favorited_at) }}</span>
-                </div>
-              </div>
-              <!-- 状态 + 取消收藏 -->
-              <div class="flex items-center gap-2 shrink-0">
-                <span
-                  class="text-[10px] px-1.5 py-0.5 rounded-md font-medium"
-                  :class="item.status === 'completed' ? 'bg-emerald-50 text-emerald-600' : item.status === 'failed' ? 'bg-rose-50 text-rose-500' : 'bg-slate-100 text-slate-400'"
-                >{{ item.status === 'completed' ? '已下载' : item.status === 'failed' ? '失败' : '待下载' }}</span>
-                <button
-                  class="p-1 text-amber-400 hover:text-amber-600 opacity-0 group-hover:opacity-100 transition-all"
-                  @click.stop="handleMediaUnfavorite(item)"
-                  title="取消收藏"
-                >
-                  <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>
-                  </svg>
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <!-- 加载更多 -->
-          <div v-if="mediaLoadingMore" class="flex items-center justify-center py-8">
-            <svg class="w-5 h-5 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24">
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
-              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
-            </svg>
-          </div>
-          <div v-else-if="!mediaHasMore && mediaItems.length > 0" class="flex items-center gap-3 py-8 px-2">
-            <div class="h-px flex-1 bg-slate-100"/>
-            <span class="text-xs text-slate-400 whitespace-nowrap">已显示全部 {{ mediaTotalCount }} 个媒体项</span>
-            <div class="h-px flex-1 bg-slate-100"/>
-          </div>
-        </template>
-
-        <!-- ImageLightbox -->
-        <ImageLightbox
-          :visible="mediaLightboxVisible"
-          :images="mediaLightboxImages"
-          :start-index="mediaLightboxIndex"
-          @close="mediaLightboxVisible = false"
-        />
-      </div>
-
       <!-- ══ 内容视图 ══ -->
-      <div v-if="activeView === 'content'" class="px-3 py-4 md:px-5 md:py-5">
+      <div class="px-3 py-4 md:px-5 md:py-5">
 
         <!-- ── 骨架屏 ── -->
         <div v-if="loading" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3 md:gap-4">
@@ -1127,6 +950,17 @@ onUnmounted(() => {
         </div>
       </div>
     </Transition>
+
+    <!-- 批量取消收藏确认弹窗 -->
+    <ConfirmDialog
+      :visible="showBatchUnfavoriteDialog"
+      title="取消收藏"
+      :message="`确定要取消收藏选中的 ${selectedIds.length} 条内容吗？`"
+      confirm-text="取消收藏"
+      :danger="true"
+      @confirm="confirmBatchUnfavorite"
+      @cancel="showBatchUnfavoriteDialog = false"
+    />
 
     <!-- 详情弹层 -->
     <ContentDetailModal

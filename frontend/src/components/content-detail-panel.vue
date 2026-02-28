@@ -2,6 +2,7 @@
 import { ref, computed, watch } from 'vue'
 import { getContent, analyzeContent } from '@/api/content'
 import JsonTreeViewer from '@/components/json-tree-viewer.vue'
+import IframeVideoPlayer from '@/components/iframe-video-player.vue'
 import MarkdownIt from 'markdown-it'
 import DOMPurify from 'dompurify'
 import { formatTimeFull } from '@/utils/time'
@@ -29,8 +30,10 @@ const md = new MarkdownIt({ html: true, linkify: true, typographer: true })
 
 const availableTabs = computed(() => {
   const tabs = []
-  if (content.value?.processed_content) {
+  if (content.value?.processed_content || embeddableVideoUrl.value) {
     tabs.push({ id: 'read', label: '阅读' })
+  }
+  if (content.value?.processed_content) {
     tabs.push({ id: 'processed_data', label: '处理数据' })
   }
   if (content.value?.analysis_result) {
@@ -48,7 +51,7 @@ watch(() => props.contentId, async (newId) => {
     activeTab.value = 'read'
     // 智能选择默认 Tab
     if (content.value) {
-      if (content.value.processed_content) activeTab.value = 'read'
+      if (content.value.processed_content || embeddableVideoUrl.value) activeTab.value = 'read'
       else if (content.value.analysis_result) activeTab.value = 'analysis_data'
       else if (content.value.raw_data) activeTab.value = 'raw_data'
       else activeTab.value = 'read'
@@ -70,6 +73,82 @@ async function loadContent() {
   }
 }
 
+/**
+ * 从 raw_data 或 media_items 提取可嵌入的视频 URL（Bilibili / YouTube）
+ */
+const embeddableVideoUrl = computed(() => {
+  if (!content.value) return null
+
+  // 1. 从 raw_data 中提取
+  try {
+    const raw = typeof content.value.raw_data === 'string'
+      ? JSON.parse(content.value.raw_data)
+      : content.value.raw_data
+    if (raw?.url && (raw.url.includes('bilibili.com') || raw.url.includes('youtube.com') || raw.url.includes('youtu.be'))) {
+      return raw.url
+    }
+  } catch { /* ignore */ }
+
+  // 2. 从 media_items 中提取
+  const videoItem = content.value.media_items?.find(m =>
+    m.media_type === 'video' && m.original_url && (
+      m.original_url.includes('bilibili.com') ||
+      m.original_url.includes('youtube.com') ||
+      m.original_url.includes('youtu.be')
+    )
+  )
+  if (videoItem) return videoItem.original_url
+
+  return null
+})
+
+/**
+ * 从 raw_data 提取视频元信息（封面、时长、播放量等）
+ */
+const videoMeta = computed(() => {
+  if (!content.value?.raw_data) return null
+  try {
+    const raw = typeof content.value.raw_data === 'string'
+      ? JSON.parse(content.value.raw_data)
+      : content.value.raw_data
+    if (!raw?.url) return null
+    const meta = {}
+    if (raw.cover_url) meta.cover = raw.cover_url
+    if (raw.duration) {
+      const m = Math.floor(raw.duration / 60)
+      const s = raw.duration % 60
+      meta.duration = `${m}:${String(s).padStart(2, '0')}`
+    }
+    if (raw.author) meta.author = raw.author
+    if (raw.extra) {
+      if (raw.extra.play != null) meta.play = raw.extra.play
+      if (raw.extra.danmaku != null) meta.danmaku = raw.extra.danmaku
+      if (raw.extra.collect != null) meta.collect = raw.extra.collect
+    }
+    if (raw.source) meta.source = raw.source
+    return Object.keys(meta).length > 0 ? meta : null
+  } catch {
+    return null
+  }
+})
+
+function formatCount(n) {
+  if (n == null) return ''
+  if (n >= 10000) return (n / 10000).toFixed(1) + '万'
+  return String(n)
+}
+
+// 本地视频播放地址：从 media_items 中取已下载视频的路径
+const localVideoSrc = computed(() => {
+  if (!content.value) return ''
+  const videoItem = content.value.media_items?.find(m => m.media_type === 'video' && m.local_path)
+  if (videoItem) {
+    const filename = videoItem.local_path.split('/').pop()
+    return `/api/media/${content.value.id}/${filename}`
+  }
+  return `/api/media/${content.value.id}/stream`
+})
+
 const renderedAnalysis = computed(() => {
   if (!content.value?.analysis_result) return ''
   const analysis = content.value.analysis_result
@@ -84,9 +163,9 @@ const renderedAnalysis = computed(() => {
         markdown += `**${key}:** ${value}\n\n`
       }
     }
-    return md.render(markdown)
+    return DOMPurify.sanitize(md.render(markdown))
   }
-  return md.render(String(analysis))
+  return DOMPurify.sanitize(md.render(String(analysis)))
 })
 
 const renderedContent = computed(() => {
@@ -296,17 +375,41 @@ defineExpose({ content })
 
       <!-- Tab Content: Read -->
       <div v-if="activeTab === 'read'" class="space-y-6">
-        <!-- Video player -->
-        <div v-if="content.media_items?.some(m => m.media_type === 'video')" class="bg-black rounded-xl overflow-hidden">
+        <!-- Embeddable video player (Bilibili / YouTube) -->
+        <template v-if="embeddableVideoUrl">
+          <IframeVideoPlayer :video-url="embeddableVideoUrl" :title="content.title" />
+          <!-- Video metadata -->
+          <div v-if="videoMeta" class="flex flex-wrap items-center gap-3 text-xs text-slate-400">
+            <span v-if="videoMeta.duration" class="inline-flex items-center gap-1">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+              {{ videoMeta.duration }}
+            </span>
+            <span v-if="videoMeta.play != null" class="inline-flex items-center gap-1">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.986V5.653z" /></svg>
+              {{ formatCount(videoMeta.play) }}
+            </span>
+            <span v-if="videoMeta.danmaku != null" class="inline-flex items-center gap-1">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.076-4.076a1.526 1.526 0 011.037-.443 48.282 48.282 0 005.68-.494c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" /></svg>
+              {{ formatCount(videoMeta.danmaku) }}
+            </span>
+            <span v-if="videoMeta.collect != null" class="inline-flex items-center gap-1">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.563.563 0 00-.586 0L6.982 20.54a.562.562 0 01-.84-.61l1.285-5.386a.562.562 0 00-.182-.557l-4.204-3.602a.563.563 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z" /></svg>
+              {{ formatCount(videoMeta.collect) }}
+            </span>
+          </div>
+        </template>
+
+        <!-- Local video player (downloaded media) -->
+        <div v-else-if="content.media_items?.some(m => m.media_type === 'video')" class="bg-black rounded-xl overflow-hidden">
           <video
             :key="content.id"
             controls
             preload="metadata"
             class="w-full max-h-[60vh]"
-            :poster="`/api/video/${content.id}/thumbnail`"
+            :poster="`/api/media/${content.id}/thumbnail`"
             @error="videoError = true"
           >
-            <source :src="`/api/video/${content.id}/stream`" type="video/mp4" />
+            <source :src="localVideoSrc" type="video/mp4" />
           </video>
           <div v-if="videoError" class="flex items-center justify-center py-8 text-slate-400 text-sm bg-slate-900">
             <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
@@ -317,7 +420,7 @@ defineExpose({ content })
         </div>
 
         <!-- Processed Content -->
-        <div class="prose prose-sm max-w-none markdown-content text-slate-700" v-html="renderedContent"></div>
+        <div v-if="renderedContent" class="prose prose-sm max-w-none markdown-content text-slate-700" v-html="renderedContent"></div>
       </div>
 
       <!-- Tab Content: Processed Data -->

@@ -93,10 +93,12 @@ def _build_media_summaries(media_items) -> list[dict]:
     summaries = []
     for mi in media_items:
         thumbnail = None
+        duration = None
         if mi.metadata_json:
             try:
                 meta = json.loads(mi.metadata_json)
                 thumbnail = meta.get("thumbnail_path")
+                duration = meta.get("duration")
             except (json.JSONDecodeError, TypeError):
                 pass
         summaries.append(MediaItemSummary(
@@ -105,6 +107,7 @@ def _build_media_summaries(media_items) -> list[dict]:
             original_url=mi.original_url,
             local_path=mi.local_path,
             thumbnail_path=thumbnail,
+            duration=duration,
             status=mi.status,
             playback_position=mi.playback_position or 0,
             last_played_at=mi.last_played_at,
@@ -163,6 +166,9 @@ async def list_content(
     is_unread: bool | None = Query(None, description="未读过滤: true=未读, false=已读"),
     date_from: str | None = Query(None, description="起始日期 YYYY-MM-DD"),
     date_to: str | None = Query(None, description="结束日期 YYYY-MM-DD"),
+    date_field: str | None = Query(None, description="日期筛选字段: collected_at / published_at（默认跟随 sort_by）"),
+    favorited_from: str | None = Query(None, description="收藏起始日期 YYYY-MM-DD (favorited_at)"),
+    favorited_to: str | None = Query(None, description="收藏结束日期 YYYY-MM-DD (favorited_at)"),
     tag: str | None = Query(None, description="按标签筛选"),
     hide_duplicates: bool = Query(True, description="隐藏相似重复内容 (默认 true)"),
     duplicates_only: bool = Query(False, description="仅显示重复内容"),
@@ -229,17 +235,36 @@ async def list_content(
         else:
             query = query.filter(ContentItem.view_count > 0)
 
+    # 日期筛选：默认跟随 sort_by 字段，确保筛选语义与排序一致
+    _date_col_map = {"published_at": ContentItem.published_at, "collected_at": ContentItem.collected_at}
+    _effective_date_field = date_field or sort_by or "collected_at"
+    _date_column = _date_col_map.get(_effective_date_field, ContentItem.collected_at)
+
     if date_from:
         try:
             dt = datetime.fromisoformat(date_from).replace(tzinfo=None)
-            query = query.filter(ContentItem.collected_at >= dt)
+            query = query.filter(_date_column >= dt)
         except ValueError:
             pass
     if date_to:
         try:
             dt = datetime.fromisoformat(date_to).replace(
                 hour=23, minute=59, second=59, tzinfo=None)
-            query = query.filter(ContentItem.collected_at <= dt)
+            query = query.filter(_date_column <= dt)
+        except ValueError:
+            pass
+
+    if favorited_from:
+        try:
+            dt = datetime.fromisoformat(favorited_from).replace(tzinfo=None)
+            query = query.filter(ContentItem.favorited_at >= dt)
+        except ValueError:
+            pass
+    if favorited_to:
+        try:
+            dt = datetime.fromisoformat(favorited_to).replace(
+                hour=23, minute=59, second=59, tzinfo=None)
+            query = query.filter(ContentItem.favorited_at <= dt)
         except ValueError:
             pass
 
@@ -482,6 +507,19 @@ async def batch_mark_read(body: ContentBatchDelete, db: Session = Depends(get_db
         ContentItem.id.in_(body.ids),
         (ContentItem.view_count == 0) | (ContentItem.view_count.is_(None)),
     ).update({ContentItem.view_count: 1, ContentItem.last_viewed_at: utcnow()},
+             synchronize_session=False)
+    db.commit()
+    return {"code": 0, "data": {"updated": updated}, "message": "ok"}
+
+
+@router.post("/batch-unfavorite")
+async def batch_unfavorite(body: ContentBatchDelete, db: Session = Depends(get_db)):
+    """批量取消收藏"""
+    now = utcnow()
+    updated = db.query(ContentItem).filter(
+        ContentItem.id.in_(body.ids),
+        ContentItem.is_favorited == True,
+    ).update({ContentItem.is_favorited: False, ContentItem.favorited_at: None, ContentItem.updated_at: now},
              synchronize_session=False)
     db.commit()
     return {"code": 0, "data": {"updated": updated}, "message": "ok"}
@@ -766,7 +804,7 @@ async def upload_content(
     upload_dir = Path(settings.DATA_DIR) / "uploads" / content_id
     upload_dir.mkdir(parents=True, exist_ok=True)
 
-    filename = file.filename or "unnamed"
+    filename = Path(file.filename or "unnamed").name  # 提取纯文件名，防止路径穿越
     file_path = upload_dir / filename
 
     # 保存文件

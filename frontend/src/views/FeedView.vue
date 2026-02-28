@@ -90,6 +90,9 @@ function toggleDensity() {
 // 快捷键帮助浮层
 const showShortcutHelp = ref(false)
 
+// 移动端搜索栏
+const showMobileSearch = ref(false)
+
 // 新内容到达提醒
 const newContentCount = ref(0)
 let lastKnownTotal = null
@@ -509,6 +512,7 @@ const markingAllRead = ref(false)
 
 async function handleMarkAllRead() {
   if (markingAllRead.value || contentStats.value.unread === 0) return
+  if (!confirm(`确认将 ${contentStats.value.unread} 条未读内容标记为已读？`)) return
   markingAllRead.value = true
   try {
     const params = {}
@@ -890,6 +894,20 @@ onUnmounted(() => {
                 </svg>
               </button>
 
+              <!-- 移动端搜索按钮 -->
+              <button
+                class="md:hidden p-1.5 rounded-lg transition-all duration-200 border shrink-0"
+                :class="showMobileSearch
+                  ? 'text-indigo-600 bg-indigo-50 border-indigo-200'
+                  : 'text-slate-400 bg-slate-50 border-slate-200'"
+                title="搜索"
+                @click="showMobileSearch = !showMobileSearch"
+              >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+                </svg>
+              </button>
+
               <!-- 密度切换（移动端隐藏） -->
               <button
                 class="hidden md:inline-flex md:p-2 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-all"
@@ -922,6 +940,39 @@ onUnmounted(() => {
               </select>
             </div>
           </div>
+
+          <!-- 移动端搜索栏（展开） -->
+          <Transition
+            enter-active-class="transition-all duration-200 ease-out"
+            enter-from-class="opacity-0 max-h-0"
+            enter-to-class="opacity-100 max-h-14"
+            leave-active-class="transition-all duration-150 ease-in"
+            leave-from-class="opacity-100 max-h-14"
+            leave-to-class="opacity-0 max-h-0"
+          >
+            <div v-if="showMobileSearch" class="md:hidden overflow-hidden">
+              <div class="relative px-1">
+                <svg class="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+                </svg>
+                <input
+                  v-model="searchQuery"
+                  type="text"
+                  placeholder="搜索标题..."
+                  class="w-full pl-9 pr-8 py-2 bg-slate-50 rounded-lg border border-slate-200 text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all"
+                />
+                <button
+                  v-if="searchQuery"
+                  class="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400 hover:text-slate-600 flex items-center justify-center"
+                  @click="searchQuery = ''"
+                >
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </Transition>
 
           <!-- 搜索 + 高级筛选（桌面端） -->
           <div class="hidden md:flex items-center gap-2 flex-wrap">
