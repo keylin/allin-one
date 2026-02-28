@@ -531,7 +531,7 @@ onUnmounted(() => {
 
       <!-- ── 移动端搜索框（仅移动端独占一行） ── -->
       <div
-        class="px-4 pt-2.5 md:hidden transition-all duration-300 ease-in-out overflow-hidden"
+        class="px-4 pt-2.5 md:hidden transition-[max-height,opacity,padding] duration-300 ease-in-out overflow-hidden"
         :class="toolbarCollapsed ? 'max-h-0 !pt-0 opacity-0' : 'max-h-20 opacity-100'"
       >
         <div class="relative">
@@ -558,7 +558,7 @@ onUnmounted(() => {
 
       <!-- ── 筛选工具栏（内容视图） ── -->
       <div
-        class="flex items-center gap-1.5 px-4 pt-2 pb-2.5 md:px-5 overflow-x-auto scrollbar-hide transition-all duration-300 ease-in-out md:!max-h-none md:!opacity-100 md:!pt-2.5 md:!pb-2.5"
+        class="flex items-center gap-1.5 px-4 pt-2 pb-2.5 md:px-5 overflow-x-auto scrollbar-hide transition-[max-height,opacity,padding] duration-300 ease-in-out md:!max-h-none md:!opacity-100 md:!pt-2.5 md:!pb-2.5"
         :class="toolbarCollapsed ? 'max-h-0 !pt-0 !pb-0 opacity-0 !overflow-hidden' : 'max-h-16 opacity-100'"
       >
         <!-- 桌面端搜索框（工具栏最前面） -->
@@ -775,7 +775,7 @@ onUnmounted(() => {
                   <img
                     v-if="hasThumbnail(item)"
                     :src="`/api/video/${getContentId(item)}/thumbnail`"
-                    class="absolute inset-0 w-full h-full transition-transform duration-500 group-hover:scale-105"
+                    class="absolute inset-0 w-full h-full md:transition-transform md:duration-500 md:group-hover:scale-105"
                     :class="isPortrait(item) ? 'object-contain' : 'object-cover'"
                     loading="lazy"
                     @load="onThumbnailLoad($event, item.id)"
@@ -787,8 +787,8 @@ onUnmounted(() => {
                     </svg>
                   </div>
                   <div class="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/60 to-transparent pointer-events-none"/>
-                  <div class="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-all duration-300 flex items-center justify-center">
-                    <div class="w-11 h-11 bg-white/95 rounded-full flex items-center justify-center opacity-75 md:opacity-0 group-hover:opacity-100 scale-90 group-hover:scale-100 transition-all duration-300 shadow-lg">
+                  <div class="absolute inset-0 bg-black/0 md:group-hover:bg-black/20 transition-colors duration-300 flex items-center justify-center">
+                    <div class="w-11 h-11 bg-white/95 rounded-full flex items-center justify-center opacity-75 md:opacity-0 md:group-hover:opacity-100 md:scale-90 md:group-hover:scale-100 md:transition-all md:duration-300 shadow-lg">
                       <svg class="w-5 h-5 text-indigo-600 ml-0.5" fill="currentColor" viewBox="0 0 24 24">
                         <path d="M8 5v14l11-7z"/>
                       </svg>
