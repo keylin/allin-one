@@ -58,6 +58,7 @@ async def list_ebooks(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     search: Optional[str] = Query(None),
+    source: Optional[str] = Query(None, description="按来源平台筛选: apple_books / wechat_read / kindle"),
     author: Optional[str] = Query(None, description="按作者筛选"),
     category: Optional[str] = Query(None, description="按分类筛选"),
     sort_by: str = Query("updated_at", description="排序: updated_at / title / created_at"),
@@ -87,6 +88,9 @@ async def list_ebooks(
         query = query.filter(
             (ContentItem.title.ilike(like)) | (ContentItem.author.ilike(like))
         )
+
+    if source:
+        query = query.filter(ContentItem.raw_data.ilike(f'%"source": "{_escape_like(source)}"%'))
 
     if author:
         query = query.filter(ContentItem.author == author)
@@ -129,6 +133,7 @@ async def list_ebooks(
 
         # 信任 DB 中的 cover_path（上传时已验证），列表接口不做磁盘 I/O
         has_cover = bool(meta.get("cover_path"))
+        cover_url = f"/api/ebook/{content.id}/cover" if has_cover else meta.get("cover_url")
 
         data.append({
             "content_id": content.id,
@@ -136,7 +141,7 @@ async def list_ebooks(
             "author": content.author,
             "format": meta.get("format", "epub"),
             "file_size": meta.get("file_size"),
-            "cover_url": f"/api/ebook/{content.id}/cover" if has_cover else None,
+            "cover_url": cover_url,
             "subjects": raw.get("subjects", []),
             "progress": progress.progress if progress else 0,
             "section_title": progress.section_title if progress else None,
@@ -187,13 +192,14 @@ async def list_recent_annotations(
 
         # 信任 DB 中的 cover_path（上传时已验证），列表接口不做磁盘 I/O
         has_cover = bool(meta.get("cover_path"))
+        cover_url = f"/api/ebook/{content.id}/cover" if has_cover else meta.get("cover_url")
 
         data.append({
             "id": ann.id,
             "content_id": content.id,
             "book_title": content.title,
             "book_author": content.author,
-            "cover_url": f"/api/ebook/{content.id}/cover" if has_cover else None,
+            "cover_url": cover_url,
             "cfi_range": ann.cfi_range,
             "section_index": ann.section_index,
             "location": ann.location,
@@ -257,13 +263,14 @@ async def list_all_annotations(
             except (json.JSONDecodeError, TypeError):
                 pass
         has_cover = bool(meta.get("cover_path"))
+        cover_url = f"/api/ebook/{content.id}/cover" if has_cover else meta.get("cover_url")
 
         data.append({
             "id": ann.id,
             "content_id": content.id,
             "book_title": content.title,
             "book_author": content.author,
-            "cover_url": f"/api/ebook/{content.id}/cover" if has_cover else None,
+            "cover_url": cover_url,
             "location": ann.location,
             "type": ann.type,
             "color": ann.color,
@@ -297,6 +304,7 @@ async def get_ebook_filters(db: Session = Depends(get_db)):
 
     authors = set()
     categories = set()
+    sources = set()
     for author_val, raw_data in rows:
         if author_val:
             authors.add(author_val)
@@ -306,6 +314,8 @@ async def get_ebook_filters(db: Session = Depends(get_db)):
                 for s in raw.get("subjects", []):
                     if s:
                         categories.add(s)
+                if raw.get("source"):
+                    sources.add(raw["source"])
             except (json.JSONDecodeError, TypeError):
                 pass
 
@@ -314,6 +324,7 @@ async def get_ebook_filters(db: Session = Depends(get_db)):
         "data": {
             "authors": sorted(authors),
             "categories": sorted(categories),
+            "sources": sorted(sources),
         },
         "message": "ok",
     }
@@ -411,24 +422,39 @@ async def search_book_metadata(
             title=db_title, author=db_author, isbn=db_isbn,
         )
 
+    # 获取当前书的 ISBN 用于标记"已应用"
+    current_isbn = None
+    if content.raw_data:
+        try:
+            current_isbn = json.loads(content.raw_data).get("isbn")
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    data = []
+    for r in results:
+        item = BookSearchResult(
+            title=r.title,
+            author=r.author,
+            isbn_10=r.isbn_10,
+            isbn_13=r.isbn_13,
+            publisher=r.publisher,
+            publish_date=r.publish_date,
+            language=r.language,
+            page_count=r.page_count,
+            subjects=r.subjects,
+            description=r.description,
+            cover_url=r.cover_url,
+        ).model_dump()
+        # 标记当前已应用的结果
+        if current_isbn and (r.isbn_13 == current_isbn or r.isbn_10 == current_isbn):
+            item["is_current"] = True
+        else:
+            item["is_current"] = False
+        data.append(item)
+
     return {
         "code": 0,
-        "data": [
-            BookSearchResult(
-                title=r.title,
-                author=r.author,
-                isbn_10=r.isbn_10,
-                isbn_13=r.isbn_13,
-                publisher=r.publisher,
-                publish_date=r.publish_date,
-                language=r.language,
-                page_count=r.page_count,
-                subjects=r.subjects,
-                description=r.description,
-                cover_url=r.cover_url,
-            ).model_dump()
-            for r in results
-        ],
+        "data": data,
         "message": "ok",
     }
 
@@ -525,6 +551,8 @@ async def get_ebook_detail(content_id: str, db: Session = Depends(get_db)):
         except Exception:
             pass
 
+    cover_url = f"/api/ebook/{content.id}/cover" if has_cover else meta.get("cover_url")
+
     return {
         "code": 0,
         "data": {
@@ -533,7 +561,7 @@ async def get_ebook_detail(content_id: str, db: Session = Depends(get_db)):
             "author": content.author,
             "format": meta.get("format", "epub"),
             "file_size": meta.get("file_size"),
-            "cover_url": f"/api/ebook/{content.id}/cover" if has_cover else None,
+            "cover_url": cover_url,
             "language": raw.get("language"),
             "publisher": raw.get("publisher"),
             "description": raw.get("description"),

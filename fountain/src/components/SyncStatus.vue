@@ -76,7 +76,9 @@ function relativeTime(isoString) {
             </span>
             <span v-else-if="status === 'error'" class="text-xs text-red-500">✗ Error</span>
             <span v-else-if="status === 'needs_auth'" class="text-xs text-amber-500">⚠ Auth expired</span>
-            <span v-else-if="lastSync" class="text-xs text-gray-400">{{ relativeTime(lastSync) }}</span>
+            <span v-else-if="lastSync" class="text-xs text-gray-400">
+              {{ relativeTime(lastSync) }}<template v-if="itemCount > 0"> · {{ itemCount.toLocaleString() }} {{ itemLabel }}</template>
+            </span>
           </div>
           <div v-if="itemCount > 0" class="text-xs text-gray-400 mt-0.5">
             {{ itemCount.toLocaleString() }} {{ itemLabel }}

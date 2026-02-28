@@ -37,6 +37,8 @@ const newTag = ref('')
 
 // Search state
 const searchQuery = ref('')
+const structuredSearch = ref({ title: '', author: '', isbn: '' })
+const userEdited = ref(false)
 const searching = ref(false)
 const searchResults = ref([])
 const applying = ref(false)
@@ -71,7 +73,13 @@ async function loadDetail(id) {
         series: d.series || '',
         page_count: d.page_count || null,
       }
-      // Pre-fill search query
+      // Pre-fill search: structured fields for API, display string for input
+      structuredSearch.value = {
+        title: d.title || '',
+        author: d.author || '',
+        isbn: d.isbn || '',
+      }
+      userEdited.value = false
       const parts = []
       if (d.title) parts.push(d.title)
       if (d.author) parts.push(d.author)
@@ -89,6 +97,8 @@ function resetForm() {
     series: '', page_count: null,
   }
   searchQuery.value = ''
+  structuredSearch.value = { title: '', author: '', isbn: '' }
+  userEdited.value = false
   searchResults.value = []
   activeTab.value = 'edit'
 }
@@ -140,7 +150,15 @@ async function handleSearch() {
   searching.value = true
   searchResults.value = []
   try {
-    const res = await searchBookMetadata(props.contentId, searchQuery.value.trim())
+    let params
+    if (userEdited.value) {
+      // 用户手动修改了搜索框，走 freeform 搜索
+      params = { query: searchQuery.value.trim() }
+    } else {
+      // 未修改，走结构化搜索
+      params = { ...structuredSearch.value }
+    }
+    const res = await searchBookMetadata(props.contentId, params)
     if (res.code === 0) {
       searchResults.value = res.data
     }
@@ -368,6 +386,7 @@ function close() {
                 <div class="flex gap-2">
                   <input
                     v-model="searchQuery"
+                    @input="userEdited = true"
                     @keydown.enter="handleSearch"
                     class="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 transition-all"
                     placeholder="搜索书名、作者或 ISBN..."
@@ -425,7 +444,10 @@ function close() {
 
                       <!-- Info -->
                       <div class="flex-1 min-w-0">
-                        <h4 class="text-sm font-medium text-slate-800 line-clamp-1">{{ result.title }}</h4>
+                        <h4 class="text-sm font-medium text-slate-800 line-clamp-1">
+                          {{ result.title }}
+                          <span v-if="result.is_current" class="ml-1 px-1.5 py-0.5 text-[10px] font-medium bg-green-50 text-green-600 border border-green-200 rounded">当前</span>
+                        </h4>
                         <p class="text-xs text-slate-500 mt-0.5 line-clamp-1">{{ result.author }}</p>
                         <div class="flex flex-wrap gap-x-3 gap-y-0.5 mt-1 text-[11px] text-slate-400">
                           <span v-if="result.publisher">{{ result.publisher }}</span>
