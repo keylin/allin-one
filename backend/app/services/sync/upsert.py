@@ -185,6 +185,11 @@ def upsert_ebooks(db: Session, source: SourceConfig, books: list[dict]) -> dict:
             MediaItem.media_type == "ebook",
         ).first()
 
+        cover_url = book_data.get("cover_url")
+        media_meta = {}
+        if cover_url:
+            media_meta["cover_url"] = cover_url
+
         if not media:
             media = MediaItem(
                 id=uuid.uuid4().hex,
@@ -192,8 +197,18 @@ def upsert_ebooks(db: Session, source: SourceConfig, books: list[dict]) -> dict:
                 media_type="ebook",
                 status="pending",
                 original_url=f"{platform_key}://{external_id}",
+                metadata_json=json.dumps(media_meta, ensure_ascii=False) if media_meta else None,
             )
             db.add(media)
+        elif cover_url:
+            existing_meta = {}
+            if media.metadata_json:
+                try:
+                    existing_meta = json.loads(media.metadata_json)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            existing_meta["cover_url"] = cover_url
+            media.metadata_json = json.dumps(existing_meta, ensure_ascii=False)
 
         # --- Upsert ReadingProgress ---
         progress = db.query(ReadingProgress).filter(
@@ -233,7 +248,7 @@ def upsert_ebooks(db: Session, source: SourceConfig, books: list[dict]) -> dict:
                 existing_ann.note = ann_data.get("note")
                 existing_ann.color = ann_data.get("color", "yellow")
                 existing_ann.type = ann_data.get("type", "highlight")
-                existing_ann.location = ann_data.get("chapter")
+                existing_ann.location = ann_data.get("location") or ann_data.get("chapter")
                 existing_ann.updated_at = utcnow()
                 updated_annotations += 1
             else:
@@ -245,7 +260,7 @@ def upsert_ebooks(db: Session, source: SourceConfig, books: list[dict]) -> dict:
                     note=ann_data.get("note"),
                     color=ann_data.get("color", "yellow"),
                     type=ann_data.get("type", "highlight"),
-                    location=ann_data.get("chapter"),
+                    location=ann_data.get("location") or ann_data.get("chapter"),
                 )
                 if ann_data.get("created_at"):
                     try:

@@ -109,7 +109,7 @@ pub async fn run_sync(settings: &AppSettings) -> Result<u32> {
                     .map(|c| {
                         // Derive a stable ID from book+location
                         let raw_id = format!("{}:{}", title, c.location.as_deref().unwrap_or(""));
-                        let id = format!("{:x}", md5_hex(&raw_id));
+                        let id = stable_hash_hex(&raw_id);
                         json!({
                             "id": id,
                             "selected_text": c.text,
@@ -125,7 +125,7 @@ pub async fn run_sync(settings: &AppSettings) -> Result<u32> {
                     .collect();
 
                 // Stable external_id from book title
-                let external_id = format!("{:x}", md5_hex(title.as_str()));
+                let external_id = stable_hash_hex(title.as_str());
 
                 json!({
                     "external_id": external_id,
@@ -139,7 +139,7 @@ pub async fn run_sync(settings: &AppSettings) -> Result<u32> {
 
         let payload = json!({
             "source_id": source_id,
-            "ebooks": ebooks,
+            "books": ebooks,
         });
 
         client
@@ -309,14 +309,17 @@ fn parse_kindle_date(date_str: &str) -> Option<String> {
     None
 }
 
-/// Simple MD5-like stable hash (we use a deterministic hash for IDs).
-/// Uses std hasher for simplicity — not cryptographic but stable per process.
-fn md5_hex(input: &str) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut h = DefaultHasher::new();
-    input.hash(&mut h);
-    h.finish()
+/// Stable hash for deriving deterministic IDs from strings.
+/// Uses SHA-256 (truncated to 16 hex chars) for cross-version stability.
+fn stable_hash_hex(input: &str) -> String {
+    use sha2::{Sha256, Digest};
+    let hash = Sha256::digest(input.as_bytes());
+    // First 8 bytes (16 hex chars) — sufficient for uniqueness
+    hex_encode(&hash[..8])
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
 fn parse_iso_to_timestamp(s: &str) -> Option<i64> {

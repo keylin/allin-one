@@ -27,6 +27,7 @@ class SyncBook(BaseModel):
     page_count: Optional[int] = None
     is_finished: bool = False
     reading_progress: float = 0                    # 0.0 ~ 1.0
+    cover_url: Optional[str] = None
     annotations: list[SyncAnnotation] = Field(default_factory=list)
 
     model_config = {"populate_by_name": True}
