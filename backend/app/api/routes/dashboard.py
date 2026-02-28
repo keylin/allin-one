@@ -1,14 +1,17 @@
 """Dashboard API"""
 
-from datetime import datetime, timedelta
+import asyncio
 import sqlalchemy
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func, cast, Date, Integer as SAInteger, literal_column, case
+from sqlalchemy import func, cast, Date, Integer as SAInteger, literal_column, case, bindparam, String
 
 from app.core.database import get_db
 from app.core.time import utcnow
-from app.core.timezone_utils import get_local_day_boundaries, get_container_timezone_name
+from app.core.timezone_utils import (
+    get_local_day_boundaries, get_container_timezone_name,
+    get_local_today, get_local_date_offset, get_local_date_range,
+)
 from app.models.content import SourceConfig, ContentItem, CollectionRecord
 from app.models.pipeline import PipelineExecution, PipelineStatus
 
@@ -32,7 +35,7 @@ async def get_dashboard_stats(db: Session = Depends(get_db)):
     )
 
     # 计算昨日边界
-    yesterday_date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    yesterday_date = get_local_date_offset(-1)
     yesterday_start, yesterday_end = get_local_day_boundaries(yesterday_date)
     contents_yesterday = (
         db.query(func.count(ContentItem.id))
@@ -75,18 +78,19 @@ async def get_collection_trend(
 ):
     """获取最近 N 天每日采集数量趋势（含成功率）"""
     # 计算起始边界（容器时区的 N 天前 00:00）
-    start_date = (datetime.now() - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+    start_date = get_local_date_offset(-(days - 1))
     start_utc, _ = get_local_day_boundaries(start_date)
 
     # 获取容器时区名称（用于 SQL 层时区转换）
     tz_name = get_container_timezone_name()
 
     # 1. 内容数量趋势
+    tz_param = bindparam("tz_name", value=tz_name, type_=String)
     content_rows = (
         db.query(
             func.date(
                 func.timezone(
-                    literal_column(f"'{tz_name}'"),
+                    tz_param,
                     func.timezone('UTC', ContentItem.collected_at)
                 )
             ).label("day"),
@@ -103,7 +107,7 @@ async def get_collection_trend(
         db.query(
             func.date(
                 func.timezone(
-                    literal_column(f"'{tz_name}'"),
+                    tz_param,
                     func.timezone('UTC', CollectionRecord.started_at)
                 )
             ).label("day"),
@@ -125,9 +129,9 @@ async def get_collection_trend(
     }
 
     # 3. 合并数据，补全缺失天数
+    date_range = get_local_date_range(days)
     trend = []
-    for i in range(days):
-        day = (datetime.now() - timedelta(days=days - 1 - i)).strftime("%Y-%m-%d")
+    for day in date_range:
         col_data = collection_map.get(day, {"total": 0, "success": 0, "items_new": 0})
         total = col_data["total"]
         success = col_data["success"]
@@ -153,7 +157,7 @@ async def get_daily_stats(
     """获取指定日期的采集详细统计"""
     # 如果未传日期，使用容器本地时间的今天
     if not date:
-        date = datetime.now().strftime("%Y-%m-%d")
+        date = get_local_today()
 
     # 计算日期边界（容器时区）
     try:
@@ -259,37 +263,6 @@ async def get_source_health(db: Session = Depends(get_db)):
     return {"code": 0, "data": data, "message": "ok"}
 
 
-@router.get("/recent-content")
-async def get_recent_content(
-    limit: int = Query(8, ge=1, le=20),
-    db: Session = Depends(get_db),
-):
-    """获取最近采集的内容"""
-    items = (
-        db.query(ContentItem)
-        .order_by(ContentItem.collected_at.desc())
-        .limit(limit)
-        .all()
-    )
-
-    # 批量加载关联的 source 名称，避免 N+1
-    source_ids = {item.source_id for item in items}
-    sources = db.query(SourceConfig.id, SourceConfig.name).filter(SourceConfig.id.in_(source_ids)).all()
-    source_map = {s.id: s.name for s in sources}
-
-    data = []
-    for item in items:
-        data.append({
-            "id": item.id,
-            "title": item.title,
-            "url": item.url,
-            "status": item.status,
-            "source_name": source_map.get(item.source_id),
-            "collected_at": item.collected_at.isoformat() if item.collected_at else None,
-        })
-
-    return {"code": 0, "data": data, "message": "ok"}
-
 
 @router.get("/content-status-distribution")
 async def get_content_status_distribution(db: Session = Depends(get_db)):
@@ -317,20 +290,18 @@ async def get_content_status_distribution(db: Session = Depends(get_db)):
     }
 
 
-@router.get("/storage-stats")
-async def get_storage_stats(db: Session = Depends(get_db)):
-    """获取存储空间统计"""
+def _scan_media_dir() -> dict:
+    """扫描媒体目录统计文件大小（同步，在线程池中执行）"""
     import os
     from app.core.config import settings
+    from app.core.constants import VIDEO_EXTENSIONS, IMAGE_EXTENSIONS, AUDIO_EXTENSIONS
 
-    # 统计媒体目录大小
     media_dir = settings.MEDIA_DIR
     video_bytes = 0
     image_bytes = 0
     audio_bytes = 0
     other_bytes = 0
 
-    from app.core.constants import VIDEO_EXTENSIONS, IMAGE_EXTENSIONS, AUDIO_EXTENSIONS
     if os.path.exists(media_dir):
         for root, dirs, files in os.walk(media_dir):
             for f in files:
@@ -349,6 +320,20 @@ async def get_storage_stats(db: Session = Depends(get_db)):
                 except OSError:
                     pass
 
+    return {
+        "video_bytes": video_bytes,
+        "image_bytes": image_bytes,
+        "audio_bytes": audio_bytes,
+        "other_bytes": other_bytes,
+    }
+
+
+@router.get("/storage-stats")
+async def get_storage_stats(db: Session = Depends(get_db)):
+    """获取存储空间统计"""
+    # 在线程池中执行阻塞 I/O
+    media_stats = await asyncio.to_thread(_scan_media_dir)
+
     # 统计数据库大小（PostgreSQL）
     db_size = 0
     try:
@@ -359,78 +344,19 @@ async def get_storage_stats(db: Session = Depends(get_db)):
     except Exception:
         pass
 
-    total_bytes = video_bytes + image_bytes + audio_bytes + other_bytes + db_size
+    total_media = sum(media_stats.values())
+    total_bytes = total_media + db_size
 
     return {
         "code": 0,
         "data": {
-            "media": {
-                "video_bytes": video_bytes,
-                "image_bytes": image_bytes,
-                "audio_bytes": audio_bytes,
-                "other_bytes": other_bytes,
-            },
+            "media": media_stats,
             "database_bytes": db_size,
             "total_bytes": total_bytes,
         },
         "message": "ok",
     }
 
-
-@router.get("/today-summary")
-async def get_today_summary(db: Session = Depends(get_db)):
-    """获取今日摘要（高频数据合并接口）"""
-    # 今日边界
-    today_start, today_end = get_local_day_boundaries()
-
-    # 1. 今日采集统计（SQL 聚合，避免加载全部记录）
-    today_agg = db.query(
-        func.count(CollectionRecord.id).label("total"),
-        func.sum(case((CollectionRecord.status == "completed", 1), else_=0)).label("success"),
-        func.coalesce(func.sum(CollectionRecord.items_new), 0).label("items_new"),
-    ).filter(
-        CollectionRecord.started_at >= today_start,
-        CollectionRecord.started_at < today_end,
-    ).one()
-
-    collection_total = today_agg.total
-    collection_success = today_agg.success
-    collection_success_rate = round(collection_success / collection_total * 100, 1) if collection_total > 0 else 0
-    items_new_today = today_agg.items_new
-
-    # 2. 内容状态分布
-    status_counts = dict(
-        db.query(ContentItem.status, func.count(ContentItem.id))
-        .group_by(ContentItem.status)
-        .all()
-    )
-
-    # 3. 失败任务数
-    failed_pipelines = db.query(func.count(PipelineExecution.id)).filter(
-        PipelineExecution.status == PipelineStatus.FAILED.value
-    ).scalar()
-
-    # 4. 运行中任务数
-    running_pipelines = db.query(func.count(PipelineExecution.id)).filter(
-        PipelineExecution.status == PipelineStatus.RUNNING.value
-    ).scalar()
-
-    return {
-        "code": 0,
-        "data": {
-            "collection_success_rate": collection_success_rate,
-            "items_new_today": items_new_today,
-            "content_status": {
-                "pending": status_counts.get("pending", 0),
-                "ready": status_counts.get("ready", 0),
-                "analyzed": status_counts.get("analyzed", 0),
-                "failed": status_counts.get("failed", 0),
-            },
-            "failed_pipelines": failed_pipelines,
-            "running_pipelines": running_pipelines,
-        },
-        "message": "ok",
-    }
 
 
 @router.get("/dedup-stats")

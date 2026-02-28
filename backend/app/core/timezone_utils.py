@@ -97,6 +97,42 @@ def get_local_day_boundaries(date_str: str = None) -> tuple[datetime, datetime]:
     return day_start_utc, day_end_utc
 
 
+def get_local_today() -> str:
+    """获取容器本地时区的今天日期字符串
+
+    Returns:
+        str: 'YYYY-MM-DD' 格式的日期字符串
+    """
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def get_local_date_offset(days: int) -> str:
+    """获取容器本地时区的偏移日期字符串
+
+    Args:
+        days: 偏移天数，负数表示过去
+
+    Returns:
+        str: 'YYYY-MM-DD' 格式的日期字符串
+    """
+    return (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d")
+
+
+def get_local_date_range(days: int) -> list[str]:
+    """获取容器本地时区的日期范围列表（从 days-1 天前到今天）
+
+    Args:
+        days: 天数范围
+
+    Returns:
+        list[str]: 'YYYY-MM-DD' 格式的日期字符串列表
+    """
+    return [
+        (datetime.now() - timedelta(days=days - 1 - i)).strftime("%Y-%m-%d")
+        for i in range(days)
+    ]
+
+
 def get_container_timezone_name() -> str:
     """获取容器时区名称（供日志/调试使用）
 

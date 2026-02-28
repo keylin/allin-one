@@ -7,13 +7,12 @@ import {
   getRecentActivity,
   getCollectionTrend,
   getSourceHealth,
-  getDailyStats,
   getContentStatusDistribution,
   getStorageStats,
   getDedupStats,
 } from '@/api/dashboard'
 import { getFinanceSummary } from '@/api/finance'
-import { collectSource, collectAllSources } from '@/api/sources'
+import { collectSource } from '@/api/sources'
 import { useToast } from '@/composables/useToast'
 
 const router = useRouter()
@@ -33,31 +32,11 @@ const storageStats = ref({ media: {}, database_bytes: 0, total_bytes: 0 })
 const dedupStats = ref({ total_items: 0, duplicate_count: 0, originals_with_dups: 0, dedup_rate: 0, today_duplicates: 0, by_source: [] })
 const loading = ref(true)
 const collectingId = ref(null)
-const collectingAll = ref(false)
 let timer = null
+let failCount = 0
 
-// 日详情相关
+// 趋势图选中日期（仅用于高亮）
 const selectedDate = ref(dayjs().format('YYYY-MM-DD'))
-const dailyStats = ref(null)
-const loadingDaily = ref(false)
-
-// --- 快速操作 ---
-async function handleCollectAll() {
-  collectingAll.value = true
-  try {
-    const res = await collectAllSources()
-    if (res.code === 0) {
-      const d = res.data
-      let msg = `${d.sources_queued} 个采集任务已提交`
-      if (d.sources_skipped > 0) msg += `，${d.sources_skipped} 个已在队列中`
-      toast.success(msg)
-    } else {
-      toast.error(res.message || '采集失败')
-    }
-  } finally {
-    collectingAll.value = false
-  }
-}
 
 async function handleCollectSource(source) {
   collectingId.value = source.id
@@ -100,6 +79,7 @@ const statusChartData = computed(() => {
   const items = [
     { key: 'analyzed', label: '已分析', count: contentStatus.value.analyzed, color: '#10b981', percent: Math.round(contentStatus.value.analyzed / total * 100) },
     { key: 'ready', label: '已就绪', count: contentStatus.value.ready, color: '#0ea5e9', percent: Math.round(contentStatus.value.ready / total * 100) },
+    { key: 'processing', label: '处理中', count: contentStatus.value.processing, color: '#6366f1', percent: Math.round(contentStatus.value.processing / total * 100) },
     { key: 'pending', label: '待处理', count: contentStatus.value.pending, color: '#94a3b8', percent: Math.round(contentStatus.value.pending / total * 100) },
     { key: 'failed', label: '失败', count: contentStatus.value.failed, color: '#f43f5e', percent: Math.round(contentStatus.value.failed / total * 100) },
   ]
@@ -141,10 +121,6 @@ const statusLabels = {
   pending: '等待中', running: '运行中', completed: '已完成',
   failed: '失败', cancelled: '已取消',
 }
-const triggerLabels = {
-  scheduled: '定时', manual: '手动', api: 'API', webhook: 'Webhook', favorite: '收藏',
-}
-
 const healthStyles = {
   healthy: { dot: 'bg-emerald-400', text: 'text-emerald-600', label: '正常' },
   warning: { dot: 'bg-amber-400', text: 'text-amber-600', label: '告警' },
@@ -152,47 +128,62 @@ const healthStyles = {
   disabled: { dot: 'bg-slate-300', text: 'text-slate-400', label: '已禁用' },
 }
 
-// --- 数据获取 ---
-async function fetchData() {
-  try {
-    const [statsRes, actRes, trendRes, healthRes, finRes, statusRes, storageRes, dedupRes] = await Promise.all([
-      getDashboardStats(),
-      getRecentActivity(8),
-      getCollectionTrend(7),
-      getSourceHealth(),
-      getFinanceSummary().catch(() => ({ code: -1 })),
-      getContentStatusDistribution(),
-      getStorageStats(),
-      getDedupStats(),
-    ])
-    if (statsRes.code === 0) stats.value = statsRes.data
-    if (actRes.code === 0) activities.value = actRes.data
-    if (trendRes.code === 0) trend.value = trendRes.data
-    if (healthRes.code === 0) sourceHealthList.value = healthRes.data
-    if (finRes.code === 0) financeSummaries.value = finRes.data.slice(0, 4)
-    if (statusRes.code === 0) contentStatus.value = statusRes.data
-    if (storageRes.code === 0) storageStats.value = storageRes.data
-    if (dedupRes.code === 0) dedupStats.value = dedupRes.data
-  } catch (e) {
-    toast.error('仪表盘数据加载失败')
-  } finally {
-    loading.value = false
-  }
+function storageBarClass(bytes) {
+  const ratio = bytes / (storageStats.value.total_bytes || 1)
+  if (ratio > 0.9) return 'bg-rose-400'
+  if (ratio > 0.7) return 'bg-amber-400'
+  return null // 使用默认颜色
 }
 
-async function fetchDailyStats(date) {
-  loadingDaily.value = true
-  try {
-    const res = await getDailyStats(date)
-    if (res.code === 0) dailyStats.value = res.data
-  } finally {
-    loadingDaily.value = false
+// --- 数据获取 ---
+async function fetchData() {
+  const results = await Promise.allSettled([
+    getDashboardStats(),
+    getRecentActivity(8),
+    getCollectionTrend(7),
+    getSourceHealth(),
+    getFinanceSummary(),
+    getContentStatusDistribution(),
+    getStorageStats(),
+    getDedupStats(),
+  ])
+
+  const handlers = [
+    (res) => { stats.value = res.data },
+    (res) => { activities.value = res.data },
+    (res) => { trend.value = res.data },
+    (res) => { sourceHealthList.value = res.data },
+    (res) => { financeSummaries.value = res.data.slice(0, 4) },
+    (res) => { contentStatus.value = res.data },
+    (res) => { storageStats.value = res.data },
+    (res) => { dedupStats.value = res.data },
+  ]
+
+  let hasError = false
+  results.forEach((result, i) => {
+    if (result.status === 'fulfilled' && result.value?.code === 0) {
+      handlers[i](result.value)
+    } else if (result.status === 'rejected') {
+      hasError = true
+    }
+  })
+
+  if (hasError) {
+    failCount++
+    if (failCount >= 3 && timer) {
+      clearInterval(timer)
+      timer = null
+      toast.error('自动刷新已暂停，请检查网络后刷新页面')
+    }
+  } else {
+    failCount = 0
   }
+
+  loading.value = false
 }
 
 function selectDate(date) {
   selectedDate.value = date
-  fetchDailyStats(date)
 }
 
 function formatTime(t) {
@@ -210,7 +201,6 @@ function formatDayLabel(dateStr) {
 
 onMounted(() => {
   fetchData()
-  fetchDailyStats(selectedDate.value)
   timer = setInterval(fetchData, 30000)
 })
 
@@ -305,7 +295,7 @@ onUnmounted(() => {
           </svg>
         </div>
 
-        <div v-else class="flex items-center gap-6">
+        <div v-else class="flex flex-col sm:flex-row items-center gap-4">
           <!-- 环形图 -->
           <div class="relative w-28 h-28 shrink-0">
             <svg viewBox="0 0 36 36" class="w-full h-full -rotate-90">
@@ -517,7 +507,8 @@ onUnmounted(() => {
               </div>
               <div class="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
                 <div
-                  class="h-1.5 bg-purple-400 rounded-full"
+                  class="h-1.5 rounded-full"
+                  :class="storageBarClass(storageStats.media?.video_bytes || 0) || 'bg-purple-400'"
                   :style="{ width: `${(storageStats.media?.video_bytes || 0) / (storageStats.total_bytes || 1) * 100}%` }"
                 ></div>
               </div>
@@ -538,7 +529,8 @@ onUnmounted(() => {
               </div>
               <div class="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
                 <div
-                  class="h-1.5 bg-emerald-400 rounded-full"
+                  class="h-1.5 rounded-full"
+                  :class="storageBarClass(storageStats.media?.image_bytes || 0) || 'bg-emerald-400'"
                   :style="{ width: `${(storageStats.media?.image_bytes || 0) / (storageStats.total_bytes || 1) * 100}%` }"
                 ></div>
               </div>
@@ -559,7 +551,8 @@ onUnmounted(() => {
               </div>
               <div class="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
                 <div
-                  class="h-1.5 bg-amber-400 rounded-full"
+                  class="h-1.5 rounded-full"
+                  :class="storageBarClass(storageStats.media?.audio_bytes || 0) || 'bg-amber-400'"
                   :style="{ width: `${(storageStats.media?.audio_bytes || 0) / (storageStats.total_bytes || 1) * 100}%` }"
                 ></div>
               </div>
@@ -580,7 +573,8 @@ onUnmounted(() => {
               </div>
               <div class="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
                 <div
-                  class="h-1.5 bg-indigo-400 rounded-full"
+                  class="h-1.5 rounded-full"
+                  :class="storageBarClass(storageStats.database_bytes) || 'bg-indigo-400'"
                   :style="{ width: `${storageStats.database_bytes / (storageStats.total_bytes || 1) * 100}%` }"
                 ></div>
               </div>
@@ -606,50 +600,50 @@ onUnmounted(() => {
 
       <template v-else-if="dedupStats.duplicate_count > 0">
         <!-- 指标卡片 -->
-        <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-5">
-          <div class="bg-white rounded-xl border border-slate-200/60 p-4 shadow-sm">
-            <div class="flex items-center justify-between mb-2">
-              <div class="w-9 h-9 rounded-lg flex items-center justify-center bg-amber-50">
-                <svg class="w-5 h-5 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+          <div class="bg-slate-50/50 rounded-lg p-3">
+            <div class="flex items-center gap-2 mb-2">
+              <div class="w-7 h-7 rounded-md flex items-center justify-center bg-amber-50">
+                <svg class="w-4 h-4 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
                 </svg>
               </div>
             </div>
-            <div class="text-2xl font-bold tracking-tight text-amber-700">{{ dedupStats.duplicate_count }}</div>
-            <div class="text-sm text-slate-500 mt-0.5">重复内容</div>
+            <div class="text-xl font-bold tracking-tight text-amber-700">{{ dedupStats.duplicate_count }}</div>
+            <div class="text-xs text-slate-500 mt-0.5">重复内容</div>
           </div>
-          <div class="bg-white rounded-xl border border-slate-200/60 p-4 shadow-sm">
-            <div class="flex items-center justify-between mb-2">
-              <div class="w-9 h-9 rounded-lg flex items-center justify-center" :class="dedupStats.dedup_rate > 20 ? 'bg-rose-50' : 'bg-emerald-50'">
-                <svg class="w-5 h-5" :class="dedupStats.dedup_rate > 20 ? 'text-rose-600' : 'text-emerald-600'" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+          <div class="bg-slate-50/50 rounded-lg p-3">
+            <div class="flex items-center gap-2 mb-2">
+              <div class="w-7 h-7 rounded-md flex items-center justify-center" :class="dedupStats.dedup_rate > 20 ? 'bg-rose-50' : 'bg-emerald-50'">
+                <svg class="w-4 h-4" :class="dedupStats.dedup_rate > 20 ? 'text-rose-600' : 'text-emerald-600'" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" />
                 </svg>
               </div>
             </div>
-            <div class="text-2xl font-bold tracking-tight" :class="dedupStats.dedup_rate > 20 ? 'text-rose-700' : 'text-emerald-700'">{{ dedupStats.dedup_rate }}%</div>
-            <div class="text-sm text-slate-500 mt-0.5">去重率</div>
+            <div class="text-xl font-bold tracking-tight" :class="dedupStats.dedup_rate > 20 ? 'text-rose-700' : 'text-emerald-700'">{{ dedupStats.dedup_rate }}%</div>
+            <div class="text-xs text-slate-500 mt-0.5">去重率</div>
           </div>
-          <div class="bg-white rounded-xl border border-slate-200/60 p-4 shadow-sm">
-            <div class="flex items-center justify-between mb-2">
-              <div class="w-9 h-9 rounded-lg flex items-center justify-center bg-indigo-50">
-                <svg class="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+          <div class="bg-slate-50/50 rounded-lg p-3">
+            <div class="flex items-center gap-2 mb-2">
+              <div class="w-7 h-7 rounded-md flex items-center justify-center bg-indigo-50">
+                <svg class="w-4 h-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
                 </svg>
               </div>
             </div>
-            <div class="text-2xl font-bold tracking-tight text-indigo-700">{{ dedupStats.originals_with_dups }}</div>
-            <div class="text-sm text-slate-500 mt-0.5">被重复原件</div>
+            <div class="text-xl font-bold tracking-tight text-indigo-700">{{ dedupStats.originals_with_dups }}</div>
+            <div class="text-xs text-slate-500 mt-0.5">被重复原件</div>
           </div>
-          <div class="bg-white rounded-xl border border-slate-200/60 p-4 shadow-sm">
-            <div class="flex items-center justify-between mb-2">
-              <div class="w-9 h-9 rounded-lg flex items-center justify-center bg-emerald-50">
-                <svg class="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+          <div class="bg-slate-50/50 rounded-lg p-3">
+            <div class="flex items-center gap-2 mb-2">
+              <div class="w-7 h-7 rounded-md flex items-center justify-center bg-emerald-50">
+                <svg class="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
               </div>
             </div>
-            <div class="text-2xl font-bold tracking-tight text-emerald-700">{{ dedupStats.today_duplicates }}</div>
-            <div class="text-sm text-slate-500 mt-0.5">今日重复</div>
+            <div class="text-xl font-bold tracking-tight text-emerald-700">{{ dedupStats.today_duplicates }}</div>
+            <div class="text-xs text-slate-500 mt-0.5">今日重复</div>
           </div>
         </div>
 
