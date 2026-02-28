@@ -159,8 +159,20 @@ const mobileDetailTop = ref(0)
 function onVisualViewportChange() {
   const vv = window.visualViewport
   if (!vv) return
-  mobileDetailHeight.value = vv.height
-  mobileDetailTop.value = vv.offsetTop
+  // 区分键盘弹起 vs 地址栏收缩：
+  // window.innerHeight (layout viewport) — 键盘弹起时不变，地址栏变化时同步变
+  // vv.height (visual viewport) — 两者都变
+  // 差值大 → 键盘弹起；差值小 → 地址栏或正常状态
+  const keyboardHeight = window.innerHeight - vv.height
+  if (keyboardHeight > 100) {
+    // 键盘弹起：对齐 visual viewport，防止输入框被遮挡
+    mobileDetailHeight.value = vv.height
+    mobileDetailTop.value = vv.offsetTop
+  } else {
+    // 正常状态（含地址栏收缩）：固定全屏，不跟随
+    mobileDetailHeight.value = null
+    mobileDetailTop.value = 0
+  }
 }
 
 
@@ -1265,10 +1277,10 @@ onUnmounted(() => {
 
       <!-- 移动端详情覆盖层 -->
       <Transition
-        enter-active-class="transition-all duration-200 ease-out"
+        enter-active-class="transition-opacity duration-200 ease-out"
         enter-from-class="opacity-0"
         enter-to-class="opacity-100"
-        leave-active-class="transition-all duration-150 ease-in"
+        leave-active-class="transition-opacity duration-150 ease-in"
         leave-from-class="opacity-100"
         leave-to-class="opacity-0"
       >
