@@ -605,10 +605,13 @@ async def delete_ebook(content_id: str, db: Session = Depends(get_db)):
     db.query(ContentItem).filter(ContentItem.id == content_id).delete(synchronize_session=False)
     db.commit()
 
-    # 清理磁盘
+    # 清理磁盘（DB 已删除，文件清理失败只记日志，不影响响应）
     media_dir = Path(settings.MEDIA_DIR) / content_id
     if media_dir.is_dir():
-        shutil.rmtree(media_dir, ignore_errors=True)
+        try:
+            shutil.rmtree(media_dir)
+        except OSError as e:
+            logger.warning(f"Orphan files left at {media_dir}: {e}")
 
     logger.info(f"Deleted ebook content_id={content_id}")
     return {"code": 0, "data": {"deleted": 1}, "message": "ok"}

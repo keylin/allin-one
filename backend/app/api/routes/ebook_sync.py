@@ -1,7 +1,9 @@
 """电子书同步 API — 接收本地脚本推送的阅读数据（通用化，支持多平台）"""
 
+import asyncio
 import logging
 import uuid
+from collections import defaultdict
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func
@@ -20,6 +22,9 @@ from app.services.sync.upsert import upsert_ebooks
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# Per-source_id 同步锁，防止并发同步请求产生重复数据
+_sync_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 # 平台名称映射（source_type value → 显示名称）
 _PLATFORM_NAMES = {
@@ -153,9 +158,15 @@ async def sync_ebooks(
     if not source or not source.source_type.startswith("sync."):
         return error_response(404, "同步源不存在")
 
-    # 将 Pydantic 模型转为 dict 列表
-    books_dicts = [b.model_dump(by_alias=False) for b in body.books]
-    stats = upsert_ebooks(db, source, books_dicts)
+    # Per-source_id 锁，防止并发请求产生重复 ContentItem
+    lock = _sync_locks[body.source_id]
+    if lock.locked():
+        return error_response(409, "该数据源正在同步中，请稍后重试")
+
+    async with lock:
+        # 将 Pydantic 模型转为 dict 列表
+        books_dicts = [b.model_dump(by_alias=False) for b in body.books]
+        stats = upsert_ebooks(db, source, books_dicts)
 
     platform = _platform_name(source.source_type)
     logger.info(

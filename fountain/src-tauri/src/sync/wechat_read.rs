@@ -42,7 +42,7 @@ pub async fn run_sync(settings: &AppSettings) -> Result<u32> {
         reqwest::header::HeaderValue::from_static("WeRead/8.0 Mozilla/5.0"),
     );
     let http = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(60))
         .default_headers(default_headers)
         .build()?;
 
@@ -146,8 +146,9 @@ pub async fn run_sync(settings: &AppSettings) -> Result<u32> {
             total_synced += ebooks.len() as u32;
         }
 
-        // Respect API rate limits
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        // Respect API rate limits (200ms between batches; each book already has
+        // per-request latency from progress + annotation fetches)
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
 
     Ok(total_synced)
