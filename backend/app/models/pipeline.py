@@ -106,9 +106,9 @@ class PipelineExecution(Base):
     __tablename__ = "pipeline_executions"
 
     id = Column(String, primary_key=True, default=_uuid)
-    content_id = Column(String, ForeignKey("content_items.id"), nullable=False)
-    source_id = Column(String, ForeignKey("source_configs.id"), nullable=True)
-    template_id = Column(String, ForeignKey("pipeline_templates.id"), nullable=True)
+    content_id = Column(String, ForeignKey("content_items.id", ondelete="CASCADE"), nullable=False)
+    source_id = Column(String, ForeignKey("source_configs.id", ondelete="SET NULL"), nullable=True)
+    template_id = Column(String, ForeignKey("pipeline_templates.id", ondelete="SET NULL"), nullable=True)
     template_name = Column(String)
 
     status = Column(String, default=PipelineStatus.PENDING.value)
@@ -133,7 +133,7 @@ class PipelineStep(Base):
     __tablename__ = "pipeline_steps"
 
     id = Column(String, primary_key=True, default=_uuid)
-    pipeline_id = Column(String, ForeignKey("pipeline_executions.id"), nullable=False)
+    pipeline_id = Column(String, ForeignKey("pipeline_executions.id", ondelete="CASCADE"), nullable=False)
     step_index = Column(Integer, nullable=False)
     step_type = Column(String, nullable=False)         # StepType 枚举
     step_config = Column(Text)                          # 操作配置 (JSON)

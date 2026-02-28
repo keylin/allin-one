@@ -152,13 +152,13 @@ class SourceConfig(Base):
     hotspot_detected_at = Column(DateTime, nullable=True)        # 热点检测时间
 
     # 流水线绑定 — 解耦的关键
-    pipeline_template_id = Column(String, ForeignKey("pipeline_templates.id"), nullable=True)
+    pipeline_template_id = Column(String, ForeignKey("pipeline_templates.id", ondelete="SET NULL"), nullable=True)
 
     # 渠道特定配置 (JSON)
     config_json = Column(Text)
 
     # 平台凭证引用（可选，向后兼容）
-    credential_id = Column(String, ForeignKey("platform_credentials.id"), nullable=True)
+    credential_id = Column(String, ForeignKey("platform_credentials.id", ondelete="SET NULL"), nullable=True)
 
     # 内容保留
     auto_cleanup_enabled = Column(Boolean, default=False)
@@ -244,7 +244,7 @@ class CollectionRecord(Base):
     __tablename__ = "collection_records"
 
     id = Column(String, primary_key=True, default=_uuid)
-    source_id = Column(String, ForeignKey("source_configs.id"), nullable=False)
+    source_id = Column(String, ForeignKey("source_configs.id", ondelete="CASCADE"), nullable=False)
     status = Column(String, default="running")           # running / completed / failed
     items_found = Column(Integer, default=0)
     items_new = Column(Integer, default=0)
@@ -268,7 +268,7 @@ class MediaItem(Base):
     __tablename__ = "media_items"
 
     id = Column(String, primary_key=True, default=_uuid)
-    content_id = Column(String, ForeignKey("content_items.id"), nullable=False)
+    content_id = Column(String, ForeignKey("content_items.id", ondelete="CASCADE"), nullable=False)
     media_type = Column(String, nullable=False)    # MediaType 枚举值
     original_url = Column(String, nullable=False)   # 远程 URL
     local_path = Column(String, nullable=True)      # 下载后的本地路径

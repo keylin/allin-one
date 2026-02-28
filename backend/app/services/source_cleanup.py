@@ -53,6 +53,7 @@ def cascade_delete_source(source_ids: list[str], db: Session, cascade: bool) -> 
         ).update({"source_id": None}, synchronize_session=False)
 
     # 清理 CollectionRecord 和 FinanceDataPoint
+    # 注: DB 级 ON DELETE CASCADE 已覆盖，此处显式删除作为额外保护
     db.query(CollectionRecord).filter(
         CollectionRecord.source_id.in_(source_ids)
     ).delete(synchronize_session=False)

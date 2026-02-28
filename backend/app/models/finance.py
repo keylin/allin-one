@@ -24,7 +24,7 @@ class FinanceDataPoint(Base):
     __tablename__ = "finance_data_points"
 
     id = Column(String, primary_key=True, default=_uuid)
-    source_id = Column(String, ForeignKey("source_configs.id"), nullable=False)
+    source_id = Column(String, ForeignKey("source_configs.id", ondelete="CASCADE"), nullable=False)
 
     category = Column(String, nullable=False, default="unknown")  # macro/stock/fund
     date_key = Column(String, nullable=False)  # 原始格式: "2024-01-15", "2024-01", "2024Q3"

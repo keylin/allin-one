@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     # Security
     API_KEY: str = ""
     CORS_ORIGINS: str = "*"
+    CREDENTIAL_ENCRYPTION_KEY: str = ""  # Fernet key for credential encryption
 
     # Application
     LOG_LEVEL: str = "INFO"

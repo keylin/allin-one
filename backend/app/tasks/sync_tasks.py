@@ -95,12 +95,13 @@ async def run_sync(source_id: str, progress_id: str, options_json: str = "{}"):
                 progress.updated_at = utcnow()
                 db.commit()
 
-            # 执行同步
+            # 执行同步（解密凭证后传入）
+            from app.core.crypto import decrypt_credential
             fetcher = fetcher_cls()
             result = await fetcher.fetch_and_sync(
                 db=db,
                 source=source,
-                credential_data=credential.credential_data,
+                credential_data=decrypt_credential(credential.credential_data),
                 options=options,
                 on_progress=on_progress,
             )

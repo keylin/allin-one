@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 import httpx
 
 from app.core.database import get_db
+from app.core.crypto import encrypt_credential
 from app.core.time import utcnow
 from app.models.credential import PlatformCredential
 
@@ -96,7 +97,7 @@ async def bilibili_qrcode_poll(
                         pass
 
             if existing:
-                existing.credential_data = cookie_str
+                existing.credential_data = encrypt_credential(cookie_str)
                 existing.status = "active"
                 existing.extra_info = extra
                 existing.updated_at = utcnow()
@@ -105,7 +106,7 @@ async def bilibili_qrcode_poll(
                 cred = PlatformCredential(
                     platform="bilibili",
                     credential_type="cookie",
-                    credential_data=cookie_str,
+                    credential_data=encrypt_credential(cookie_str),
                     display_name=f"B站账号 {uid}" if uid else "B站账号",
                     status="active",
                     extra_info=extra,

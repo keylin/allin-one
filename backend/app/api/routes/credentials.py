@@ -14,6 +14,7 @@ from app.core.time import utcnow
 from app.models.credential import PlatformCredential
 from app.models.content import SourceConfig
 from app.schemas.credential import CredentialCreate, CredentialUpdate, CredentialResponse
+from app.core.crypto import encrypt_credential, decrypt_credential
 from app.schemas.base import error_response
 
 logger = logging.getLogger(__name__)
@@ -29,12 +30,14 @@ async def _validate_credential(cred: PlatformCredential) -> tuple[str | None, di
     extra_updates: 需要更新到 cred 上的附加字段 (extra_info, display_name 等)
     支持的平台验证失败时抛异常，由调用方决定处理策略。
     """
+    plain_data = decrypt_credential(cred.credential_data)
+
     if cred.platform == "bilibili":
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get(
                 "https://api.bilibili.com/x/web-interface/nav",
                 headers={
-                    "Cookie": cred.credential_data,
+                    "Cookie": plain_data,
                     "User-Agent": "Mozilla/5.0",
                 },
             )
@@ -67,7 +70,7 @@ async def _validate_credential(cred: PlatformCredential) -> tuple[str | None, di
                 "https://api.x.com/1.1/account/verify_credentials.json",
                 headers={
                     "Authorization": "Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA",
-                    "Cookie": f"auth_token={cred.credential_data}",
+                    "Cookie": f"auth_token={plain_data}",
                     "User-Agent": "Mozilla/5.0",
                 },
             )
@@ -87,7 +90,7 @@ async def _validate_credential(cred: PlatformCredential) -> tuple[str | None, di
     elif cred.platform == "wechat_read":
         from app.services.sync.wechat_read import WechatReadFetcher
         fetcher = WechatReadFetcher()
-        valid, reason = await fetcher.validate_credential(cred.credential_data)
+        valid, reason = await fetcher.validate_credential(plain_data)
         status = "active" if valid else "expired"
         return status, {"_reason": reason} if reason else {}
 
@@ -109,7 +112,7 @@ def _credential_to_response(cred: PlatformCredential, db: Session) -> dict:
     ).scalar() or 0
 
     data = CredentialResponse.model_validate(cred).model_dump()
-    data["credential_data"] = _mask_value(cred.credential_data)
+    data["credential_data"] = _mask_value(decrypt_credential(cred.credential_data))
     data["source_count"] = source_count
     return data
 
@@ -160,7 +163,9 @@ async def list_credentials(
 @router.post("")
 async def create_credential(body: CredentialCreate, db: Session = Depends(get_db)):
     """手动创建凭证"""
-    cred = PlatformCredential(**body.model_dump())
+    cred_data = body.model_dump()
+    cred_data["credential_data"] = encrypt_credential(cred_data["credential_data"])
+    cred = PlatformCredential(**cred_data)
     db.add(cred)
     db.commit()
     db.refresh(cred)
@@ -185,7 +190,7 @@ async def create_credential(body: CredentialCreate, db: Session = Depends(get_db
     if cred.platform == "twitter":
         try:
             from app.services.rsshub_sync import sync_twitter_to_rsshub
-            sync_result = sync_twitter_to_rsshub(cred.credential_data)
+            sync_result = sync_twitter_to_rsshub(decrypt_credential(cred.credential_data))
             logger.info(f"Twitter RSSHub sync result: {sync_result}")
         except Exception as e:
             logger.warning(f"Twitter RSSHub sync failed (non-critical): {e}")
@@ -228,6 +233,8 @@ async def update_credential(credential_id: str, body: CredentialUpdate, db: Sess
         val = update_data["credential_data"]
         if val and _MASK_PATTERN.match(val):
             del update_data["credential_data"]
+        elif "credential_data" in update_data:
+            update_data["credential_data"] = encrypt_credential(update_data["credential_data"])
 
     for key, value in update_data.items():
         setattr(cred, key, value)
@@ -242,7 +249,7 @@ async def update_credential(credential_id: str, body: CredentialUpdate, db: Sess
     if cred.platform == "twitter" and "credential_data" in update_data:
         try:
             from app.services.rsshub_sync import sync_twitter_to_rsshub
-            sync_result = sync_twitter_to_rsshub(cred.credential_data)
+            sync_result = sync_twitter_to_rsshub(decrypt_credential(cred.credential_data))
             logger.info(f"Twitter RSSHub sync result: {sync_result}")
         except Exception as e:
             logger.warning(f"Twitter RSSHub sync failed (non-critical): {e}")
@@ -342,7 +349,7 @@ async def sync_rsshub(credential_id: str, db: Session = Depends(get_db)):
 
         try:
             from app.services.rsshub_sync import sync_bilibili_to_rsshub
-            result = sync_bilibili_to_rsshub(uid, cred.credential_data)
+            result = sync_bilibili_to_rsshub(uid, decrypt_credential(cred.credential_data))
             return {"code": 0, "data": result, "message": "同步完成"}
         except Exception as e:
             logger.exception(f"RSSHub sync failed for credential {credential_id}")
@@ -350,7 +357,7 @@ async def sync_rsshub(credential_id: str, db: Session = Depends(get_db)):
     elif cred.platform == "twitter":
         try:
             from app.services.rsshub_sync import sync_twitter_to_rsshub
-            result = sync_twitter_to_rsshub(cred.credential_data)
+            result = sync_twitter_to_rsshub(decrypt_credential(cred.credential_data))
             return {"code": 0, "data": result, "message": "同步完成"}
         except Exception as e:
             logger.exception(f"RSSHub sync failed for credential {credential_id}")
