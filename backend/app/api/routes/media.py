@@ -4,6 +4,7 @@ import json
 import logging
 import mimetypes
 import os
+import re
 import shutil
 from pathlib import Path
 from typing import Optional
@@ -29,6 +30,23 @@ class PlaybackProgressBody(BaseModel):
     position: int
 
 
+def _extract_thumbnail_url(raw_data: Optional[str]) -> Optional[str]:
+    """Extract thumbnail URL from content raw_data (RSS summary HTML)."""
+    if not raw_data:
+        return None
+    try:
+        raw = json.loads(raw_data)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    # Try summary HTML first — RSSHub embeds cover image as <img>
+    summary = raw.get("summary", "")
+    if summary:
+        match = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', summary)
+        if match:
+            return match.group(1)
+    return None
+
+
 def _media_file_url(content_id: str, local_path: Optional[str]) -> Optional[str]:
     """Compute frontend-accessible URL for a media file under MEDIA_DIR."""
     if not local_path:
@@ -38,7 +56,9 @@ def _media_file_url(content_id: str, local_path: Optional[str]) -> Optional[str]
         file_path = Path(local_path).resolve()
         rel = file_path.relative_to(media_root)  # raises ValueError if outside
         parts = rel.parts
-        file_part = "/".join(parts[1:]) if len(parts) > 1 else parts[0]
+        if len(parts) <= 1:
+            return None  # file directly under MEDIA_DIR without content_id subdir
+        file_part = "/".join(parts[1:])
         return f"/api/media/{content_id}/{file_part}"
     except (ValueError, TypeError):
         return None
@@ -77,8 +97,12 @@ async def list_media(
         .filter(ContentItem.id.in_(db.query(dedup_content.c.id)))
     )
 
+    # 白名单：媒体管理只展示 video/audio/image
+    MEDIA_LIST_TYPES = ("video", "audio", "image")
     if media_type:
         query = query.filter(MediaItem.media_type == media_type)
+    else:
+        query = query.filter(MediaItem.media_type.in_(MEDIA_LIST_TYPES))
 
     if status_filter:
         status_map = {"completed": "downloaded", "failed": "failed", "pending": "pending"}
@@ -114,6 +138,7 @@ async def list_media(
         "title": ContentItem.title,
         "duration": cast(media_meta["duration"].astext, Float),
         "favorited_at": MediaItem.favorited_at,
+        "last_played_at": MediaItem.last_played_at,
     }
     sort_column = sort_map.get(sort_by, MediaItem.created_at)
     order_expr = (
@@ -135,14 +160,17 @@ async def list_media(
         display_status = "completed" if media.status == "downloaded" else media.status
         is_image = media.media_type == "image"
 
+        has_local_thumbnail = bool(meta.get("thumbnail_path")) or is_image
+        thumbnail_url = None if has_local_thumbnail else _extract_thumbnail_url(content.raw_data)
+
         media_info = {
             "title": content.title or "",
             "duration": meta.get("duration"),
             "platform": meta.get("platform", ""),
             "file_path": media.local_path or "",
             "file_url": _media_file_url(content.id, media.local_path),
-            # image MediaItems always have a thumbnail (their local_path IS the image)
-            "has_thumbnail": bool(meta.get("thumbnail_path")) or is_image,
+            "has_thumbnail": has_local_thumbnail or bool(thumbnail_url),
+            "thumbnail_url": thumbnail_url,
             "width": meta.get("width"),
             "height": meta.get("height"),
             "file_size": meta.get("file_size"),
@@ -228,6 +256,53 @@ async def toggle_media_favorite(media_id: str, db: Session = Depends(get_db)):
     }
 
 
+@router.post("/{media_id}/retry")
+async def retry_media_download(media_id: str, db: Session = Depends(get_db)):
+    """重试失败的媒体下载：重置状态为 pending → 触发媒体下载流水线。"""
+    from app.models.pipeline import PipelineTemplate, TriggerSource
+    from app.services.pipeline.orchestrator import PipelineOrchestrator
+
+    media = db.get(MediaItem, media_id)
+    if not media:
+        return error_response(404, "Media not found")
+
+    if media.status != "failed":
+        return error_response(400, "只有失败的媒体项可以重试")
+
+    # 清除错误信息、重置状态
+    if media.metadata_json:
+        try:
+            meta = json.loads(media.metadata_json)
+            meta.pop("error", None)
+            media.metadata_json = json.dumps(meta, ensure_ascii=False)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    media.status = "pending"
+    db.commit()
+    db.refresh(media)
+
+    # 触发媒体下载流水线
+    content = db.get(ContentItem, media.content_id)
+    if content:
+        template = db.query(PipelineTemplate).filter(
+            PipelineTemplate.name == "媒体下载",
+            PipelineTemplate.is_active == True,
+        ).first()
+        if template:
+            orchestrator = PipelineOrchestrator(db)
+            execution = orchestrator.trigger_for_content(
+                content=content,
+                template_override_id=template.id,
+                trigger=TriggerSource.MANUAL,
+            )
+            if execution:
+                await orchestrator.async_start_execution(execution.id)
+                logger.info(f"MediaItem retry triggered pipeline: media={media_id}, execution={execution.id}")
+
+    return {"code": 0, "data": {"status": "pending"}, "message": "已重新提交下载"}
+
+
 @router.put("/{content_id}/progress")
 async def save_playback_progress(
     content_id: str,
@@ -272,6 +347,7 @@ async def delete_media(content_id: str, db: Session = Depends(get_db)):
             PipelineExecution.id.in_(execution_ids)
         ).delete(synchronize_session=False)
 
+    db.query(MediaItem).filter(MediaItem.content_id == content_id).delete(synchronize_session=False)
     db.query(ContentItem).filter(ContentItem.id == content_id).delete(synchronize_session=False)
     db.commit()
 

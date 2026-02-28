@@ -11,7 +11,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query, Request, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import cast, func, type_coerce, Float
+from sqlalchemy import cast, func, Float
 from sqlalchemy.dialects.postgresql import JSONB
 
 from app.core.database import get_db

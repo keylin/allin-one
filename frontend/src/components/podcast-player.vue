@@ -143,7 +143,7 @@ function onCanPlay() { isLoading.value = false }
 async function saveProgress() {
   if (!props.contentId || !audioRef.value || currentTime.value < 5) return
   try {
-    await api.put(`/video/${props.contentId}/progress`, {
+    await api.put(`/media/${props.contentId}/progress`, {
       position: Math.floor(currentTime.value),
     })
   } catch { /* ignore */ }
