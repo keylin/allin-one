@@ -56,6 +56,9 @@ async def collect_single_source(source_id: str, trigger: str = "scheduled", use_
             if dedup_count:
                 logger.info(f"[collect_task] {source.name}: {dedup_count} items marked as duplicates")
 
+            # 持久化采集成功状态，防止后续 pipeline 触发失败回滚
+            db.commit()
+
             # ---- 第二阶段: 对每条新内容触发流水线 ----
             trigger_source = TriggerSource.MANUAL if trigger == "manual" else TriggerSource.SCHEDULED
             orchestrator = PipelineOrchestrator(db)
