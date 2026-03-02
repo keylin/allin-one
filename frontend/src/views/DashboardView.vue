@@ -261,7 +261,7 @@ async function fetchData() {
     getContentStatusDistribution(),
     getStorageStats(),
     getDedupStats(),
-    getUserBehaviorStats({ heatmap_days: 90, trend_days: 7, top_n: 5 }),
+    getUserBehaviorStats({ heatmap_days: 84, trend_days: 7, top_n: 5 }),
   ])
 
   const handlers = [
@@ -335,7 +335,6 @@ function formatTime(t) {
   return t ? dayjs.utc(t).local().format('MM-DD HH:mm') : '-'
 }
 
-const formatDayLabel = formatTrendDate
 
 onMounted(() => {
   fetchData()
@@ -860,7 +859,7 @@ onUnmounted(() => {
               </div>
               <div class="flex flex-col items-center gap-0.5">
                 <span class="text-[10px]" :class="selectedDate === day.date ? 'text-indigo-600 font-semibold' : 'text-slate-400'">
-                  {{ formatDayLabel(day.date) }}
+                  {{ formatTrendDate(day.date) }}
                 </span>
                 <div v-if="selectedDate === day.date" class="w-1 h-1 rounded-full bg-indigo-600"></div>
               </div>
