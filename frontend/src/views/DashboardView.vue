@@ -101,24 +101,35 @@ const heatmapCells = computed(() => {
   behaviorStats.value.heatmap.forEach(d => { map[d.date] = d.read_count })
 
   const todayStr = behaviorStats.value?.today || dayjs().format('YYYY-MM-DD')
+  const today = dayjs(todayStr)
   const cells = []
-  // 从 84 天前开始，按列（周）x 行（天）排列，列优先
-  const today = dayjs()
-  const startDay = today.subtract(83, 'day')
+
+  // 动态分级：取数据中最大值，四等分映射到 4 级绿色
+  const counts = Object.values(map)
+  const maxCount = counts.length ? Math.max(...counts) : 1
+  const q1 = maxCount * 0.25
+  const q2 = maxCount * 0.5
+  const q3 = maxCount * 0.75
+
+  // 对齐到周一：(day() + 6) % 7 将 dayjs 的 0=Sun 转为 0=Mon
+  const todayDow = (today.day() + 6) % 7
+  const thisMonday = today.subtract(todayDow, 'day')
+  const startMonday = thisMonday.subtract(11, 'week') // 共 12 周（84 天格子）
+
   for (let col = 0; col < 12; col++) {
     for (let row = 0; row < 7; row++) {
-      const dayIndex = col * 7 + row
-      const date = startDay.add(dayIndex, 'day')
+      const date = startMonday.add(col * 7 + row, 'day')
       const dateStr = date.format('YYYY-MM-DD')
       const isFuture = dateStr > todayStr
       const count = map[dateStr] || 0
-      let colorClass = 'fill-slate-100'
-      if (!isFuture) {
-        if (count >= 6) colorClass = 'fill-emerald-600'
-        else if (count >= 3) colorClass = 'fill-emerald-400'
-        else if (count >= 1) colorClass = 'fill-emerald-200'
+      let fillColor = '#ebedf0'
+      if (!isFuture && count > 0) {
+        if (count > q3) fillColor = '#216e39'
+        else if (count > q2) fillColor = '#30a14e'
+        else if (count > q1) fillColor = '#40c463'
+        else fillColor = '#9be9a8'
       }
-      cells.push({ dateStr, count, col, row, colorClass: isFuture ? '' : colorClass, isFuture, date })
+      cells.push({ dateStr, count, col, row, fillColor: isFuture ? '' : fillColor, isFuture, date })
     }
   }
   return cells
@@ -126,13 +137,13 @@ const heatmapCells = computed(() => {
 
 const heatmapMonthLabels = computed(() => {
   const labels = []
-  const seen = new Set()
+  let prevMonth = -1
   heatmapCells.value.forEach(cell => {
     if (cell.row === 0) {
-      const month = cell.date.format('M月')
-      if (!seen.has(month)) {
-        seen.add(month)
-        labels.push({ col: cell.col, label: month })
+      const m = cell.date.month() // 0-based
+      if (m !== prevMonth) {
+        labels.push({ col: cell.col, label: cell.date.format('M月') })
+        prevMonth = m
       }
     }
   })
@@ -250,7 +261,7 @@ async function fetchData() {
     getContentStatusDistribution(),
     getStorageStats(),
     getDedupStats(),
-    getUserBehaviorStats({ heatmap_days: 84, trend_days: 7, top_n: 5 }),
+    getUserBehaviorStats({ heatmap_days: 90, trend_days: 7, top_n: 5 }),
   ])
 
   const handlers = [
@@ -294,7 +305,8 @@ function selectDate(date) {
 
 function showHeatmapTooltip(event, cell) {
   const d = dayjs(cell.dateStr)
-  const label = `${d.format('M')} 月 ${d.format('D')} 日：阅读 ${cell.count} 篇`
+  const weekdays = ['日', '一', '二', '三', '四', '五', '六']
+  const label = `${d.format('M')}月${d.format('D')}日 周${weekdays[d.day()]}：阅读 ${cell.count} 篇`
   heatmapTooltip.value = { visible: true, text: label }
 }
 
@@ -323,14 +335,7 @@ function formatTime(t) {
   return t ? dayjs.utc(t).local().format('MM-DD HH:mm') : '-'
 }
 
-function formatDayLabel(dateStr) {
-  const d = dayjs(dateStr)
-  const today = dayjs().format('YYYY-MM-DD')
-  const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD')
-  if (dateStr === today) return '今天'
-  if (dateStr === yesterday) return '昨天'
-  return d.format('MM/DD')
-}
+const formatDayLabel = formatTrendDate
 
 onMounted(() => {
   fetchData()
@@ -558,13 +563,13 @@ onUnmounted(() => {
           <div class="flex gap-3">
             <!-- 行标签（周一/周三/周五） -->
             <div class="flex flex-col justify-around pt-6 pb-0 shrink-0" style="height: 105px;">
-              <span class="text-[10px] text-slate-400 leading-none" style="height: 15px; display: flex; align-items: center;">一</span>
-              <span class="text-[10px] text-slate-400 leading-none" style="height: 15px; display: flex; align-items: center;"></span>
-              <span class="text-[10px] text-slate-400 leading-none" style="height: 15px; display: flex; align-items: center;">三</span>
-              <span class="text-[10px] text-slate-400 leading-none" style="height: 15px; display: flex; align-items: center;"></span>
-              <span class="text-[10px] text-slate-400 leading-none" style="height: 15px; display: flex; align-items: center;">五</span>
-              <span class="text-[10px] text-slate-400 leading-none" style="height: 15px; display: flex; align-items: center;"></span>
-              <span class="text-[10px] text-slate-400 leading-none" style="height: 15px; display: flex; align-items: center;"></span>
+              <span class="text-[10px] text-[#57606a] leading-none" style="height: 15px; display: flex; align-items: center;">一</span>
+              <span class="text-[10px] text-[#57606a] leading-none" style="height: 15px; display: flex; align-items: center;"></span>
+              <span class="text-[10px] text-[#57606a] leading-none" style="height: 15px; display: flex; align-items: center;">三</span>
+              <span class="text-[10px] text-[#57606a] leading-none" style="height: 15px; display: flex; align-items: center;"></span>
+              <span class="text-[10px] text-[#57606a] leading-none" style="height: 15px; display: flex; align-items: center;">五</span>
+              <span class="text-[10px] text-[#57606a] leading-none" style="height: 15px; display: flex; align-items: center;"></span>
+              <span class="text-[10px] text-[#57606a] leading-none" style="height: 15px; display: flex; align-items: center;"></span>
             </div>
 
             <!-- 热力图 SVG -->
@@ -574,11 +579,11 @@ onUnmounted(() => {
                 <text
                   v-for="m in heatmapMonthLabels"
                   :key="m.col"
-                  :x="m.col * 15 + 6"
+                  :x="m.col * 15 + (m.col === 0 ? 0 : 6)"
                   y="12"
                   font-size="9"
-                  fill="#94a3b8"
-                  text-anchor="middle"
+                  fill="#57606a"
+                  :text-anchor="m.col === 0 ? 'start' : 'middle'"
                 >{{ m.label }}</text>
 
                 <!-- 格子（过去/今天） -->
@@ -590,7 +595,7 @@ onUnmounted(() => {
                   width="12"
                   height="12"
                   rx="2"
-                  :class="cell.colorClass"
+                  :fill="cell.fillColor"
                   class="cursor-pointer hover:opacity-80 transition-opacity"
                   @mouseenter="showHeatmapTooltip($event, cell)"
                   @mouseleave="hideHeatmapTooltip"
@@ -614,15 +619,16 @@ onUnmounted(() => {
           </div>
 
           <!-- 图例 -->
-          <div class="flex items-center justify-end gap-1.5 mt-2">
-            <span class="text-[10px] text-slate-400">少</span>
-            <svg width="60" height="12">
-              <rect x="0" y="0" width="12" height="12" rx="2" class="fill-slate-100" />
-              <rect x="16" y="0" width="12" height="12" rx="2" class="fill-emerald-200" />
-              <rect x="32" y="0" width="12" height="12" rx="2" class="fill-emerald-400" />
-              <rect x="48" y="0" width="12" height="12" rx="2" class="fill-emerald-600" />
+          <div class="flex items-center justify-end gap-1 mt-2">
+            <span class="text-[10px]" style="color: #57606a">少</span>
+            <svg width="76" height="10">
+              <rect x="0"  width="10" height="10" rx="2" fill="#ebedf0" />
+              <rect x="14" width="10" height="10" rx="2" fill="#9be9a8" />
+              <rect x="28" width="10" height="10" rx="2" fill="#40c463" />
+              <rect x="42" width="10" height="10" rx="2" fill="#30a14e" />
+              <rect x="56" width="10" height="10" rx="2" fill="#216e39" />
             </svg>
-            <span class="text-[10px] text-slate-400">多</span>
+            <span class="text-[10px]" style="color: #57606a">多</span>
           </div>
         </div>
       </div>
