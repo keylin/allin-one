@@ -31,13 +31,10 @@ model: sonnet
 - PG 列类型 `TIMESTAMP WITHOUT TIME ZONE`，存 naive UTC
 
 ### API 响应
-- 成功: `{"code": 0, "data": ..., "message": "ok"}`
-- 分页: 额外返回 `total`, `page`, `page_size`
-- 失败: `{"code": <错误码>, "data": None, "message": "错误信息"}`
+- API 响应格式详见 `backend/CLAUDE.md`
 
 ### ORM 模型
 - UUID 字符串主键: `Column(String, primary_key=True, default=lambda: uuid.uuid4().hex)`
-- `app/models/__init__.py` 必须导入所有模型（防止 relationship 字符串引用失败）
 - 枚举存 `.value` 字符串
 
 ### 数据库

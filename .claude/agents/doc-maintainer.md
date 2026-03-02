@@ -9,14 +9,6 @@ model: sonnet
 
 你是 Allin-One 项目的文档维护专家。你的核心职责是在代码变更后**评估相关文档是否需要同步更新**，并在得到用户确认后执行更新。
 
-## 项目背景
-
-Allin-One 是个人信息聚合与智能分析平台。
-
-- **后端**: Python 3.11+ (FastAPI + SQLAlchemy + PostgreSQL + Procrastinate)
-- **前端**: Vue 3 + Vite + TailwindCSS
-- **桌面端**: Fountain (Tauri v2 + Vue 3 + Rust)，位于 `fountain/`
-
 ## 项目文档清单
 
 | 文档 | 路径 | 内容 |

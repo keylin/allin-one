@@ -36,14 +36,10 @@ model: sonnet
 - Store: `useXxxStore` 导出
 
 ### API 调用
-- 通过 `@/api` 的 Axios 实例调用，自动解包 `response.data`
-- 响应结构: `{code, data, message}`，分页额外有 `total, page, page_size`
-- 封装函数放在 `src/api/` 目录
+- API 规范详见 `frontend/CLAUDE.md`，使用 `@/api` Axios 实例，封装函数放在 `src/api/`
 
 ### 时间戳
-- `dayjs.utc(t).local()` 先标记 UTC 再转本地时间
-- 推荐使用 `src/utils/time.js` 的 `formatTimeShort()` / `formatTimeFull()`
-- **禁止** 直接 `dayjs(t)` 解析后端时间（会当作本地时间）
+- `dayjs.utc(t).local()`，禁止 `dayjs(t)`（详见 `frontend/CLAUDE.md`）
 
 ### UI 设计
 - 极简主义，注重留白
@@ -53,8 +49,7 @@ model: sonnet
 - 图标: `lucide-vue-next`
 
 ### URL 状态持久化
-- 列表页搜索/筛选/排序状态通过 URL query 参数持久化
-- 从 `route.query` 初始化，变更时 `router.replace({ query })`
+- 列表页状态通过 URL query 持久化（详见 `frontend/CLAUDE.md`）
 
 ## 标准开发流程
 
