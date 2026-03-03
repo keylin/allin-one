@@ -93,6 +93,10 @@ services:
       dockerfile: docker/Dockerfile.dev.backend
     container_name: allin-dev-backend
     restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     ports:
       - "8000:8000"
     volumes:
@@ -129,6 +133,10 @@ services:
       dockerfile: docker/Dockerfile.dev.frontend
     container_name: allin-dev-frontend
     restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     ports:
       - "3000:3000"
     volumes:
@@ -149,6 +157,10 @@ services:
       dockerfile: docker/Dockerfile.dev.backend
     container_name: allin-dev-worker-pipeline
     restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     command: ["python", "dev_worker.py", "pipeline"]
     volumes:
       - ./backend:/app
@@ -178,6 +190,10 @@ services:
       dockerfile: docker/Dockerfile.dev.backend
     container_name: allin-dev-worker-scheduled
     restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     command: ["python", "dev_worker.py", "scheduled"]
     volumes:
       - ./backend:/app
