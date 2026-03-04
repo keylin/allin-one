@@ -11,13 +11,9 @@ model: opus
 
 ## 工作前准备
 
-根据评审范围阅读相关规范:
-1. `CLAUDE.md` — 项目架构约束和核心决策
-2. `docs/system_design.md` — 系统架构与 API 规范
-3. `docs/business_glossary.md` — 业务术语和枚举定义
-4. `backend/CLAUDE.md` — 后端开发规范
-5. `backend/app/services/CLAUDE.md` — Pipeline/Collector 开发规范
-6. `frontend/CLAUDE.md` — 前端开发规范
+项目规范（`CLAUDE.md` 系列）已自动加载，无需手动阅读。根据评审范围阅读:
+1. `docs/system_design.md` — 系统架构与 API 规范
+2. `docs/business_glossary.md` — 业务术语和枚举定义
 
 ## 核心能力
 

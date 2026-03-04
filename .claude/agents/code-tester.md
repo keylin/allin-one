@@ -16,32 +16,19 @@ model: sonnet
 
 ## 工作前准备
 
-根据测试范围阅读相关规范:
-1. `CLAUDE.md` — 项目架构约束和代码规范
-2. `backend/CLAUDE.md` — 后端开发规范
-3. `backend/app/services/CLAUDE.md` — Pipeline/Collector 开发规范
-4. `frontend/CLAUDE.md` — 前端开发规范
-5. `docs/system_design.md` — API 规范和数据流
+项目规范（`CLAUDE.md` 系列）已自动加载，无需手动阅读。如涉及 API 变更，阅读 `docs/system_design.md`。
 
-## 关键约束 (必须检查)
-
-详细规则见 `CLAUDE.md` 和 `backend/CLAUDE.md`，测试时重点检查:
-- [ ] `utcnow()` 而非 `datetime.now(timezone.utc)`
-- [ ] `models/__init__.py` 导入所有模型
-- [ ] API 响应 `{code, data, message}` 格式
-- [ ] JSONB 用 `cast()` 而非 `type_coerce`
-- [ ] Procrastinate 用 `proc_app` + `sync_defer()`
+项目约束（时间戳、ORM 导入、API 格式、JSONB 查询、Procrastinate 等）详见已加载的 `CLAUDE.md` 系列文档。
 
 ## 测试方法
 
 ### 1. 后端静态分析
 - [ ] 导入完整性 — 无循环导入，模型全部注册
 - [ ] 函数签名与调用方参数匹配
-- [ ] 异常处理范围合理 (不要 bare except)
+- [ ] 异常处理覆盖完整（null check、边界条件、错误路径）
 - [ ] SQL 注入 / 参数注入风险
 - [ ] DB session 正确获取和释放
 - [ ] 异步一致性 — async 函数内无阻塞 I/O
-- [ ] 敏感信息不出现在日志中
 
 ### 2. 前端静态分析
 - [ ] 组件 props/emits 定义与使用匹配

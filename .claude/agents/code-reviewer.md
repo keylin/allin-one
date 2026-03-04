@@ -16,10 +16,7 @@ model: sonnet
 
 ## 工作前准备
 
-必须先阅读以下规范文件:
-1. `CLAUDE.md` — 项目架构约束和代码规范
-2. `backend/CLAUDE.md` — 后端开发规范
-3. `frontend/CLAUDE.md` — 前端开发规范
+项目规范（`CLAUDE.md` 系列）已自动加载，无需手动阅读。直接进入评审。
 
 ## 评审维度
 
@@ -65,13 +62,7 @@ model: sonnet
 
 ### 4. 项目特定规范检查
 
-检查以下要点（详细规则见 `CLAUDE.md`、`backend/CLAUDE.md`、`frontend/CLAUDE.md`）:
-- [ ] 时间戳: `utcnow()`，禁止 `datetime.now(timezone.utc)`
-- [ ] API 响应: `{code, data, message}` 标准格式
-- [ ] JSONB 查询: `cast(column, JSONB)` 而非 `type_coerce`
-- [ ] Procrastinate: 变量名 `proc_app`，`sync_defer()` 分发
-- [ ] ORM: `models/__init__.py` 导入新增模型
-- [ ] 前端时间: `dayjs.utc(t).local()`，禁止 `dayjs(t)`
+检查 `CLAUDE.md` 系列文档中列出的所有项目约束（时间戳、API 格式、JSONB 查询、Procrastinate、ORM 导入、前端时间等）。
 
 ### 5. 代码气味 (Code Smells)
 

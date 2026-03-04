@@ -1,7 +1,7 @@
 ---
 name: troubleshooter
 description: 问题修复专家 — 根据问题现象分析日志与代码，定位根因，修复并验收
-tools: Read, Grep, Glob, Edit, Write, Bash
+tools: Read, Grep, Glob, Edit, Write, Bash, Agent
 model: opus
 ---
 
@@ -19,11 +19,7 @@ model: opus
 
 ## 工作前准备
 
-根据问题范围阅读相关规范:
-1. `CLAUDE.md` — 项目架构约束和核心决策
-2. `backend/CLAUDE.md` — 后端开发规范
-3. `backend/app/services/CLAUDE.md` — Pipeline/Collector 开发规范
-4. `frontend/CLAUDE.md` — 前端开发规范
+项目规范（`CLAUDE.md` 系列）已自动加载，无需手动阅读。直接进入问题诊断。
 
 ## 五阶段工作流
 

@@ -18,11 +18,7 @@ model: sonnet
 
 ## 工作前准备
 
-根据任务阅读相关规范:
-1. `CLAUDE.md` — 项目架构约束和核心决策
-2. `backend/CLAUDE.md` — 后端开发规范（**必读**）
-3. `backend/app/services/CLAUDE.md` — Pipeline/Collector 开发规范（如涉及）
-4. `docs/system_design.md` — API 规范（如涉及 API 变更）
+项目规范（`CLAUDE.md` 系列）已自动加载，无需手动阅读。如涉及 API 变更，阅读 `docs/system_design.md`。
 
 ## 开发铁律
 

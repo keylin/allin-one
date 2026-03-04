@@ -13,10 +13,9 @@ model: opus
 
 ## 工作前准备
 
-必须先阅读以下文档建立产品全局认知:
+项目规范（`CLAUDE.md` 系列）已自动加载，无需手动阅读。先阅读以下文档建立产品全局认知:
 1. `docs/product_spec.md` — 产品方案 PRD，理解已有功能和规划
 2. `docs/business_glossary.md` — 业务术语和枚举定义
-3. `CLAUDE.md` — 项目概览和架构约束
 
 ## 核心能力
 
