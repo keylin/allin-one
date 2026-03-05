@@ -1,7 +1,7 @@
 ---
 name: review-design
 description: 审查代码是否符合项目设计文档和架构规范
-argument-hint: [文件或目录] (可选，默认审查最近的 git 变更)
+argument-hint: [文件或目录] (可选，默认审查最近 git 变更)
 model: sonnet
 allowed-tools: Read, Grep, Glob, Bash
 ---
@@ -10,59 +10,64 @@ allowed-tools: Read, Grep, Glob, Bash
 
 审查 `$ARGUMENTS` 处的代码（如果未提供参数则审查最近的 git 变更），检查是否符合项目设计文档。
 
-## 审查依据
+## 工作流程
 
-先阅读以下设计文档:
-1. `docs/system_design.md` — 架构设计、数据库 schema、API 规范
-2. `docs/product_spec.md` — 功能需求、UI 设计
-3. `docs/business_glossary.md` — 枚举值、术语、模板定义
-4. `CLAUDE.md` — 开发规范
+### 1. 加载最新规范（每次必做）
+
+先阅读以下文档，提取当前有效的规范作为审查基准:
+
+| 文档 | 提取内容 |
+|------|---------|
+| `CLAUDE.md` | 核心架构约束、技术栈、代码规范、关键决策 |
+| `backend/CLAUDE.md` | 后端开发规范、时间戳用法、ORM 规则、数据库规范 |
+| `backend/app/services/CLAUDE.md` | Pipeline/Collector 架构规则 |
+| `frontend/CLAUDE.md` | 前端开发规范、组件约定 |
+| `docs/system_design.md` | 架构设计、数据库 schema、API 规范 |
+| `docs/business_glossary.md` | 枚举值定义、术语 |
+
+**关键**: 以文档中的当前内容为准，不依赖任何预置的枚举值列表或代码片段。
+
+### 2. 确定审查范围
 
 如果未提供参数，运行 `git diff --name-only` 和 `git diff --cached --name-only` 查找最近变更的文件。
 
-## 检查清单
+### 3. 逐维度审查
 
-### 1. 数据源-流水线解耦（最关键）
-- [ ] 不存在 `video_bilibili`、`video_youtube` 等混合数据源类型
-- [ ] SourceType 枚举仅包含: rsshub, rss_std, akshare, scraper, file_upload, account_bilibili, account_other, user_note, user_message
-- [ ] 流水线中不存在 `fetch_content` 步骤类型
-- [ ] steps_config 中不包含任何抓取/采集步骤
-- [ ] Collector 没有直接调用流水线代码
-- [ ] 数据源仅通过 `pipeline_template_id` 外键关联流水线
+对变更的代码，按以下维度与规范文档对照检查:
 
-### 2. 数据库规范
-- [ ] 所有主键为 UUID 字符串（非自增）
-- [ ] 所有时间戳使用 UTC（`datetime.now(timezone.utc)`）
-- [ ] 没有 naive datetime 对象
-- [ ] 枚举字段存储 `.value` 字符串，而非枚举对象本身
-- [ ] Schema 变更有对应的 Alembic 迁移
+#### 维度 A: 架构约束合规
+- 数据源与流水线是否正确解耦（对照 CLAUDE.md 架构约束章节）
+- SourceType 值是否在 `docs/business_glossary.md` 定义的枚举范围内
+- Collector 是否只做抓取，Pipeline 是否只做处理
+- 模块间依赖方向是否正确
 
-### 3. API 规范
-- [ ] 所有响应使用 `{"code": 0, "data": ..., "message": "ok"}` 格式
-- [ ] 分页使用 `page` 和 `page_size` 参数
-- [ ] 路由路径使用复数名词
-- [ ] 路由 handler 使用 `async def`
-- [ ] 请求体使用 Pydantic schema 校验
+#### 维度 B: 数据库规范
+- 时间戳用法是否符合 `backend/CLAUDE.md` 中的时间戳规范
+- 主键类型、枚举存储方式是否符合 ORM 规范
+- Schema 变更是否有 Alembic 迁移
+- JSONB 查询写法是否正确
 
-### 4. 流水线引擎
-- [ ] 步骤处理器返回 dict（非 None）
-- [ ] 步骤处理器已注册到 STEP_HANDLERS 字典
-- [ ] 关键步骤失败则流水线停止；非关键步骤失败则跳过
-- [ ] PipelineExecution 始终设置了 `content_id`
-- [ ] 步骤上下文使用正确的键名（step_config, previous_steps 等）
+#### 维度 C: API 规范
+- 响应格式是否符合 `docs/system_design.md` 中的 API 规范
+- 分页参数、路由命名、HTTP 方法是否一致
+- 路由 handler 是否使用与数据库会话匹配的同步模式（同步 Session 用 `def`，不用 `async def`）
+- Pydantic schema 是否校验请求体
 
-### 5. 前端规范
-- [ ] Vue 组件使用 `<script setup>`
-- [ ] 时间戳已转换为本地时间展示
-- [ ] API 调用使用 `@/api` Axios 实例
-- [ ] 使用 TailwindCSS 样式，尽量不写自定义 CSS
-- [ ] 文件使用 kebab-case 命名
+#### 维度 D: 流水线引擎
+- 步骤处理器返回值、注册方式是否符合 `backend/app/services/CLAUDE.md`
+- 关键/非关键步骤的失败处理是否正确
+- context 键名是否与引擎约定一致
+
+#### 维度 E: 前端规范
+- 组件语法、文件命名是否符合 `frontend/CLAUDE.md`
+- 时间戳展示是否正确转换
+- API 调用方式是否规范
 
 ## 输出格式
 
 对发现的每个问题，报告:
 1. **文件和行号**: 问题所在位置
-2. **违反的规则**: 对应检查清单中的哪条规则
-3. **期望**: 按设计文档应该是什么样
+2. **违反的规则**: 引用具体文档和章节（如 "CLAUDE.md > 核心架构约束 > 数据源与流水线解耦"）
+3. **期望**: 按文档规范应该是什么样
 4. **实际**: 当前代码是什么样
 5. **严重程度**: 严重 / 警告 / 建议

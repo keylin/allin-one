@@ -39,9 +39,9 @@ allowed-tools: Read, Grep, Glob, Edit, Write, Bash
 
 import json
 import logging
-from datetime import datetime, timezone
 from sqlalchemy.orm import Session
-from app.models.content import SourceConfig, ContentItem, CollectionRecord, ContentStatus, MediaType
+from app.core.time import utcnow
+from app.models.content import SourceConfig, ContentItem, CollectionRecord, ContentStatus
 
 logger = logging.getLogger(__name__)
 
@@ -75,9 +75,9 @@ class ${CollectorName}Collector:
         #         author=entry.get("author"),
         #         raw_data=json.dumps(entry, ensure_ascii=False),
         #         status=ContentStatus.PENDING.value,
-        #         media_type=source.media_type or MediaType.TEXT.value,
+        #         # 媒体通过 MediaItem 关联，不在 ContentItem 上设置
         #         published_at=entry.get("published_at"),
-        #         collected_at=datetime.now(timezone.utc),
+        #         collected_at=utcnow(),
         #     )
         #     db.add(item)
         #     new_items.append(item)
@@ -108,7 +108,7 @@ record = CollectionRecord(
     status="completed",  # 或 "failed"
     items_found=len(raw_entries),
     items_new=len(new_items),
-    completed_at=datetime.now(timezone.utc),
+    completed_at=utcnow(),
 )
 db.add(record)
 db.commit()
@@ -116,10 +116,7 @@ db.commit()
 
 ## 第 4 步: 错误处理
 
-遵循 `scheduled_tasks.py` 中已有的退避策略:
-- 成功时: 重置 `source.consecutive_failures = 0`
-- 失败时: 递增 `source.consecutive_failures += 1`
-- 调度器会根据失败次数自动应用指数退避
+参考 `backend/app/services/collectors/__init__.py` 中的 `collect_with_retry()` 和 `classify_error()` 实现，遵循现有的错误分类与重试模式。
 
 ## 自查清单
 
@@ -128,7 +125,7 @@ db.commit()
 - [ ] `external_id` 在同一数据源内唯一（去重由 DB 约束保证）
 - [ ] `raw_data` 是合法的 JSON 字符串
 - [ ] `published_at` 是 UTC 时间或 None
-- [ ] `collected_at` 设置为 `datetime.now(timezone.utc)`
+- [ ] `collected_at` 设置为 `utcnow()`（从 `app.core.time` 导入）
 - [ ] 每次采集都创建了 CollectionRecord
 - [ ] 采集器中没有调用流水线或步骤处理器代码
 - [ ] HTTP 请求设置了合理的超时时间

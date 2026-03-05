@@ -27,7 +27,7 @@ allowed-tools: Read, Grep, Glob, Edit, Write, Bash
 - 使用 `ref()` 和 `reactive()` 管理状态
 - 使用 `onMounted()` 做初始数据加载
 - 使用 `@/api` Axios 实例发起所有 API 请求
-- 时间戳: 通过 `dayjs(ts).format('YYYY-MM-DD HH:mm')` 将 UTC 转为本地时间
+- 时间戳: 通过 `dayjs.utc(ts).local().format('YYYY-MM-DD HH:mm')` 将 UTC 转为本地时间
 - 始终处理加载态和错误态
 
 ## 页面组件模板
@@ -37,6 +37,8 @@ allowed-tools: Read, Grep, Glob, Edit, Write, Bash
 import { ref, onMounted, computed } from 'vue'
 import api from '@/api'
 import dayjs from 'dayjs'
+import utc from 'dayjs/plugin/utc'
+dayjs.extend(utc)
 
 // 状态
 const items = ref([])
@@ -69,7 +71,7 @@ async function fetchData() {
 }
 
 function formatTime(ts) {
-  return ts ? dayjs(ts).format('YYYY-MM-DD HH:mm') : '-'
+  return ts ? dayjs.utc(ts).local().format('YYYY-MM-DD HH:mm') : '-'
 }
 
 // 生命周期

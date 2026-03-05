@@ -28,7 +28,7 @@ allowed-tools: Read, Grep, Glob, Edit, Write, Bash
 - 统一响应: `{"code": 0, "data": <结果>, "message": "ok"}`
 - 分页参数: `page`（默认 1）, `page_size`（默认 20, 最大 100）
 - 错误响应: 合适的 HTTP 状态码 + `{"code": <业务码>, "data": null, "message": "..."}`
-- 异步处理器: 使用 `async def`
+- 同步处理器: 使用 `def`（因为使用同步 SQLAlchemy Session，async def 会阻塞事件循环）
 - 数据库会话: 通过 `Depends(get_db)` 注入
 
 ## 第 1 步: 创建 Pydantic Schema
@@ -79,7 +79,7 @@ router = APIRouter()
 
 
 @router.get("/")
-async def list_items(
+def list_items(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
@@ -98,7 +98,7 @@ async def list_items(
 
 
 @router.get("/{item_id}")
-async def get_item(item_id: str, db: Session = Depends(get_db)):
+def get_item(item_id: str, db: Session = Depends(get_db)):
     item = db.query(Model).get(item_id)
     if not item:
         raise HTTPException(status_code=404, detail="未找到")
@@ -106,7 +106,7 @@ async def get_item(item_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/")
-async def create_item(body: ItemCreate, db: Session = Depends(get_db)):
+def create_item(body: ItemCreate, db: Session = Depends(get_db)):
     item = Model(**body.model_dump())
     db.add(item)
     db.commit()
@@ -115,7 +115,7 @@ async def create_item(body: ItemCreate, db: Session = Depends(get_db)):
 
 
 @router.put("/{item_id}")
-async def update_item(item_id: str, body: ItemUpdate, db: Session = Depends(get_db)):
+def update_item(item_id: str, body: ItemUpdate, db: Session = Depends(get_db)):
     item = db.query(Model).get(item_id)
     if not item:
         raise HTTPException(status_code=404, detail="未找到")
@@ -126,7 +126,7 @@ async def update_item(item_id: str, body: ItemUpdate, db: Session = Depends(get_
 
 
 @router.delete("/{item_id}")
-async def delete_item(item_id: str, db: Session = Depends(get_db)):
+def delete_item(item_id: str, db: Session = Depends(get_db)):
     item = db.query(Model).get(item_id)
     if not item:
         raise HTTPException(status_code=404, detail="未找到")
@@ -143,21 +143,12 @@ from app.api.routes import $ARGUMENTS
 app.include_router($ARGUMENTS.router, prefix="/api/$ARGUMENTS", tags=["$ARGUMENTS"])
 ```
 
-## 完整 API 清单（来自 system_design.md）
+## API 端点参考
 
-```
-仪表盘:    GET /api/dashboard/stats
-数据源:    GET/POST /api/sources, GET/PUT/DELETE /api/sources/{id}
-           POST /api/sources/{id}/collect, GET /api/sources/{id}/history
-           POST /api/sources/import, GET /api/sources/export
-内容:      GET/DELETE /api/content, GET /api/content/{id}
-           POST /api/content/{id}/analyze, POST /api/content/{id}/favorite
-           PATCH /api/content/{id}/note
-流水线:    GET /api/pipelines, GET /api/pipelines/{id}
-           POST /api/pipelines/{id}/retry, POST /api/pipelines/{id}/cancel
-           POST /api/pipelines/manual
-模板:      GET/POST /api/pipeline-templates, PUT/DELETE /api/pipeline-templates/{id}
-提示词:    GET/POST /api/prompt-templates, PUT/DELETE /api/prompt-templates/{id}
-设置:      GET/PUT /api/settings, GET/PUT /api/settings/{key}
-视频:      POST /api/video/download, GET /api/video/downloads, GET /api/video/{id}/stream
+查阅 `docs/system_design.md` API 章节获取完整端点列表（以实际代码为准）。
+
+路由注册模式示例:
+```python
+# 资源 CRUD: /api/<resource>
+app.include_router(resource.router, prefix="/api/resource", tags=["resource"])
 ```

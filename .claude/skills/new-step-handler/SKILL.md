@@ -24,7 +24,7 @@ allowed-tools: Read, Grep, Glob, Edit, Write, Bash
 - 处理器接收一个 `context` 字典，包含 content_id、step_config、previous_steps 输出。
 - 处理器返回一个字典，成为 `step.output_data`（供下游步骤使用）。
 - 如果需要更新 ContentItem 字段（processed_content、analysis_result），必须打开独立的 DB session。
-- 处理器是**同步**函数，由 Huey worker 线程调用（不是 async）。
+- 处理器是**同步**函数，由 Procrastinate worker 调用（仍是同步函数，不是 async）。
 
 ## 第 1 步: 添加到 StepType 枚举
 
