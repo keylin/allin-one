@@ -1,14 +1,8 @@
 {
   "mcpServers": {
     "allin-one": {
-      "type": "stdio",
-      "command": "/Users/lin/workspace/allin-one/backend/.venv/bin/python",
-      "args": ["backend/mcp_server.py"],
-      "cwd": "/Users/lin/workspace/allin-one",
-      "env": {
-        "PYTHONUNBUFFERED": "1",
-        "DATABASE_URL": "postgresql://allinone:allinone@localhost:5432/allinone"
-      }
+      "type": "streamable-http",
+      "url": "http://192.168.1.103:8001/mcp"
     }
   }
 }

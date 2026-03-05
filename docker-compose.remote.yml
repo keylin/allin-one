@@ -153,6 +153,33 @@ services:
     networks:
       - allin-network
 
+  # MCP Server - streamable-http 模式，供远程 AI CLI 调用
+  allin-mcp:
+    image: allin-one:local
+    container_name: allin-mcp
+    restart: unless-stopped
+    command: ["python", "mcp_server.py"]
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./backend/app:/app/app:ro
+      - ./backend/mcp_server.py:/app/mcp_server.py:ro
+      - ./.env:/app/.env:ro
+    environment:
+      TZ: Asia/Shanghai
+      DATABASE_URL: postgresql://allinone:allinone@postgres:5432/allinone
+      MCP_TRANSPORT: http
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - allin-network
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "1"
+
   # Procrastinate Worker - 定时调度任务 (采集循环, 日报, 清理)
   allin-worker-scheduled:
     image: allin-one:local

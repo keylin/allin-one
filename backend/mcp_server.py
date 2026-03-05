@@ -1,7 +1,11 @@
 """Allin-One MCP Server -- 信息流数据服务
 
-STDIO 模式的独立 Python 进程，复用 backend ORM 模型，直连 PostgreSQL。
+复用 backend ORM 模型，直连 PostgreSQL。
 供 Claude Code / Cursor 等 AI CLI 查询个人信息流数据。
+
+传输模式：
+- 默认 stdio（本地开发）
+- 设置 MCP_TRANSPORT=http 时使用 streamable-http，监听 0.0.0.0:8001（远程部署）
 """
 
 import json
@@ -379,4 +383,8 @@ def toggle_favorite(
 
 
 if __name__ == "__main__":
-    mcp.run()
+    transport = os.environ.get("MCP_TRANSPORT", "stdio")
+    if transport == "http":
+        mcp.run(transport="streamable-http", host="0.0.0.0", port=8001)
+    else:
+        mcp.run()
