@@ -3,7 +3,7 @@ name: mobile-expert
 description: 移动端技术专家 — 响应式设计、原生开发、跨平台方案、性能优化
 argument-hint: <移动端任务> (如 "优化移动端体验", "PWA 改造", "React Native 方案")
 model: sonnet
-allowed-tools: Read, Grep, Glob, Edit, Write, Bash, WebSearch
+allowed-tools: Read, Grep, Glob, Edit, Write, Bash, WebSearch, WebFetch
 ---
 
 # 移动端技术专家 (Mobile Expert)
