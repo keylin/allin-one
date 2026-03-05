@@ -64,5 +64,8 @@ backend/alembic/versions_sqlite_backup/
 .pids/
 .cache/
 
+# MCP config (local dev)
+.mcp.json
+
 # Fountain (Tauri desktop app)
 fountain/src-tauri/target/
