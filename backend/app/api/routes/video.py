@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, Request, HTTPException, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import cast, func, Float
 from sqlalchemy.dialects.postgresql import JSONB
@@ -296,8 +296,6 @@ async def delete_video(content_id: str, db: Session = Depends(get_db)):
 @router.get("/{content_id}/thumbnail")
 async def get_thumbnail(content_id: str, db: Session = Depends(get_db)):
     """获取视频封面图"""
-    from fastapi.responses import FileResponse
-
     thumbnail_path = _get_thumbnail_path(content_id, db)
     if not thumbnail_path or not os.path.exists(thumbnail_path):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="封面未找到")
@@ -313,7 +311,6 @@ async def stream_video(
     db: Session = Depends(get_db),
 ):
     """视频流式传输（支持 Range 请求）"""
-    # 查找视频文件路径
     video_path = _get_video_path(content_id, db)
     if not video_path or not os.path.exists(video_path):
         raise HTTPException(
@@ -323,7 +320,6 @@ async def stream_video(
 
     file_size = os.path.getsize(video_path)
 
-    # 获取文件 MIME 类型
     mime_type, _ = mimetypes.guess_type(video_path)
     if not mime_type:
         mime_type = "video/mp4"

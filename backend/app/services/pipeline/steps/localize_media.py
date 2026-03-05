@@ -121,6 +121,9 @@ def _handle_localize_media(context: dict) -> dict:
             ydl_opts = {
                 "outtmpl": os.path.join(media_dir, "%(title)s.%(ext)s"),
                 "format": quality_map["1080p"],
+                # Prefer H.264 over HEVC: Chrome software decoding for HEVC is unreliable
+                # format_sort is a soft preference; yt-dlp falls back to other codecs if H.264 unavailable
+                "format_sort": ["codec:h264:m4a"],
                 "writesubtitles": True,
                 "writeautomaticsub": True,
                 "subtitleslangs": ["zh", "en", "zh-Hans", "zh-Hant"],
@@ -162,6 +165,9 @@ def _handle_localize_media(context: dict) -> dict:
                 "platform": platform,
                 "subtitle_path": subtitle_path or "",
                 "thumbnail_path": thumbnail_path or "",
+                # yt-dlp returns "none" string for absent streams; normalize to None
+                "vcodec": v if (v := info.get("vcodec")) and v != "none" else None,
+                "acodec": v if (v := info.get("acodec")) and v != "none" else None,
             }
 
             with SessionLocal() as db:

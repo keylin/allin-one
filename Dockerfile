@@ -15,7 +15,7 @@ RUN npm config set registry https://registry.npmmirror.com
 COPY frontend/package*.json ./
 
 # Install dependencies
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm npm ci
 
 # Copy frontend source
 COPY frontend/ ./
@@ -57,7 +57,7 @@ RUN pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ && \
 COPY backend/requirements.txt ./
 
 # Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip pip install -r requirements.txt
 
 # Copy backend code
 COPY backend/ ./

@@ -15,6 +15,7 @@ const { info } = useToast()
 
 const containerRef = ref(null)
 const hasError = ref(false)
+const errorType = ref('') // 'codec' | 'notfound' | 'unknown'
 let art = null
 let saveInterval = null
 
@@ -79,6 +80,7 @@ async function exitPIP($video) {
 function init() {
   destroy()
   hasError.value = false
+  errorType.value = ''
   if (!containerRef.value || !props.contentId) return
   try {
     art = new Artplayer({
@@ -137,9 +139,23 @@ function init() {
       }
     }
 
-    art.on('error', () => {
-      hasError.value = true
-      emit('error')
+    // 监听 Artplayer 内部 video:error 事件（原生 video element 的 error 事件）
+    // 不使用公开的 'error' 事件：Artplayer 超过最大重试次数后不再 emit 'error'，
+    // 会导致 hasError 永远不被置 true，fallback 逻辑失效
+    art.on('video:error', () => {
+      // Always update errorType (later retries may reveal the real cause)
+      const code = art.template.$video?.error?.code
+      if (code === MediaError.MEDIA_ERR_DECODE || code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
+        errorType.value = 'codec'
+      } else if (code === MediaError.MEDIA_ERR_NETWORK) {
+        errorType.value = 'notfound'
+      } else {
+        errorType.value = 'unknown'
+      }
+      if (!hasError.value) {
+        hasError.value = true
+        emit('error')
+      }
     })
     if (props.savedPosition > 0) {
       art.once('ready', () => {
@@ -202,7 +218,7 @@ function pausePlayback() {
   if (art) art.pause()
 }
 
-defineExpose({ init, destroy, getCurrentTime, isCurrentlyPlaying, pausePlayback })
+defineExpose({ init, destroy, getCurrentTime, isCurrentlyPlaying, pausePlayback, errorType })
 
 onBeforeUnmount(() => {
   destroy()
@@ -217,7 +233,7 @@ onBeforeUnmount(() => {
         <svg class="w-10 h-10 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
           <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
         </svg>
-        <p class="text-sm font-medium">视频文件未找到</p>
+        <p class="text-sm font-medium">{{ errorType === 'codec' ? '视频编码不兼容' : errorType === 'notfound' ? '视频文件未找到' : '视频播放失败' }}</p>
       </div>
     </div>
   </div>

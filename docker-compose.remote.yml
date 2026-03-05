@@ -87,6 +87,8 @@ services:
       - ${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
       - ./docker-compose.remote.yml:/project/docker-compose.remote.yml:ro
       - ./.env:/project/.env
+      - ./backend/app:/app/app:ro
+      - ./frontend/dist:/app/static:ro
     environment:
       TZ: Asia/Shanghai
       DATABASE_URL: postgresql://allinone:allinone@postgres:5432/allinone
@@ -133,6 +135,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./.env:/app/.env:ro
+      - ./backend/app:/app/app:ro
     environment:
       TZ: Asia/Shanghai
       DATABASE_URL: postgresql://allinone:allinone@postgres:5432/allinone
@@ -166,6 +169,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./.env:/app/.env:ro
+      - ./backend/app:/app/app:ro
     environment:
       TZ: Asia/Shanghai
       DATABASE_URL: postgresql://allinone:allinone@postgres:5432/allinone

@@ -5,6 +5,7 @@ import { useScrollLock } from '@/composables/useScrollLock'
 import { useContentChat } from '@/composables/useContentChat'
 import { useDoubleTapClose } from '@/composables/useDoubleTapClose'
 import { usePlayerStore } from '@/stores/player'
+import { useToast } from '@/composables/useToast'
 import ChatPanel from '@/components/feed/chat-panel.vue'
 import MarkdownIt from 'markdown-it'
 import DOMPurify from 'dompurify'
@@ -28,6 +29,7 @@ const emit = defineEmits(['close', 'favorite', 'note', 'prev', 'next'])
 useScrollLock(toRef(props, 'visible'))
 
 const playerStore = usePlayerStore()
+const { warning: toastWarning } = useToast()
 const videoPlayerRef = ref(null)
 const podcastPlayerRef = ref(null)
 
@@ -333,6 +335,15 @@ const downloadedVideo = computed(() => {
 // 本地播放失败时回退到嵌入播放
 const videoPlayerFailed = ref(false)
 
+function onVideoPlayerError() {
+  videoPlayerFailed.value = true
+  const isCodecError = videoPlayerRef.value?.errorType === 'codec'
+  const message = isCodecError
+    ? '视频编码不兼容，已切换为在线播放'
+    : '本地播放失败，已切换为在线播放'
+  toastWarning(message, { duration: 4000 })
+}
+
 // 任意视频 MediaItem（用于状态提示）
 const anyVideoMedia = computed(() => {
   return content.value?.media_items?.find(m => m.media_type === 'video')
@@ -475,7 +486,7 @@ function formatTime(t) {
               :content-id="content.id"
               :title="content.title || '视频播放'"
               :saved-position="downloadedVideo.playback_position || 0"
-              @error="videoPlayerFailed = true"
+              @error="onVideoPlayerError"
             />
             <!-- 视频：可嵌入 → iframe 播放 -->
             <IframeVideoPlayer
