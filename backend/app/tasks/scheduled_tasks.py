@@ -115,6 +115,8 @@ async def check_and_collect_sources(timestamp):
         # ---- 恢复: 卡在 running 超时的步骤重新入队 ----
         from app.models.pipeline import PipelineStep, StepStatus, PipelineStatus
 
+        # 20 分钟: localize_media 视频下载可能耗时 5-30 分钟，
+        # 超过此阈值视为 worker 崩溃，重置为 PENDING 重新入队
         stale_timeout = timedelta(minutes=20)
         stale_steps = db.query(PipelineStep).filter(
             PipelineStep.status == StepStatus.RUNNING.value,

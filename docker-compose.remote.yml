@@ -37,7 +37,7 @@ services:
     env_file:
       - ./.env
     environment:
-      TZ: Asia/Shanghai
+      TZ: Asia/Shanghai  # 不跑 cron，用本地时区即可
       NODE_ENV: production
       CACHE_TYPE: memory
       CACHE_EXPIRE: 900
@@ -60,7 +60,7 @@ services:
     ports:
       - "3001:3000"
     environment:
-      TZ: Asia/Shanghai
+      TZ: Asia/Shanghai  # 不跑 cron，用本地时区即可
       MAX_CONCURRENT_SESSIONS: 3
       CONNECTION_TIMEOUT: 30000
       MAX_QUEUE_LENGTH: 5
@@ -90,7 +90,7 @@ services:
       - ./backend/app:/app/app:ro
       - ./frontend/dist:/app/static:ro
     environment:
-      TZ: Asia/Shanghai
+      TZ: Asia/Shanghai  # 仪表盘本地日边界计算依赖此值
       DATABASE_URL: postgresql://allinone:allinone@postgres:5432/allinone
       RSSHUB_URL: http://rsshub:1200
       BROWSERLESS_URL: http://browserless:3000
@@ -139,7 +139,7 @@ services:
       - ./.env:/app/.env:ro
       - ./backend/app:/app/app:ro
     environment:
-      TZ: UTC
+      TZ: UTC  # cron 表达式基于 UTC，与 DB naive UTC 存储一致
       DATABASE_URL: postgresql://allinone:allinone@postgres:5432/allinone
       RSSHUB_URL: http://rsshub:1200
       BROWSERLESS_URL: http://browserless:3000
@@ -176,7 +176,7 @@ services:
       - ./backend/mcp_server.py:/app/mcp_server.py:ro
       - ./.env:/app/.env:ro
     environment:
-      TZ: UTC
+      TZ: UTC  # cron 表达式基于 UTC，与 DB naive UTC 存储一致
       DATABASE_URL: postgresql://allinone:allinone@postgres:5432/allinone
       DB_POOL_SIZE: 3
       DB_MAX_OVERFLOW: 2
@@ -210,7 +210,7 @@ services:
       - ./.env:/app/.env:ro
       - ./backend/app:/app/app:ro
     environment:
-      TZ: UTC
+      TZ: UTC  # cron 表达式基于 UTC，与 DB naive UTC 存储一致
       DATABASE_URL: postgresql://allinone:allinone@postgres:5432/allinone
       RSSHUB_URL: http://rsshub:1200
       BROWSERLESS_URL: http://browserless:3000
