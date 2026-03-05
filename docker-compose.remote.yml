@@ -94,6 +94,8 @@ services:
       DATABASE_URL: postgresql://allinone:allinone@postgres:5432/allinone
       RSSHUB_URL: http://rsshub:1200
       BROWSERLESS_URL: http://browserless:3000
+      DB_POOL_SIZE: 10
+      DB_MAX_OVERFLOW: 5
       LOG_LEVEL: INFO
       <<: *proxy-env
     depends_on:
@@ -137,10 +139,12 @@ services:
       - ./.env:/app/.env:ro
       - ./backend/app:/app/app:ro
     environment:
-      TZ: Asia/Shanghai
+      TZ: UTC
       DATABASE_URL: postgresql://allinone:allinone@postgres:5432/allinone
       RSSHUB_URL: http://rsshub:1200
       BROWSERLESS_URL: http://browserless:3000
+      DB_POOL_SIZE: 6
+      DB_MAX_OVERFLOW: 4
       LOG_LEVEL: INFO
       <<: *proxy-env
     depends_on:
@@ -150,6 +154,12 @@ services:
         condition: service_started
       browserless:
         condition: service_started
+    healthcheck:
+      test: [ "CMD-SHELL", "python -c \"from app.core.database import SessionLocal; from sqlalchemy import text; s=SessionLocal(); s.execute(text('SELECT 1')); s.close()\"" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     networks:
       - allin-network
 
@@ -166,8 +176,10 @@ services:
       - ./backend/mcp_server.py:/app/mcp_server.py:ro
       - ./.env:/app/.env:ro
     environment:
-      TZ: Asia/Shanghai
+      TZ: UTC
       DATABASE_URL: postgresql://allinone:allinone@postgres:5432/allinone
+      DB_POOL_SIZE: 3
+      DB_MAX_OVERFLOW: 2
       MCP_TRANSPORT: http
     depends_on:
       postgres:
@@ -198,10 +210,12 @@ services:
       - ./.env:/app/.env:ro
       - ./backend/app:/app/app:ro
     environment:
-      TZ: Asia/Shanghai
+      TZ: UTC
       DATABASE_URL: postgresql://allinone:allinone@postgres:5432/allinone
       RSSHUB_URL: http://rsshub:1200
       BROWSERLESS_URL: http://browserless:3000
+      DB_POOL_SIZE: 4
+      DB_MAX_OVERFLOW: 2
       LOG_LEVEL: INFO
       <<: *proxy-env
     depends_on:
@@ -211,6 +225,12 @@ services:
         condition: service_started
       browserless:
         condition: service_started
+    healthcheck:
+      test: [ "CMD-SHELL", "python -c \"from app.core.database import SessionLocal; from sqlalchemy import text; s=SessionLocal(); s.execute(text('SELECT 1')); s.close()\"" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     networks:
       - allin-network
 

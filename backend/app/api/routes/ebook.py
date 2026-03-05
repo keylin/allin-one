@@ -1,6 +1,5 @@
 """Ebook API — 书架管理、标注 CRUD、元数据编辑"""
 
-import json
 import logging
 import mimetypes
 import uuid
@@ -54,7 +53,7 @@ def _safe_media_path(rel_or_abs: str) -> Path:
 # ─── List ────────────────────────────────────────────────────────────────────
 
 @router.get("/list")
-async def list_ebooks(
+def list_ebooks(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     search: Optional[str] = Query(None),
@@ -90,14 +89,14 @@ async def list_ebooks(
         )
 
     if source:
-        query = query.filter(ContentItem.raw_data.ilike(f'%"source": "{_escape_like(source)}"%'))
+        query = query.filter(ContentItem.raw_data["source"].astext == source)
 
     if author:
         query = query.filter(ContentItem.author == author)
 
     if category:
-        # raw_data 是 Text 列存 JSON，用 LIKE 匹配 subjects 数组中的值
-        query = query.filter(ContentItem.raw_data.ilike(f'%"{category}"%'))
+        # raw_data 是 JSONB 列，subjects 是数组，用 @> 包含查询
+        query = query.filter(ContentItem.raw_data["subjects"].contains([category]))
 
     total = query.count()
 
@@ -117,19 +116,8 @@ async def list_ebooks(
 
     data = []
     for content, media, progress, ann_count in query.all():
-        meta = {}
-        if media.metadata_json:
-            try:
-                meta = json.loads(media.metadata_json)
-            except (json.JSONDecodeError, TypeError):
-                pass
-
-        raw = {}
-        if content.raw_data:
-            try:
-                raw = json.loads(content.raw_data)
-            except (json.JSONDecodeError, TypeError):
-                pass
+        meta = media.metadata_json if isinstance(media.metadata_json, dict) else {}
+        raw = content.raw_data if isinstance(content.raw_data, dict) else {}
 
         # 信任 DB 中的 cover_path（上传时已验证），列表接口不做磁盘 I/O
         has_cover = bool(meta.get("cover_path"))
@@ -167,7 +155,7 @@ async def list_ebooks(
 
 # 注意: 此路由必须在 /{content_id} 之前定义，否则会被参数路由拦截
 @router.get("/annotations/recent")
-async def list_recent_annotations(
+def list_recent_annotations(
     limit: int = Query(10, ge=1, le=50),
     db: Session = Depends(get_db),
 ):
@@ -183,12 +171,7 @@ async def list_recent_annotations(
 
     data = []
     for ann, content, media in rows:
-        meta = {}
-        if media.metadata_json:
-            try:
-                meta = json.loads(media.metadata_json)
-            except (json.JSONDecodeError, TypeError):
-                pass
+        meta = media.metadata_json if isinstance(media.metadata_json, dict) else {}
 
         # 信任 DB 中的 cover_path（上传时已验证），列表接口不做磁盘 I/O
         has_cover = bool(meta.get("cover_path"))
@@ -215,7 +198,7 @@ async def list_recent_annotations(
 
 
 @router.get("/annotations")
-async def list_all_annotations(
+def list_all_annotations(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     content_id: Optional[str] = Query(None, description="按书筛选"),
@@ -256,12 +239,7 @@ async def list_all_annotations(
 
     data = []
     for ann, content, media in query.all():
-        meta = {}
-        if media.metadata_json:
-            try:
-                meta = json.loads(media.metadata_json)
-            except (json.JSONDecodeError, TypeError):
-                pass
+        meta = media.metadata_json if isinstance(media.metadata_json, dict) else {}
         has_cover = bool(meta.get("cover_path"))
         cover_url = f"/api/ebook/{content.id}/cover" if has_cover else meta.get("cover_url")
 
@@ -293,7 +271,7 @@ async def list_all_annotations(
 # ─── Filters ──────────────────────────────────────────────────────────────────
 
 @router.get("/filters")
-async def get_ebook_filters(db: Session = Depends(get_db)):
+def get_ebook_filters(db: Session = Depends(get_db)):
     """获取筛选选项：distinct 作者列表 + 汇总分类列表"""
     rows = (
         db.query(ContentItem.author, ContentItem.raw_data)
@@ -309,15 +287,12 @@ async def get_ebook_filters(db: Session = Depends(get_db)):
         if author_val:
             authors.add(author_val)
         if raw_data:
-            try:
-                raw = json.loads(raw_data)
-                for s in raw.get("subjects", []):
-                    if s:
-                        categories.add(s)
-                if raw.get("source"):
-                    sources.add(raw["source"])
-            except (json.JSONDecodeError, TypeError):
-                pass
+            raw = raw_data if isinstance(raw_data, dict) else {}
+            for s in raw.get("subjects", []):
+                if s:
+                    categories.add(s)
+            if raw.get("source"):
+                sources.add(raw["source"])
 
     return {
         "code": 0,
@@ -333,7 +308,7 @@ async def get_ebook_filters(db: Session = Depends(get_db)):
 # ─── Metadata ──────────────────────────────────────────────────────────────────
 
 @router.put("/{content_id}/metadata")
-async def update_ebook_metadata(
+def update_ebook_metadata(
     content_id: str,
     body: EbookMetadataUpdate,
     db: Session = Depends(get_db),
@@ -348,12 +323,7 @@ async def update_ebook_metadata(
     if body.author is not None:
         content.author = body.author
 
-    raw = {}
-    if content.raw_data:
-        try:
-            raw = json.loads(content.raw_data)
-        except (json.JSONDecodeError, TypeError):
-            pass
+    raw = content.raw_data if isinstance(content.raw_data, dict) else {}
 
     field_map = {
         "description": body.description,
@@ -370,7 +340,7 @@ async def update_ebook_metadata(
             raw[key] = val
 
     raw["metadata_source"] = "manual"
-    content.raw_data = json.dumps(raw, ensure_ascii=False)
+    content.raw_data = raw
     content.updated_at = utcnow()
     db.commit()
 
@@ -407,12 +377,7 @@ async def search_book_metadata(
         )
     else:
         # 从 DB 自动填充结构化搜索
-        raw = {}
-        if content.raw_data:
-            try:
-                raw = json.loads(content.raw_data)
-            except (json.JSONDecodeError, TypeError):
-                pass
+        raw = content.raw_data if isinstance(content.raw_data, dict) else {}
         db_isbn = raw.get("isbn", "")
         db_title = content.title or ""
         db_author = content.author or ""
@@ -425,10 +390,8 @@ async def search_book_metadata(
     # 获取当前书的 ISBN 用于标记"已应用"
     current_isbn = None
     if content.raw_data:
-        try:
-            current_isbn = json.loads(content.raw_data).get("isbn")
-        except (json.JSONDecodeError, TypeError):
-            pass
+        raw_for_isbn = content.raw_data if isinstance(content.raw_data, dict) else {}
+        current_isbn = raw_for_isbn.get("isbn")
 
     data = []
     for r in results:
@@ -460,7 +423,7 @@ async def search_book_metadata(
 
 
 @router.post("/{content_id}/metadata/apply")
-async def apply_book_metadata(
+def apply_book_metadata(
     content_id: str,
     body: MetadataApplyRequest,
     db: Session = Depends(get_db),
@@ -475,12 +438,7 @@ async def apply_book_metadata(
     if body.author:
         content.author = body.author
 
-    raw = {}
-    if content.raw_data:
-        try:
-            raw = json.loads(content.raw_data)
-        except (json.JSONDecodeError, TypeError):
-            pass
+    raw = content.raw_data if isinstance(content.raw_data, dict) else {}
 
     if body.description:
         raw["description"] = body.description
@@ -502,7 +460,7 @@ async def apply_book_metadata(
         raw["isbn"] = isbn
 
     raw["metadata_source"] = "google_books"
-    content.raw_data = json.dumps(raw, ensure_ascii=False)
+    content.raw_data = raw
     content.updated_at = utcnow()
     db.commit()
 
@@ -512,7 +470,7 @@ async def apply_book_metadata(
 # ─── Detail / Delete ────────────────────────────────────────────────────────
 
 @router.get("/{content_id}")
-async def get_ebook_detail(content_id: str, db: Session = Depends(get_db)):
+def get_ebook_detail(content_id: str, db: Session = Depends(get_db)):
     """电子书详情"""
     content = db.get(ContentItem, content_id)
     if not content:
@@ -529,19 +487,8 @@ async def get_ebook_detail(content_id: str, db: Session = Depends(get_db)):
         ReadingProgress.content_id == content_id
     ).first()
 
-    meta = {}
-    if media.metadata_json:
-        try:
-            meta = json.loads(media.metadata_json)
-        except (json.JSONDecodeError, TypeError):
-            pass
-
-    raw = {}
-    if content.raw_data:
-        try:
-            raw = json.loads(content.raw_data)
-        except (json.JSONDecodeError, TypeError):
-            pass
+    meta = media.metadata_json if isinstance(media.metadata_json, dict) else {}
+    raw = content.raw_data if isinstance(content.raw_data, dict) else {}
 
     cover_path_val = meta.get("cover_path")
     has_cover = False
@@ -589,7 +536,7 @@ async def get_ebook_detail(content_id: str, db: Session = Depends(get_db)):
 
 
 @router.delete("/{content_id}")
-async def delete_ebook(content_id: str, db: Session = Depends(get_db)):
+def delete_ebook(content_id: str, db: Session = Depends(get_db)):
     """删除电子书: 文件 + DB 记录"""
     import shutil
 
@@ -620,7 +567,7 @@ async def delete_ebook(content_id: str, db: Session = Depends(get_db)):
 # ─── Cover ────────────────────────────────────────────────────────────────────
 
 @router.get("/{content_id}/cover")
-async def get_ebook_cover(content_id: str, db: Session = Depends(get_db)):
+def get_ebook_cover(content_id: str, db: Session = Depends(get_db)):
     """返回封面图"""
     media = db.query(MediaItem).filter(
         MediaItem.content_id == content_id,
@@ -628,10 +575,10 @@ async def get_ebook_cover(content_id: str, db: Session = Depends(get_db)):
     ).first()
 
     if media and media.metadata_json:
-        try:
-            meta = json.loads(media.metadata_json)
-            cover_path_val = meta.get("cover_path")
-            if cover_path_val:
+        meta = media.metadata_json if isinstance(media.metadata_json, dict) else {}
+        cover_path_val = meta.get("cover_path")
+        if cover_path_val:
+            try:
                 safe_cover = _safe_media_path(cover_path_val)
                 if safe_cover.is_file():
                     mime, _ = mimetypes.guess_type(str(safe_cover))
@@ -640,8 +587,8 @@ async def get_ebook_cover(content_id: str, db: Session = Depends(get_db)):
                         media_type=mime or "image/jpeg",
                         headers={"Cache-Control": "public, max-age=86400"},
                     )
-        except (json.JSONDecodeError, TypeError):
-            pass
+            except Exception:
+                pass
 
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="封面未找到")
 
@@ -664,7 +611,7 @@ def _annotation_dict(a: BookAnnotation) -> dict:
 
 
 @router.get("/{content_id}/annotations")
-async def list_annotations(
+def list_annotations(
     content_id: str,
     color: Optional[str] = Query(None),
     type: Optional[str] = Query(None),
@@ -723,7 +670,7 @@ async def list_annotations(
 
 
 @router.post("/{content_id}/annotations")
-async def create_annotation(
+def create_annotation(
     content_id: str,
     body: AnnotationCreate,
     db: Session = Depends(get_db),
@@ -755,7 +702,7 @@ async def create_annotation(
 
 
 @router.put("/{content_id}/annotations/{ann_id}")
-async def update_annotation(
+def update_annotation(
     content_id: str,
     ann_id: str,
     body: AnnotationUpdate,
@@ -779,7 +726,7 @@ async def update_annotation(
 
 
 @router.delete("/{content_id}/annotations/{ann_id}")
-async def delete_annotation(
+def delete_annotation(
     content_id: str,
     ann_id: str,
     db: Session = Depends(get_db),

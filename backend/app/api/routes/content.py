@@ -36,35 +36,31 @@ def _extract_summary_fields(item: ContentItem) -> dict:
     result = {"summary_text": None, "tags": None, "sentiment": None}
 
     if item.analysis_result:
-        try:
-            parsed = json.loads(item.analysis_result)
-            if isinstance(parsed, dict):
-                summary = parsed.get("summary") or parsed.get("content", "")
-                result["summary_text"] = summary[:200] if summary else None
-                result["tags"] = parsed.get("tags")
-                result["sentiment"] = parsed.get("sentiment")
-        except (json.JSONDecodeError, TypeError):
+        parsed = item.analysis_result if isinstance(item.analysis_result, dict) else None
+        if parsed is not None:
+            summary = parsed.get("summary") or parsed.get("content", "")
+            result["summary_text"] = summary[:200] if summary else None
+            result["tags"] = parsed.get("tags")
+            result["sentiment"] = parsed.get("sentiment")
+        else:
             result["summary_text"] = str(item.analysis_result)[:200]
 
     # Fallback: 从 raw_data 提取（summary → description → content[0].value）
     if not result["summary_text"] and item.raw_data:
-        try:
-            raw = json.loads(item.raw_data)
-            if isinstance(raw, dict):
-                fallback = raw.get("summary") or raw.get("description", "")
-                # 再回退到 RSS content 数组
-                if not fallback:
-                    raw_content = raw.get("content")
-                    if isinstance(raw_content, list) and raw_content:
-                        first = raw_content[0]
-                        if isinstance(first, dict):
-                            fallback = first.get("value", "")
-                        elif isinstance(first, str):
-                            fallback = first
-                fallback = re.sub(r'<[^>]+>', '', str(fallback)).strip()
-                result["summary_text"] = fallback[:200] if fallback else None
-        except (json.JSONDecodeError, TypeError):
-            pass
+        raw = item.raw_data if isinstance(item.raw_data, dict) else None
+        if isinstance(raw, dict):
+            fallback = raw.get("summary") or raw.get("description", "")
+            # 再回退到 RSS content 数组
+            if not fallback:
+                raw_content = raw.get("content")
+                if isinstance(raw_content, list) and raw_content:
+                    first = raw_content[0]
+                    if isinstance(first, dict):
+                        fallback = first.get("value", "")
+                    elif isinstance(first, str):
+                        fallback = first
+            fallback = re.sub(r'<[^>]+>', '', str(fallback)).strip()
+            result["summary_text"] = fallback[:200] if fallback else None
 
     return result
 
@@ -95,12 +91,9 @@ def _build_media_summaries(media_items) -> list[dict]:
         thumbnail = None
         duration = None
         if mi.metadata_json:
-            try:
-                meta = json.loads(mi.metadata_json)
-                thumbnail = meta.get("thumbnail_path")
-                duration = meta.get("duration")
-            except (json.JSONDecodeError, TypeError):
-                pass
+            meta = mi.metadata_json if isinstance(mi.metadata_json, dict) else {}
+            thumbnail = meta.get("thumbnail_path")
+            duration = meta.get("duration")
         summaries.append(MediaItemSummary(
             id=mi.id,
             media_type=mi.media_type,
@@ -117,26 +110,6 @@ def _build_media_summaries(media_items) -> list[dict]:
     return summaries
 
 
-def _content_to_response(item: ContentItem, db: Session) -> dict:
-    """将 ORM 对象转为响应 dict，解析 source_name 和摘要字段"""
-    data = ContentResponse.model_validate(item).model_dump(exclude={"media_items"})
-    source = db.get(SourceConfig, item.source_id)
-    data["source_name"] = source.name if source else None
-    data.update(_extract_summary_fields(item))
-    data["media_items"] = _build_media_summaries(item.media_items)
-    media_types_set = {mi.media_type for mi in item.media_items}
-    if "ebook" in media_types_set:
-        data["content_type"] = "ebook"
-    elif "video" in media_types_set:
-        data["content_type"] = "video"
-    elif "audio" in media_types_set:
-        data["content_type"] = "audio"
-    elif "image" in media_types_set:
-        data["content_type"] = "image"
-    else:
-        data["content_type"] = "text"
-    return data
-
 
 # ---- CRUD ----
 
@@ -152,7 +125,7 @@ SORT_COLUMNS = {
 
 
 @router.get("")
-async def list_content(
+def list_content(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     source_id: str | None = Query(None),
@@ -161,7 +134,7 @@ async def list_content(
     has_audio: bool | None = Query(None, description="筛选包含音频的内容"),
     has_image: bool | None = Query(None, description="筛选包含图片的内容"),
     has_ebook: bool | None = Query(None, description="筛选包含电子书的内容"),
-    q: str | None = Query(None, description="搜索标题"),
+    q: str | None = Query(None, max_length=200, description="搜索标题"),
     is_favorited: bool | None = Query(None),
     is_unread: bool | None = Query(None, description="未读过滤: true=未读, false=已读"),
     date_from: str | None = Query(None, description="起始日期 YYYY-MM-DD"),
@@ -269,11 +242,9 @@ async def list_content(
             pass
 
     if tag:
-        from sqlalchemy import cast
-        from sqlalchemy.dialects.postgresql import JSONB
-        # analysis_result 是 Text 列存 JSON，需 CAST 为 JSONB 才能用 JSON 操作符
+        # analysis_result 已是 JSONB 列；tags 是字符串数组，用 @> 精确匹配数组成员
         query = query.filter(
-            cast(ContentItem.analysis_result, JSONB)["tags"].astext.contains(tag)
+            ContentItem.analysis_result["tags"].contains([tag])
         )
 
     if duplicates_only:
@@ -396,11 +367,8 @@ async def list_content(
         data["reading_time_min"] = _estimate_reading_time(item)
         # audio_duration: 从 raw_data.itunes.duration 提取（播客卡片显示）
         if any(mi.media_type == "audio" for mi in mi_list) and item.raw_data:
-            try:
-                raw = json.loads(item.raw_data)
-                data["audio_duration"] = raw.get("itunes", {}).get("duration")
-            except (json.JSONDecodeError, TypeError):
-                pass
+            raw = item.raw_data if isinstance(item.raw_data, dict) else {}
+            data["audio_duration"] = raw.get("itunes", {}).get("duration")
         # 重复折叠信息
         data["duplicate_count"] = dup_count_map.get(item.id, 0)
         data["duplicate_sources"] = dup_sources_map.get(item.id, [])
@@ -417,7 +385,7 @@ async def list_content(
 
 
 @router.post("/delete-all")
-async def delete_all_content(db: Session = Depends(get_db)):
+def delete_all_content(db: Session = Depends(get_db)):
     """删除全部内容（级联删除关联流水线和媒体）"""
     total = db.query(func.count(ContentItem.id)).scalar()
     if total == 0:
@@ -452,7 +420,7 @@ async def delete_all_content(db: Session = Depends(get_db)):
 
 
 @router.post("/batch-delete")
-async def batch_delete(body: ContentBatchDelete, db: Session = Depends(get_db)):
+def batch_delete(body: ContentBatchDelete, db: Session = Depends(get_db)):
     """批量删除内容（级联删除关联流水线）"""
     content_ids = body.ids  # 保存，后续用于删除物理文件
 
@@ -501,7 +469,7 @@ async def batch_delete(body: ContentBatchDelete, db: Session = Depends(get_db)):
 
 
 @router.post("/batch-read")
-async def batch_mark_read(body: ContentBatchDelete, db: Session = Depends(get_db)):
+def batch_mark_read(body: ContentBatchDelete, db: Session = Depends(get_db)):
     """批量标记已读"""
     updated = db.query(ContentItem).filter(
         ContentItem.id.in_(body.ids),
@@ -513,7 +481,7 @@ async def batch_mark_read(body: ContentBatchDelete, db: Session = Depends(get_db
 
 
 @router.post("/batch-unfavorite")
-async def batch_unfavorite(body: ContentBatchDelete, db: Session = Depends(get_db)):
+def batch_unfavorite(body: ContentBatchDelete, db: Session = Depends(get_db)):
     """批量取消收藏"""
     now = utcnow()
     updated = db.query(ContentItem).filter(
@@ -562,7 +530,7 @@ class MarkAllReadRequest(BaseModel):
 
 
 @router.post("/mark-all-read")
-async def mark_all_read(body: MarkAllReadRequest, db: Session = Depends(get_db)):
+def mark_all_read(body: MarkAllReadRequest, db: Session = Depends(get_db)):
     """将筛选条件下的所有未读内容标记为已读"""
     query = db.query(ContentItem).filter(
         (ContentItem.view_count == 0) | (ContentItem.view_count.is_(None)),
@@ -629,7 +597,7 @@ async def mark_all_read(body: MarkAllReadRequest, db: Session = Depends(get_db))
 
 
 @router.get("/stats")
-async def content_stats(db: Session = Depends(get_db)):
+def content_stats(db: Session = Depends(get_db)):
     """内容库统计：按状态分组 + 今日新增 + 已读/未读"""
     # 计算今日边界（容器时区）
     today_start, today_end = get_local_day_boundaries()
@@ -725,12 +693,12 @@ async def submit_content(body: ContentSubmit, db: Session = Depends(get_db)):
     external_id = hashlib.md5(hash_input.encode()).hexdigest()
 
     # 构建 raw_data
-    raw_data = json.dumps({
+    raw_data = {
         "title": body.title,
         "content": body.content,
         "url": body.url,
         "submitted_at": utcnow().isoformat(),
-    }, ensure_ascii=False)
+    }
 
     content = ContentItem(
         source_id=source.id,
@@ -820,12 +788,12 @@ async def upload_content(
     external_id = hashlib.md5(f"{filename}:{file_size}:{utcnow().isoformat()}".encode()).hexdigest()
 
     # 构建 raw_data
-    raw_data = json.dumps({
+    raw_data = {
         "file_path": str(file_path),
         "filename": filename,
         "file_size": file_size,
         "mime_type": mime_type,
-    }, ensure_ascii=False)
+    }
 
     content = ContentItem(
         id=content_id,
@@ -850,10 +818,10 @@ async def upload_content(
             local_path=str(file_path),
             filename=filename,
             status="downloaded",
-            metadata_json=json.dumps({
+            metadata_json={
                 "file_size": file_size,
                 "mime_type": mime_type,
-            }),
+            },
         )
         db.add(media_item)
         db.flush()
@@ -901,7 +869,7 @@ async def upload_content(
 # ---- 单个内容操作（参数路径必须在字面路径之后） ----
 
 @router.get("/{content_id}")
-async def get_content(content_id: str, db: Session = Depends(get_db)):
+def get_content(content_id: str, db: Session = Depends(get_db)):
     """获取内容详情（含三层内容）"""
     item = db.query(ContentItem).options(
         noload(ContentItem.media_items)
@@ -1052,7 +1020,7 @@ async def enrich_content_compare(content_id: str, db: Session = Depends(get_db))
 
 
 @router.post("/{content_id}/enrich/apply")
-async def apply_enrichment(content_id: str, body: EnrichApplyRequest, db: Session = Depends(get_db)):
+def apply_enrichment(content_id: str, body: EnrichApplyRequest, db: Session = Depends(get_db)):
     """应用选中的富化结果到 processed_content"""
     item = db.get(ContentItem, content_id)
     if not item:
@@ -1111,19 +1079,16 @@ async def _trigger_media_pipeline(content: ContentItem, db: Session) -> None:
     # 无任何 MediaItem，但 HTML 中可能有 <img> → 也触发 localize_media 扫描
     if not should_trigger and downloaded_count == 0:
         if content.raw_data:
-            try:
-                raw = json.loads(content.raw_data)
-                html = ""
-                contents = raw.get("content", [])
-                if isinstance(contents, list) and contents:
-                    first = contents[0]
-                    html = first.get("value", "") if isinstance(first, dict) else str(first)
-                if not html:
-                    html = raw.get("summary", "")
-                if "<img" in html.lower():
-                    should_trigger = True
-            except (json.JSONDecodeError, TypeError):
-                pass
+            raw = content.raw_data if isinstance(content.raw_data, dict) else {}
+            html = ""
+            contents = raw.get("content", [])
+            if isinstance(contents, list) and contents:
+                first = contents[0]
+                html = first.get("value", "") if isinstance(first, dict) else str(first)
+            if not html:
+                html = raw.get("summary", "")
+            if "<img" in html.lower():
+                should_trigger = True
 
     if should_trigger:
         # 查找"媒体下载"内置模板
@@ -1177,7 +1142,7 @@ async def toggle_favorite(content_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/{content_id}/view")
-async def record_view(content_id: str, db: Session = Depends(get_db)):
+def record_view(content_id: str, db: Session = Depends(get_db)):
     """记录查看次数 (view_count += 1)"""
     item = db.get(ContentItem, content_id)
     if not item:
@@ -1191,7 +1156,7 @@ async def record_view(content_id: str, db: Session = Depends(get_db)):
 
 
 @router.patch("/{content_id}/note")
-async def update_note(content_id: str, body: ContentNoteUpdate, db: Session = Depends(get_db)):
+def update_note(content_id: str, body: ContentNoteUpdate, db: Session = Depends(get_db)):
     """更新用户笔记"""
     item = db.get(ContentItem, content_id)
     if not item:
@@ -1211,7 +1176,7 @@ class ChatHistoryUpdate(BaseModel):
 
 
 @router.get("/{content_id}/chat/history")
-async def get_chat_history(content_id: str, db: Session = Depends(get_db)):
+def get_chat_history(content_id: str, db: Session = Depends(get_db)):
     """获取内容的对话历史"""
     item = db.get(ContentItem, content_id)
     if not item:
@@ -1219,22 +1184,19 @@ async def get_chat_history(content_id: str, db: Session = Depends(get_db)):
 
     messages = []
     if item.chat_history:
-        try:
-            messages = json.loads(item.chat_history)
-        except (json.JSONDecodeError, TypeError):
-            messages = []
+        messages = item.chat_history if isinstance(item.chat_history, list) else []
 
     return {"code": 0, "data": {"messages": messages}, "message": "ok"}
 
 
 @router.put("/{content_id}/chat/history")
-async def save_chat_history(content_id: str, body: ChatHistoryUpdate, db: Session = Depends(get_db)):
+def save_chat_history(content_id: str, body: ChatHistoryUpdate, db: Session = Depends(get_db)):
     """保存完整对话历史（全量覆盖）"""
     item = db.get(ContentItem, content_id)
     if not item:
         return error_response(404, "Content not found")
 
-    item.chat_history = json.dumps(body.messages, ensure_ascii=False)
+    item.chat_history = body.messages
     item.updated_at = utcnow()
     db.commit()
 
@@ -1242,7 +1204,7 @@ async def save_chat_history(content_id: str, body: ChatHistoryUpdate, db: Sessio
 
 
 @router.delete("/{content_id}/chat/history")
-async def delete_chat_history(content_id: str, db: Session = Depends(get_db)):
+def delete_chat_history(content_id: str, db: Session = Depends(get_db)):
     """清除对话历史"""
     item = db.get(ContentItem, content_id)
     if not item:
@@ -1262,7 +1224,7 @@ class ChatRequest(BaseModel):
 
 
 @router.post("/{content_id}/chat")
-async def chat_with_content(content_id: str, body: ChatRequest, db: Session = Depends(get_db)):
+def chat_with_content(content_id: str, body: ChatRequest, db: Session = Depends(get_db)):
     """与内容进行 AI 对话（SSE 流式返回）"""
     from app.services.chat_service import build_chat_context, stream_chat_response
 

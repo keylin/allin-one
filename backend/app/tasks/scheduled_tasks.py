@@ -115,7 +115,7 @@ async def check_and_collect_sources(timestamp):
         # ---- 恢复: 卡在 running 超时的步骤重新入队 ----
         from app.models.pipeline import PipelineStep, StepStatus, PipelineStatus
 
-        stale_timeout = timedelta(minutes=30)
+        stale_timeout = timedelta(minutes=20)
         stale_steps = db.query(PipelineStep).filter(
             PipelineStep.status == StepStatus.RUNNING.value,
             PipelineStep.started_at < now - stale_timeout,
@@ -182,27 +182,26 @@ async def check_and_collect_sources(timestamp):
             )
 
 
-@proc_app.periodic(cron="0 22 * * *")
+@proc_app.periodic(cron="0 14 * * *")  # 14:00 UTC = 22:00 CST
 @proc_app.task(queue="scheduled", queueing_lock="daily_report")
 async def trigger_daily_report(timestamp):
-    """日报 — 每天 22:00"""
+    """日报 — 每天 22:00 北京时间"""
     from app.tasks.report_tasks import generate_daily_report
     await generate_daily_report()
 
 
-@proc_app.periodic(cron="0 9 * * 1")
+@proc_app.periodic(cron="0 1 * * 1")  # 01:00 UTC Mon = 09:00 CST Mon
 @proc_app.task(queue="scheduled", queueing_lock="weekly_report")
 async def trigger_weekly_report(timestamp):
-    """周报 — 每周一 09:00"""
+    """周报 — 每周一 09:00 北京时间"""
     from app.tasks.report_tasks import generate_weekly_report
     await generate_weekly_report()
 
 
-@proc_app.periodic(cron="0 4 * * *")
+@proc_app.periodic(cron="0 20 * * *")  # 20:00 UTC = 04:00 CST next day
 @proc_app.task(queue="scheduled", queueing_lock="analyze_periodicity")
 async def analyze_source_periodicity(timestamp):
-    """周期性分析任务 — 每天凌晨 4 点分析所有活跃源的更新模式"""
-    import json
+    """周期性分析任务 — 每天凌晨 4 点(北京)分析所有活跃源的更新模式"""
     from app.core.database import SessionLocal
     from app.core.time import utcnow
     from app.models.content import SourceConfig
@@ -228,7 +227,7 @@ async def analyze_source_periodicity(timestamp):
 
                 # 保存结果
                 if periodicity["pattern_type"] != "none":
-                    source.periodicity_data = json.dumps(periodicity)
+                    source.periodicity_data = periodicity
                     logger.info(
                         f"Periodicity detected: {source.name} - {periodicity['pattern_type']} "
                         f"(confidence={periodicity['confidence']:.2f})"
@@ -330,8 +329,7 @@ async def cleanup_expired_content():
     from app.core.database import SessionLocal
     from app.core.config import settings
     from app.core.time import utcnow
-    from app.models.content import SourceConfig, ContentItem, MediaItem
-    from app.models.pipeline import PipelineExecution, PipelineStep
+    from app.models.content import SourceConfig, ContentItem
     from app.models.system_setting import SystemSetting
 
     with SessionLocal() as db:
@@ -355,39 +353,23 @@ async def cleanup_expired_content():
             retention = source.retention_days if source.retention_days and source.retention_days > 0 else global_retention
             cutoff = now - timedelta(days=retention)
 
-            # 查找过期且未保护的内容
-            expired_items = db.query(ContentItem).filter(
-                ContentItem.source_id == source.id,
-                ContentItem.collected_at < cutoff,
-                ContentItem.is_favorited == False,
-                ContentItem.user_note.is_(None),
-            ).all()
+            # 查找过期且未保护的内容 ID（仅查 ID 减少内存）
+            expired_ids = [
+                cid for (cid,) in db.query(ContentItem.id).filter(
+                    ContentItem.source_id == source.id,
+                    ContentItem.collected_at < cutoff,
+                    ContentItem.is_favorited == False,
+                    ContentItem.user_note.is_(None),
+                ).all()
+            ]
 
-            if not expired_items:
+            if not expired_ids:
                 continue
 
-            item_ids = [item.id for item in expired_items]
-
-            # 级联删除: steps → executions → media_items → items
-            execution_ids = [
-                eid for (eid,) in db.query(PipelineExecution.id)
-                .filter(PipelineExecution.content_id.in_(item_ids))
-                .all()
-            ]
-            if execution_ids:
-                db.query(PipelineStep).filter(
-                    PipelineStep.pipeline_id.in_(execution_ids)
-                ).delete(synchronize_session=False)
-                db.query(PipelineExecution).filter(
-                    PipelineExecution.id.in_(execution_ids)
-                ).delete(synchronize_session=False)
-
-            db.query(MediaItem).filter(
-                MediaItem.content_id.in_(item_ids)
-            ).delete(synchronize_session=False)
-
+            # 直接删除 content_items，DB CASCADE 自动级联删除
+            # media_items, pipeline_executions, pipeline_steps
             deleted = db.query(ContentItem).filter(
-                ContentItem.id.in_(item_ids)
+                ContentItem.id.in_(expired_ids)
             ).delete(synchronize_session=False)
 
             db.commit()
@@ -395,7 +377,7 @@ async def cleanup_expired_content():
             # 清理媒体文件
             media_base = Path(settings.MEDIA_DIR)
             audio_base = media_base / "audio"
-            for item_id in item_ids:
+            for item_id in expired_ids:
                 for d in [media_base / item_id, audio_base / item_id]:
                     if d.is_dir():
                         shutil.rmtree(d, ignore_errors=True)
@@ -418,7 +400,7 @@ async def cleanup_records():
     from app.core.database import SessionLocal
     from app.core.time import utcnow
     from app.models.system_setting import SystemSetting
-    from app.models.pipeline import PipelineExecution, PipelineStep, PipelineStatus
+    from app.models.pipeline import PipelineExecution, PipelineStatus
     from app.models.content import CollectionRecord
 
     with SessionLocal() as db:
@@ -458,9 +440,7 @@ async def cleanup_records():
                 ).all()
             ]
             if exec_ids:
-                db.query(PipelineStep).filter(
-                    PipelineStep.pipeline_id.in_(exec_ids)
-                ).delete(synchronize_session=False)
+                # CASCADE 自动删除 pipeline_steps
                 deleted = db.query(PipelineExecution).filter(
                     PipelineExecution.id.in_(exec_ids)
                 ).delete(synchronize_session=False)
@@ -475,9 +455,7 @@ async def cleanup_records():
                 ).order_by(PipelineExecution.created_at.desc()).offset(exec_max_count).all()
             ]
             if overflow_ids:
-                db.query(PipelineStep).filter(
-                    PipelineStep.pipeline_id.in_(overflow_ids)
-                ).delete(synchronize_session=False)
+                # CASCADE 自动删除 pipeline_steps
                 deleted = db.query(PipelineExecution).filter(
                     PipelineExecution.id.in_(overflow_ids)
                 ).delete(synchronize_session=False)

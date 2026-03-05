@@ -1070,17 +1070,33 @@ EOF
 
 ### 9.2 健康检查
 
-```python
-@app.get("/health")
-async def health_check():
-    return {
-        "status": "ok",
-        "db": await check_db_connection(),
-        "rsshub": await check_rsshub(),
-        "browserless": await check_browserless(),
-        "worker": await check_worker_status(),
+`GET /health` 返回综合健康状态，`status` 由 database/rsshub/browserless 三项共同决定：
+
+```json
+{
+  "status": "ok | degraded",
+  "checks": {
+    "database":    "ok | error: ...",
+    "rsshub":      "ok | unreachable: ...",
+    "browserless": "ok | unreachable: ...",
+    "queue_depth": {
+      "pipeline":  {"todo": 0, "doing": 0},
+      "scheduled": {"todo": 0, "doing": 0}
+    },
+    "disk": {
+      "total_gb": 50.0, "used_gb": 12.3,
+      "free_gb": 37.7,  "used_pct": 24.6
     }
+  }
+}
 ```
+
+`queue_depth` 和 `disk` 为观测字段，不参与 `status` 降级判断。
+
+**容器 TZ 策略**（`docker-compose.remote.yml`）:
+- `worker-pipeline` / `worker-scheduled` / `mcp`: `TZ=UTC`（cron 表达式基于 UTC，与数据库 naive UTC 存储一致）
+- `allin-one` / `rsshub` / `browserless`: `TZ=Asia/Shanghai`（日志时间戳、仪表盘本地日边界计算使用北京时间）
+- `postgres`: `TZ=UTC`（数据库服务器时区必须为 UTC）
 
 ### 9.3 数据备份
 

@@ -29,6 +29,13 @@ async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     # Startup
     logger.info("Starting Allin-One ...")
+
+    # 安全配置检查
+    if not settings.API_KEY:
+        logger.warning("API_KEY is empty — API authentication is DISABLED")
+    if settings.CORS_ORIGINS == "*":
+        logger.warning("CORS_ORIGINS is '*' — all origins allowed")
+
     init_db()
 
     # 写入内置流水线模板
@@ -126,7 +133,42 @@ async def health_check():
     except Exception as e:
         checks["browserless"] = f"unreachable: {type(e).__name__}"
 
-    all_ok = all(v == "ok" for v in checks.values())
+    # Procrastinate queue depth
+    try:
+        with SessionLocal() as db:
+            rows = db.execute(text(
+                "SELECT queue_name, status, COUNT(*) AS cnt "
+                "FROM procrastinate_jobs "
+                "WHERE status IN ('todo', 'doing') "
+                "GROUP BY queue_name, status"
+            )).fetchall()
+            queue_stats: dict[str, dict[str, int]] = {}
+            for queue_name, status, cnt in rows:
+                queue_stats.setdefault(queue_name, {})[status] = cnt
+            # 确保两个标准队列始终存在，且 todo/doing 两个字段都有值
+            for q in ("pipeline", "scheduled"):
+                queue_stats.setdefault(q, {})
+                queue_stats[q].setdefault("todo", 0)
+                queue_stats[q].setdefault("doing", 0)
+            checks["queue_depth"] = queue_stats
+    except Exception as e:
+        checks["queue_depth"] = f"error: {e}"
+
+    # Disk usage (data/ directory)
+    try:
+        import shutil
+        data_path = settings.DATA_DIR if hasattr(settings, "DATA_DIR") else "/app/data"
+        usage = shutil.disk_usage(data_path)
+        checks["disk"] = {
+            "total_gb": round(usage.total / (1024**3), 1),
+            "used_gb": round(usage.used / (1024**3), 1),
+            "free_gb": round(usage.free / (1024**3), 1),
+            "used_pct": round(usage.used / usage.total * 100, 1),
+        }
+    except Exception as e:
+        checks["disk"] = f"error: {e}"
+
+    all_ok = all(v == "ok" for v in (checks.get("database"), checks.get("rsshub"), checks.get("browserless")))
     return {"status": "ok" if all_ok else "degraded", "checks": checks}
 
 # API Routes
