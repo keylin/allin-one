@@ -563,6 +563,7 @@ function handleLeftScroll(e) {
   scrollRafId = requestAnimationFrame(() => {
     scrollRafId = null
     const el = e.target
+    if (!el.isConnected) return
     const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight
     if (distanceToBottom < 200) {
       loadMore()
