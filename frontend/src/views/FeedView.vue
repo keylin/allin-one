@@ -195,7 +195,7 @@ const {
 })
 
 // --- Auto-read composable (pass contentStats for optimistic update) ---
-const { markAsRead, handleScrollBottom, reset: resetAutoRead } = useAutoRead({
+const { markAsRead, reset: resetAutoRead } = useAutoRead({
   items,
   leftPanelRef,
   loadStats,
@@ -556,16 +556,18 @@ async function handleMarkAllRead() {
   }
 }
 
-// --- Left panel scroll → infinite load + auto-read ---
+// --- Left panel scroll → infinite load (RAF throttled) ---
+let scrollRafId = null
 function handleLeftScroll(e) {
-  const el = e.target
-  const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-
-  if (distanceToBottom < 200) {
-    loadMore()
-  }
-
-  handleScrollBottom(distanceToBottom)
+  if (scrollRafId) return
+  scrollRafId = requestAnimationFrame(() => {
+    scrollRafId = null
+    const el = e.target
+    const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+    if (distanceToBottom < 200) {
+      loadMore()
+    }
+  })
 }
 
 // --- [5] Detail panel navigation ---
@@ -757,6 +759,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  if (scrollRafId) cancelAnimationFrame(scrollRafId)
   clearTimeout(searchTimer)
   stopStatsPolling()
   cancelChat()

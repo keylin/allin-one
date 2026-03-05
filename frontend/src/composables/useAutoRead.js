@@ -25,7 +25,7 @@ export function useAutoRead({ items, leftPanelRef, loadStats, contentStats }) {
   // [D] O(1) 查找：用 Map 替代 find
   const itemMap = computed(() => new Map(items.value.map(i => [i.id, i])))
 
-  // itemId → DOM element 映射，用于标记后 unobserve 和滚动到底部检测
+  // itemId → DOM element 映射，用于标记后 unobserve
   const elementMap = new Map()
 
   // --- IntersectionObserver 回调 ---
@@ -198,29 +198,6 @@ export function useAutoRead({ items, leftPanelRef, loadStats, contentStats }) {
     checkAndActivateAutoRead()
   }, 300)
 
-  // [A] 左栏滚动到底部时标记所有可见的未读卡片
-  function handleScrollBottom(distanceToBottom) {
-    if (!hasScrolled.value || distanceToBottom >= 100) return
-
-    const container = leftPanelRef.value
-    if (!container) return
-
-    const containerRect = container.getBoundingClientRect()
-
-    for (const item of items.value) {
-      if ((item.view_count || 0) > 0) continue
-
-      const el = elementMap.get(item.id)
-      if (!el) continue
-
-      const rect = el.getBoundingClientRect()
-      // 卡片在容器可视区域内
-      if (rect.bottom > containerRect.top && rect.top < containerRect.bottom) {
-        markAsRead(item.id)
-      }
-    }
-  }
-
   // 重置观察状态（下拉刷新、容器可见性恢复等场景）
   function reset() {
     disconnect()
@@ -255,7 +232,6 @@ export function useAutoRead({ items, leftPanelRef, loadStats, contentStats }) {
     hasScrolled,
     pendingReadIds,
     markAsRead,
-    handleScrollBottom,
     reset,
   }
 }
