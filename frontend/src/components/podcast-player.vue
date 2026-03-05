@@ -181,6 +181,20 @@ onBeforeUnmount(() => {
     audioRef.value.src = ''
   }
 })
+
+function getCurrentTime() {
+  return audioRef.value?.currentTime ?? 0
+}
+
+function isCurrentlyPlaying() {
+  return isPlaying.value
+}
+
+function pausePlayback() {
+  if (audioRef.value) audioRef.value.pause()
+}
+
+defineExpose({ getCurrentTime, isCurrentlyPlaying, pausePlayback })
 </script>
 
 <template>

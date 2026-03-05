@@ -189,6 +189,32 @@ export const useSourcesStore = defineStore('sources', () => {
 })
 ```
 
+### Player Store（全局单例）
+
+`stores/player.js` 管理后台播放状态。与普通 Store 的区别：
+- Audio 实例放在 **module-level 变量**（非 `ref()`），避免 Vue 代理 DOM 对象的性能问题
+- 关闭弹窗时通过 `handoff()` 将播放控制从组件内播放器移交到全局 Audio，底部显示 `MiniPlayerBar`
+- `handoffGen` 计数器防止 async handoff 并发撕裂
+
+## 全局组件
+
+`MiniPlayerBar` 挂载在 `App.vue`，通过 `playerStore.displayMode` 控制显隐。显示时 `.main-content` 自动加 `has-mini-player` class（68px padding-bottom），影响所有页面布局。
+
+## defineExpose 跨层通信
+
+当父组件需要**命令式访问**子组件内部状态时（如关闭弹窗时提取播放进度），使用 `ref` + `defineExpose`：
+
+```javascript
+// 子组件
+defineExpose({ getCurrentTime, isCurrentlyPlaying, pausePlayback })
+
+// 父组件
+const playerRef = ref(null)
+const time = playerRef.value?.getCurrentTime()
+```
+
+已使用: `video-player.vue`、`podcast-player.vue`（供 `content-detail-modal.vue` 在关闭时提取播放进度）
+
 ## 时间戳处理
 
 - 后端存 naive UTC 时间戳（无时区信息），序列化为 `"2026-02-14T10:00:00"` 格式

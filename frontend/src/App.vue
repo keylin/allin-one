@@ -2,6 +2,8 @@
 import { RouterView, RouterLink, useRoute, useRouter } from 'vue-router'
 import { ref, watch, computed } from 'vue'
 import ToastNotification from '@/components/toast-notification.vue'
+import MiniPlayerBar from '@/components/mini-player-bar.vue'
+import { usePlayerStore } from '@/stores/player'
 
 const route = useRoute()
 const router = useRouter()
@@ -46,6 +48,9 @@ const isActive = (path) => route.path === path
 const isLoginPage = computed(() => route.path === '/login')
 const hasApiKey = computed(() => !!localStorage.getItem('api_key'))
 
+const playerStore = usePlayerStore()
+const showMiniPlayer = computed(() => playerStore.displayMode === 'mini')
+
 function handleLogout() {
   localStorage.removeItem('api_key')
   router.push('/login')
@@ -61,6 +66,9 @@ watch(() => route.path, () => {
   <div class="app-root">
     <!-- Global Toast Notifications -->
     <ToastNotification />
+
+    <!-- Global Mini Player Bar -->
+    <MiniPlayerBar />
 
     <!-- Login 页面：不显示导航 -->
     <template v-if="isLoginPage">
@@ -172,7 +180,7 @@ watch(() => route.path, () => {
       </aside>
 
       <!-- Main Content -->
-      <main class="main-content">
+      <main class="main-content" :class="{ 'has-mini-player': showMiniPlayer }">
         <RouterView v-slot="{ Component }">
           <Transition name="page" mode="out-in">
             <component :is="Component" :key="$route.path" />
@@ -448,6 +456,11 @@ watch(() => route.path, () => {
 .main-content {
   flex: 1;
   overflow: hidden;
+}
+
+.main-content.has-mini-player {
+  /* 给可滚动内容留出迷你播放条的高度（约 68px） */
+  padding-bottom: 68px;
 }
 
 /* ===== Media Queries ===== */

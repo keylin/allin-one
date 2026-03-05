@@ -4,6 +4,7 @@ import { getContent, analyzeContent } from '@/api/content'
 import { useScrollLock } from '@/composables/useScrollLock'
 import { useContentChat } from '@/composables/useContentChat'
 import { useDoubleTapClose } from '@/composables/useDoubleTapClose'
+import { usePlayerStore } from '@/stores/player'
 import ChatPanel from '@/components/feed/chat-panel.vue'
 import MarkdownIt from 'markdown-it'
 import DOMPurify from 'dompurify'
@@ -11,6 +12,7 @@ import dayjs from 'dayjs'
 import { formatTimeFull } from '@/utils/time'
 import PodcastPlayer from '@/components/podcast-player.vue'
 import VideoPlayer from '@/components/video-player.vue'
+import IframeVideoPlayer from '@/components/iframe-video-player.vue'
 import ImageLightbox from '@/components/image-lightbox.vue'
 
 const props = defineProps({
@@ -24,6 +26,10 @@ const props = defineProps({
 
 const emit = defineEmits(['close', 'favorite', 'note', 'prev', 'next'])
 useScrollLock(toRef(props, 'visible'))
+
+const playerStore = usePlayerStore()
+const videoPlayerRef = ref(null)
+const podcastPlayerRef = ref(null)
 
 const modalCardRef = ref(null)
 
@@ -126,19 +132,62 @@ watch(() => props.contentId, async (newId) => {
 // 弹窗打开时始终重新加载（修复切换 tab 后 contentId 未变的情况）
 watch(() => props.visible, async (val) => {
   if (val && props.contentId) {
+    // 若迷你播放条正在播放同一内容，停止它（弹窗内播放器接管）
+    if (playerStore.activeMedia?.contentId === props.contentId) {
+      playerStore.stop()
+    }
     transitioning.value = true
     await loadContent()
     loadHistory(props.contentId)
     transitioning.value = false
   } else if (!val) {
+    // 关闭弹窗前：如果媒体正在播放，将控制权交给全局 audio 继续后台播放
+    handoffToGlobalPlayer()
     cancelChat()
   }
 })
+
+function handoffToGlobalPlayer() {
+  // 防止 loadContent 异步期间关闭弹窗导致 handoff 错误的内容
+  if (!content.value || content.value.id !== props.contentId) return
+
+  // 视频优先
+  if (videoPlayerRef.value?.isCurrentlyPlaying()) {
+    const pos = videoPlayerRef.value.getCurrentTime()
+    videoPlayerRef.value.pausePlayback()
+    // 同时暂停播客（防止两者同时播放时只接管一个）
+    podcastPlayerRef.value?.pausePlayback()
+    playerStore.handoff({
+      contentId: content.value.id,
+      title: content.value.title || '视频播放',
+      streamUrl: `/api/video/${content.value.id}/stream`,
+      thumbnailUrl: `/api/video/${content.value.id}/thumbnail`,
+      position: pos,
+      progressPath: `/video/${content.value.id}/progress`,
+    })
+    return
+  }
+
+  // 播客音频
+  if (podcastPlayerRef.value?.isCurrentlyPlaying()) {
+    const pos = podcastPlayerRef.value.getCurrentTime()
+    podcastPlayerRef.value.pausePlayback()
+    playerStore.handoff({
+      contentId: content.value.id,
+      title: content.value.title || '播客',
+      streamUrl: audioPlayUrl.value,
+      thumbnailUrl: podcastMeta.value?.artwork_url || '',
+      position: pos,
+      progressPath: `/media/${content.value.id}/progress`,
+    })
+  }
+}
 
 async function loadContent() {
   if (!props.contentId) return
 
   loading.value = true
+  videoPlayerFailed.value = false
   try {
     const res = await getContent(props.contentId)
     if (res.code === 0) {
@@ -276,6 +325,43 @@ const parsedRawData = computed(() => {
 const podcastMeta = computed(() => parsedRawData.value?.podcast_meta || null)
 const itunesMeta = computed(() => parsedRawData.value?.itunes || null)
 
+// 已下载的视频 MediaItem
+const downloadedVideo = computed(() => {
+  return content.value?.media_items?.find(m => m.media_type === 'video' && m.status === 'downloaded')
+})
+
+// 本地播放失败时回退到嵌入播放
+const videoPlayerFailed = ref(false)
+
+// 任意视频 MediaItem（用于状态提示）
+const anyVideoMedia = computed(() => {
+  return content.value?.media_items?.find(m => m.media_type === 'video')
+})
+
+// 从 content.url / raw_data / media_items 提取可嵌入的视频 URL（Bilibili / YouTube）
+const isEmbeddablePlatform = (url) =>
+  url && (url.includes('bilibili.com') || url.includes('youtube.com') || url.includes('youtu.be'))
+
+const embeddableVideoUrl = computed(() => {
+  if (!content.value) return null
+  // 1. content.url — RSS 采集的内容 URL 最可靠
+  if (isEmbeddablePlatform(content.value.url)) return content.value.url
+  // 2. raw_data.link / raw_data.url（RSS feedparser 用 link）
+  try {
+    const raw = typeof content.value.raw_data === 'string'
+      ? JSON.parse(content.value.raw_data)
+      : content.value.raw_data
+    const rawUrl = raw?.url || raw?.link
+    if (isEmbeddablePlatform(rawUrl)) return rawUrl
+  } catch { /* ignore */ }
+  // 3. media_items[].original_url
+  const videoItem = content.value.media_items?.find(m =>
+    m.media_type === 'video' && isEmbeddablePlatform(m.original_url)
+  )
+  if (videoItem) return videoItem.original_url
+  return null
+})
+
 const contentViewMode = ref('best') // 'best' | 'processed' | 'raw'
 
 // 当前展示的正文 HTML
@@ -381,17 +467,41 @@ function formatTime(t) {
             :class="transitioning ? 'opacity-0' : 'opacity-100'"
           >
 
+            <!-- 视频：已下载 → 本地播放（失败则回退嵌入） -->
             <VideoPlayer
-              v-if="content.media_items?.some(m => m.media_type === 'video')"
+              v-if="downloadedVideo && !videoPlayerFailed"
+              ref="videoPlayerRef"
               :key="'vp-' + content.id"
               :content-id="content.id"
               :title="content.title || '视频播放'"
-              :saved-position="content.media_items?.find(m => m.media_type === 'video')?.playback_position || 0"
+              :saved-position="downloadedVideo.playback_position || 0"
+              @error="videoPlayerFailed = true"
             />
+            <!-- 视频：可嵌入 → iframe 播放 -->
+            <IframeVideoPlayer
+              v-else-if="embeddableVideoUrl"
+              :key="'ifp-' + content.id"
+              :video-url="embeddableVideoUrl"
+              :title="content.title || '视频播放'"
+            />
+            <!-- 视频：未下载且无嵌入源 → 状态提示 -->
+            <div
+              v-else-if="anyVideoMedia"
+              class="bg-slate-100 rounded-xl p-6 flex items-center justify-center"
+              style="aspect-ratio: 16/9"
+            >
+              <div class="text-center text-slate-400">
+                <svg class="w-10 h-10 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z" />
+                </svg>
+                <p class="text-sm font-medium">{{ anyVideoMedia.status === 'failed' ? '视频下载失败' : '视频下载中...' }}</p>
+              </div>
+            </div>
 
             <!-- 播客音频播放器 -->
             <PodcastPlayer
               v-if="audioMedia"
+              ref="podcastPlayerRef"
               :key="'ap-' + content.id"
               :audio-url="audioPlayUrl"
               :title="content.title"
