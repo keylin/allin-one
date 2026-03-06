@@ -5,6 +5,7 @@ import uuid
 from sqlalchemy import (
     Column, String, Float, DateTime, Text, ForeignKey, UniqueConstraint, Index,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
 from app.core.database import Base
@@ -42,9 +43,9 @@ class FinanceDataPoint(Base):
     unit_nav = Column(Float, nullable=True)
     cumulative_nav = Column(Float, nullable=True)
 
-    # 告警 + LLM 分析 (JSON)
-    alert_json = Column(Text, nullable=True)
-    analysis_result = Column(Text, nullable=True)
+    # 告警 + LLM 分析
+    alert_json = Column(JSONB, nullable=True)
+    analysis_result = Column(JSONB, nullable=True)
 
     collected_at = Column(DateTime, default=_utcnow)
     created_at = Column(DateTime, default=_utcnow)

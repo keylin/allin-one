@@ -21,11 +21,11 @@ def _validate_template_type(template_type: str) -> str | None:
 
 
 @router.get("")
-async def list_prompt_templates(
+def list_prompt_templates(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
     template_type: str | None = Query(None),
-    q: str | None = Query(None, description="搜索名称"),
+    q: str | None = Query(None, max_length=200, description="搜索名称"),
     db: Session = Depends(get_db),
 ):
     """查询提示词模板列表"""
@@ -55,7 +55,7 @@ async def list_prompt_templates(
 
 
 @router.get("/{template_id}")
-async def get_prompt_template(template_id: str, db: Session = Depends(get_db)):
+def get_prompt_template(template_id: str, db: Session = Depends(get_db)):
     """获取单个提示词模板"""
     tpl = db.get(PromptTemplate, template_id)
     if not tpl:
@@ -64,7 +64,7 @@ async def get_prompt_template(template_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("")
-async def create_prompt_template(body: PromptTemplateCreate, db: Session = Depends(get_db)):
+def create_prompt_template(body: PromptTemplateCreate, db: Session = Depends(get_db)):
     """创建提示词模板"""
     err = _validate_template_type(body.template_type)
     if err:
@@ -80,7 +80,7 @@ async def create_prompt_template(body: PromptTemplateCreate, db: Session = Depen
 
 
 @router.put("/{template_id}")
-async def update_prompt_template(template_id: str, body: PromptTemplateUpdate, db: Session = Depends(get_db)):
+def update_prompt_template(template_id: str, body: PromptTemplateUpdate, db: Session = Depends(get_db)):
     """更新提示词模板"""
     tpl = db.get(PromptTemplate, template_id)
     if not tpl:
@@ -104,7 +104,7 @@ async def update_prompt_template(template_id: str, body: PromptTemplateUpdate, d
 
 
 @router.delete("/{template_id}")
-async def delete_prompt_template(template_id: str, db: Session = Depends(get_db)):
+def delete_prompt_template(template_id: str, db: Session = Depends(get_db)):
     """删除提示词模板"""
     tpl = db.get(PromptTemplate, template_id)
     if not tpl:

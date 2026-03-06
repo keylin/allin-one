@@ -1,6 +1,5 @@
 """Credentials API - 平台凭证管理"""
 
-import json
 import logging
 import re
 
@@ -48,16 +47,13 @@ async def _validate_credential(cred: PlatformCredential) -> tuple[str | None, di
             mid = str(data["data"].get("mid", ""))
             extra = {}
             if mid:
-                try:
-                    extra = json.loads(cred.extra_info or "{}")
-                except (json.JSONDecodeError, TypeError):
-                    extra = {}
+                extra = cred.extra_info if isinstance(cred.extra_info, dict) else {}
                 extra["uid"] = mid
                 if uname:
                     extra["username"] = uname
             updates = {}
             if mid:
-                updates["extra_info"] = json.dumps(extra, ensure_ascii=False)
+                updates["extra_info"] = extra
                 if "迁移自" in (cred.display_name or ""):
                     updates["display_name"] = f"B站 {uname}" if uname else f"B站账号 {mid}"
             return "active", updates
@@ -78,12 +74,9 @@ async def _validate_credential(cred: PlatformCredential) -> tuple[str | None, di
 
         if resp.status_code == 200 and data.get("screen_name"):
             screen_name = data["screen_name"]
-            try:
-                extra = json.loads(cred.extra_info or "{}")
-            except (json.JSONDecodeError, TypeError):
-                extra = {}
+            extra = cred.extra_info if isinstance(cred.extra_info, dict) else {}
             extra["screen_name"] = screen_name
-            return "active", {"extra_info": json.dumps(extra, ensure_ascii=False)}
+            return "active", {"extra_info": extra}
         else:
             return "expired", {}
 
@@ -120,7 +113,7 @@ def _credential_to_response(cred: PlatformCredential, db: Session) -> dict:
 # ---- Options (轻量下拉列表，放在 /{id} 路由之前) ----
 
 @router.get("/options")
-async def list_credential_options(
+def list_credential_options(
     platform: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
@@ -144,7 +137,7 @@ async def list_credential_options(
 # ---- CRUD ----
 
 @router.get("")
-async def list_credentials(
+def list_credentials(
     platform: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
@@ -211,7 +204,7 @@ async def create_credential(body: CredentialCreate, db: Session = Depends(get_db
 
 
 @router.get("/{credential_id}")
-async def get_credential(credential_id: str, db: Session = Depends(get_db)):
+def get_credential(credential_id: str, db: Session = Depends(get_db)):
     """获取单条凭证详情"""
     cred = db.get(PlatformCredential, credential_id)
     if not cred:
@@ -220,7 +213,7 @@ async def get_credential(credential_id: str, db: Session = Depends(get_db)):
 
 
 @router.put("/{credential_id}")
-async def update_credential(credential_id: str, body: CredentialUpdate, db: Session = Depends(get_db)):
+def update_credential(credential_id: str, body: CredentialUpdate, db: Session = Depends(get_db)):
     """更新凭证"""
     cred = db.get(PlatformCredential, credential_id)
     if not cred:
@@ -258,7 +251,7 @@ async def update_credential(credential_id: str, body: CredentialUpdate, db: Sess
 
 
 @router.delete("/{credential_id}")
-async def delete_credential(
+def delete_credential(
     credential_id: str,
     force: bool = Query(False),
     db: Session = Depends(get_db),
@@ -331,18 +324,14 @@ async def check_credential(credential_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/{credential_id}/sync-rsshub")
-async def sync_rsshub(credential_id: str, db: Session = Depends(get_db)):
+def sync_rsshub(credential_id: str, db: Session = Depends(get_db)):
     """手动触发 RSSHub 同步"""
     cred = db.get(PlatformCredential, credential_id)
     if not cred:
         return error_response(404, "Credential not found")
 
     if cred.platform == "bilibili":
-        try:
-            extra = json.loads(cred.extra_info or "{}")
-        except (json.JSONDecodeError, TypeError):
-            extra = {}
-
+        extra = cred.extra_info if isinstance(cred.extra_info, dict) else {}
         uid = extra.get("uid", "")
         if not uid:
             return error_response(400, "凭证缺少 uid 信息，无法同步 RSSHub")

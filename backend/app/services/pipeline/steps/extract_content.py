@@ -1,6 +1,5 @@
 """Pipeline step: extract_content — 从 raw_data 提取内容到 processed_content"""
 
-import json
 import logging
 import re
 
@@ -16,27 +15,23 @@ def _strip_html(html: str) -> str:
     return text.strip()
 
 
-def _extract_raw_text(raw_data_json: str | None) -> str:
-    """从 raw_data JSON 提取文本内容
+def _extract_raw_text(raw_data: dict | None) -> str:
+    """从 raw_data dict 提取文本内容
 
     提取优先级:
     1. raw_data.content[0].value (RSS content:encoded, 全文 HTML)
     2. raw_data.summary (RSS 摘要)
     """
-    if not raw_data_json:
-        return ""
-    try:
-        raw = json.loads(raw_data_json)
-    except (json.JSONDecodeError, TypeError):
+    if not raw_data or not isinstance(raw_data, dict):
         return ""
     # 优先 content[0].value (RSS <content:encoded>, 通常是全文 HTML)
-    contents = raw.get("content", [])
+    contents = raw_data.get("content", [])
     if isinstance(contents, list) and contents:
         value = contents[0].get("value", "")
         if value:
             return value
     # 回退 summary
-    return raw.get("summary", "")
+    return raw_data.get("summary", "")
 
 
 def _handle_extract_content(context: dict) -> dict:
@@ -70,7 +65,7 @@ def _handle_extract_content(context: dict) -> dict:
         content.processed_content = raw_text
 
         # 在 session 内计算 source 字段，避免 session 关闭后访问 ORM 属性
-        raw = json.loads(content.raw_data) if content.raw_data else {}
+        raw = content.raw_data or {}
         source_field = "raw_data.content[0].value" if "content" in raw else "raw_data.summary"
 
         db.commit()

@@ -1,7 +1,7 @@
 """通用账号采集器 — 通过 HTTP API 抓取任意平台数据"""
 
-import json
 import hashlib
+import json
 import logging
 from datetime import datetime, timezone
 
@@ -36,7 +36,7 @@ class GenericAccountCollector(BaseCollector):
     """
 
     async def collect(self, source: SourceConfig, db: Session) -> list[ContentItem]:
-        config = json.loads(source.config_json) if source.config_json else {}
+        config = source.config_json or {}
         api_url = config.get("api_url") or source.url
         if not api_url:
             raise ValueError(f"No api_url in config for source '{source.name}'")
@@ -95,7 +95,7 @@ class GenericAccountCollector(BaseCollector):
                 external_id=external_id,
                 url=entry.get(url_field),
                 author=entry.get(author_field) if author_field else None,
-                raw_data=json.dumps(entry, ensure_ascii=False, default=str),
+                raw_data=entry,
                 status=ContentStatus.PENDING.value,
                 published_at=published_at,
             )

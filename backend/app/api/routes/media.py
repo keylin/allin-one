@@ -1,6 +1,5 @@
 """Media API - 统一媒体管理（列表/删除/进度/文件服务）"""
 
-import json
 import logging
 import mimetypes
 import os
@@ -30,14 +29,11 @@ class PlaybackProgressBody(BaseModel):
     position: int
 
 
-def _extract_thumbnail_url(raw_data: Optional[str]) -> Optional[str]:
+def _extract_thumbnail_url(raw_data) -> Optional[str]:
     """Extract thumbnail URL from content raw_data (RSS summary HTML)."""
     if not raw_data:
         return None
-    try:
-        raw = json.loads(raw_data)
-    except (json.JSONDecodeError, TypeError):
-        return None
+    raw = raw_data if isinstance(raw_data, dict) else {}
     # Try summary HTML first — RSSHub embeds cover image as <img>
     summary = raw.get("summary", "")
     if summary:
@@ -66,7 +62,7 @@ def _media_file_url(content_id: str, local_path: Optional[str]) -> Optional[str]
 
 # NOTE: /list must be defined before /{content_id}/... routes to take priority
 @router.get("/list")
-async def list_media(
+def list_media(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     media_type: Optional[str] = Query(None, description="video/audio/image，空=全部"),
@@ -150,12 +146,7 @@ async def list_media(
 
     data = []
     for media, content, source in query.all():
-        meta = {}
-        if media.metadata_json:
-            try:
-                meta = json.loads(media.metadata_json)
-            except (json.JSONDecodeError, TypeError):
-                pass
+        meta = media.metadata_json if isinstance(media.metadata_json, dict) else {}
 
         display_status = "completed" if media.status == "downloaded" else media.status
         is_image = media.media_type == "image"
@@ -271,12 +262,9 @@ async def retry_media_download(media_id: str, db: Session = Depends(get_db)):
 
     # 清除错误信息、重置状态
     if media.metadata_json:
-        try:
-            meta = json.loads(media.metadata_json)
-            meta.pop("error", None)
-            media.metadata_json = json.dumps(meta, ensure_ascii=False)
-        except (json.JSONDecodeError, TypeError):
-            pass
+        meta = media.metadata_json if isinstance(media.metadata_json, dict) else {}
+        meta.pop("error", None)
+        media.metadata_json = meta
 
     media.status = "pending"
     db.commit()
@@ -304,7 +292,7 @@ async def retry_media_download(media_id: str, db: Session = Depends(get_db)):
 
 
 @router.put("/{content_id}/progress")
-async def save_playback_progress(
+def save_playback_progress(
     content_id: str,
     body: PlaybackProgressBody,
     db: Session = Depends(get_db),
@@ -327,7 +315,7 @@ async def save_playback_progress(
 
 
 @router.delete("/{content_id}")
-async def delete_media(content_id: str, db: Session = Depends(get_db)):
+def delete_media(content_id: str, db: Session = Depends(get_db)):
     """删除媒体：级联删除 pipeline 记录 + 磁盘文件"""
     content = db.get(ContentItem, content_id)
     if not content:
@@ -361,7 +349,7 @@ async def delete_media(content_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{content_id}/thumbnail")
-async def serve_thumbnail(content_id: str, db: Session = Depends(get_db)):
+def serve_thumbnail(content_id: str, db: Session = Depends(get_db)):
     """通用缩略图：video thumbnail > 第一张 image MediaItem"""
     # 1. Video thumbnail (from metadata_json)
     video_mi = db.query(MediaItem).filter(
@@ -370,14 +358,11 @@ async def serve_thumbnail(content_id: str, db: Session = Depends(get_db)):
         MediaItem.status == "downloaded",
     ).first()
     if video_mi and video_mi.metadata_json:
-        try:
-            meta = json.loads(video_mi.metadata_json)
-            path = meta.get("thumbnail_path")
-            if path and os.path.isfile(path):
-                mime, _ = mimetypes.guess_type(path)
-                return FileResponse(path, media_type=mime or "image/jpeg")
-        except (json.JSONDecodeError, TypeError):
-            pass
+        meta = video_mi.metadata_json if isinstance(video_mi.metadata_json, dict) else {}
+        path = meta.get("thumbnail_path")
+        if path and os.path.isfile(path):
+            mime, _ = mimetypes.guess_type(path)
+            return FileResponse(path, media_type=mime or "image/jpeg")
 
     # 2. First downloaded image MediaItem
     image_mi = db.query(MediaItem).filter(
@@ -393,7 +378,7 @@ async def serve_thumbnail(content_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{content_id}/{file_path:path}")
-async def serve_media_file(content_id: str, file_path: str):
+def serve_media_file(content_id: str, file_path: str):
     """从 MEDIA_DIR/{content_id}/ 读取媒体文件（路径遍历保护）"""
     media_root = Path(settings.MEDIA_DIR).resolve()
     real_path = (media_root / content_id / file_path).resolve()

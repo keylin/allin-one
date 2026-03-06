@@ -17,7 +17,7 @@ router = APIRouter()
 
 
 @router.get("")
-async def list_templates(db: Session = Depends(get_db)):
+def list_templates(db: Session = Depends(get_db)):
     """获取所有活跃模板列表（供下拉选择）"""
     templates = db.query(PipelineTemplate).filter(PipelineTemplate.is_active == True).all()
     return {
@@ -28,7 +28,7 @@ async def list_templates(db: Session = Depends(get_db)):
 
 
 @router.get("/step-definitions")
-async def get_step_definitions():
+def get_step_definitions():
     """获取所有步骤类型定义（供前端可视化编辑器使用）"""
     result = {}
     for key, defn in STEP_DEFINITIONS.items():
@@ -43,7 +43,7 @@ async def get_step_definitions():
 
 
 @router.get("/{template_id}")
-async def get_template(template_id: str, db: Session = Depends(get_db)):
+def get_template(template_id: str, db: Session = Depends(get_db)):
     """获取单个模板详情"""
     tpl = db.get(PipelineTemplate, template_id)
     if not tpl:
@@ -52,15 +52,18 @@ async def get_template(template_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("")
-async def create_template(body: PipelineTemplateCreate, db: Session = Depends(get_db)):
+def create_template(body: PipelineTemplateCreate, db: Session = Depends(get_db)):
     """创建流水线模板"""
-    # 校验 steps_config 是合法 JSON
-    try:
-        steps = json.loads(body.steps_config)
-        if not isinstance(steps, list):
-            return error_response(400, "steps_config must be a JSON array")
-    except json.JSONDecodeError:
-        return error_response(400, "steps_config is not valid JSON")
+    # 校验 steps_config 是合法 JSON 数组（兼容前端传 JSON 字符串或 list）
+    if isinstance(body.steps_config, list):
+        steps = body.steps_config
+    else:
+        try:
+            steps = json.loads(body.steps_config)
+        except (json.JSONDecodeError, TypeError):
+            return error_response(400, "steps_config is not valid JSON")
+    if not isinstance(steps, list):
+        return error_response(400, "steps_config must be a JSON array")
 
     # 检查名称是否重复
     existing = db.query(PipelineTemplate).filter(PipelineTemplate.name == body.name).first()
@@ -70,7 +73,7 @@ async def create_template(body: PipelineTemplateCreate, db: Session = Depends(ge
     tpl = PipelineTemplate(
         name=body.name,
         description=body.description,
-        steps_config=body.steps_config,
+        steps_config=steps,
         is_builtin=False,
         is_active=body.is_active,
     )
@@ -83,7 +86,7 @@ async def create_template(body: PipelineTemplateCreate, db: Session = Depends(ge
 
 
 @router.put("/{template_id}")
-async def update_template(template_id: str, body: PipelineTemplateUpdate, db: Session = Depends(get_db)):
+def update_template(template_id: str, body: PipelineTemplateUpdate, db: Session = Depends(get_db)):
     """更新流水线模板"""
     tpl = db.get(PipelineTemplate, template_id)
     if not tpl:
@@ -98,14 +101,19 @@ async def update_template(template_id: str, body: PipelineTemplateUpdate, db: Se
 
     update_data = body.model_dump(exclude_unset=True)
 
-    # 校验 steps_config
+    # 校验 steps_config（兼容前端传 JSON 字符串或 list）
     if "steps_config" in update_data:
-        try:
-            steps = json.loads(update_data["steps_config"])
-            if not isinstance(steps, list):
-                return error_response(400, "steps_config must be a JSON array")
-        except json.JSONDecodeError:
-            return error_response(400, "steps_config is not valid JSON")
+        raw = update_data["steps_config"]
+        if isinstance(raw, list):
+            steps = raw
+        else:
+            try:
+                steps = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                return error_response(400, "steps_config is not valid JSON")
+        if not isinstance(steps, list):
+            return error_response(400, "steps_config must be a JSON array")
+        update_data["steps_config"] = steps
 
     for key, value in update_data.items():
         setattr(tpl, key, value)
@@ -118,7 +126,7 @@ async def update_template(template_id: str, body: PipelineTemplateUpdate, db: Se
 
 
 @router.delete("/{template_id}")
-async def delete_template(template_id: str, db: Session = Depends(get_db)):
+def delete_template(template_id: str, db: Session = Depends(get_db)):
     """删除流水线模板（内置不可删）"""
     tpl = db.get(PipelineTemplate, template_id)
     if not tpl:

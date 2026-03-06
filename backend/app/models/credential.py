@@ -3,6 +3,7 @@
 import uuid
 
 from sqlalchemy import Column, String, DateTime, Text, Index
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
 from app.core.database import Base
@@ -21,7 +22,7 @@ class PlatformCredential(Base):
 
     platform 示例: "bilibili", "twitter"
     credential_type: "cookie", "oauth_token", "api_key"
-    extra_info: JSON 字符串，如 {"uid": "12345", "username": "xxx"}
+    extra_info: JSONB 字典，如 {"uid": "12345", "username": "xxx"}
     """
     __tablename__ = "platform_credentials"
 
@@ -32,7 +33,7 @@ class PlatformCredential(Base):
     display_name = Column(String, nullable=False)
     status = Column(String, default="active")       # active / expired / error
     expires_at = Column(DateTime, nullable=True)
-    extra_info = Column(Text, nullable=True)         # JSON
+    extra_info = Column(JSONB, nullable=True)
 
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)

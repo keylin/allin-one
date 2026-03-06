@@ -1,6 +1,6 @@
 """PipelineTemplate 响应模型"""
 
-from typing import Optional
+from typing import Any, Optional
 from pydantic import BaseModel, ConfigDict
 
 
@@ -10,6 +10,6 @@ class PipelineTemplateResponse(BaseModel):
     id: str
     name: str
     description: Optional[str] = None
-    steps_config: Optional[str] = None
+    steps_config: Any = None  # JSONB: list of step definitions
     is_builtin: bool = False
     is_active: bool = True

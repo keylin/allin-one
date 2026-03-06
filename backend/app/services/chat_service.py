@@ -1,6 +1,5 @@
 """AI 对话服务 — 从 content route 提取"""
 
-import json
 import logging
 import re
 from typing import AsyncIterator
@@ -26,32 +25,26 @@ def build_chat_context(item: ContentItem, source: SourceConfig | None) -> str:
     if item.author:
         context_parts.append(f"作者: {item.author}")
     if item.analysis_result:
-        try:
-            parsed = json.loads(item.analysis_result) if isinstance(item.analysis_result, str) else item.analysis_result
-            if isinstance(parsed, dict):
-                if parsed.get("summary"):
-                    context_parts.append(f"AI 摘要: {parsed['summary']}")
-                if parsed.get("tags"):
-                    context_parts.append(f"标签: {', '.join(parsed['tags']) if isinstance(parsed['tags'], list) else parsed['tags']}")
-            else:
-                context_parts.append(f"分析结果: {str(parsed)[:500]}")
-        except (json.JSONDecodeError, TypeError):
-            context_parts.append(f"分析结果: {str(item.analysis_result)[:500]}")
+        parsed = item.analysis_result
+        if isinstance(parsed, dict):
+            if parsed.get("summary"):
+                context_parts.append(f"AI 摘要: {parsed['summary']}")
+            if parsed.get("tags"):
+                context_parts.append(f"标签: {', '.join(parsed['tags']) if isinstance(parsed['tags'], list) else parsed['tags']}")
+        else:
+            context_parts.append(f"分析结果: {str(parsed)[:500]}")
     if item.processed_content:
         context_parts.append(f"正文内容:\n{item.processed_content[:2000]}")
     elif item.raw_data:
-        try:
-            raw = json.loads(item.raw_data) if isinstance(item.raw_data, str) else item.raw_data
-            if isinstance(raw, dict):
-                text = raw.get("summary") or raw.get("description") or ""
-                if not text and isinstance(raw.get("content"), list) and raw["content"]:
-                    first = raw["content"][0]
-                    text = first.get("value", "") if isinstance(first, dict) else str(first)
-                text = re.sub(r'<[^>]+>', '', str(text)).strip()
-                if text:
-                    context_parts.append(f"正文内容:\n{text[:2000]}")
-        except (json.JSONDecodeError, TypeError):
-            pass
+        raw = item.raw_data
+        if isinstance(raw, dict):
+            text = raw.get("summary") or raw.get("description") or ""
+            if not text and isinstance(raw.get("content"), list) and raw["content"]:
+                first = raw["content"][0]
+                text = first.get("value", "") if isinstance(first, dict) else str(first)
+            text = re.sub(r'<[^>]+>', '', str(text)).strip()
+            if text:
+                context_parts.append(f"正文内容:\n{text[:2000]}")
 
     system_message = (
         "你是一个内容分析助手。用户正在阅读以下内容，请基于这篇内容回答用户的问题。"

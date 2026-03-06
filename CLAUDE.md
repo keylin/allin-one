@@ -7,7 +7,7 @@
 - **数据源与流水线解耦**: 数据源只管「从哪来」，流水线只管「怎么处理」，通过 `source.pipeline_template_id` FK 绑定
 - **没有** `video_bilibili` 等混合 SourceType，视频通过 rsshub 发现 + localize_media 步骤处理
 - **抓取与处理分离**: Collector 负责抓取产出 ContentItem，流水线只做处理，不含 fetch 步骤
-- **自动预处理**: 流水线分两阶段——系统用 raw_data 填充 processed_content 并自动注入 localize_media，然后拼接用户模板的后置步骤。enrich_content 保留为可选步骤，用户可在模板中手动添加
+- **流水线步骤来自模板**: 模板显式包含所有步骤（含 extract_content、localize_media），Orchestrator 不再自动注入预处理步骤；无模板绑定时直接标记内容为 READY。enrich_content 为可选步骤，用户可在模板中手动添加
 - **媒体项独立**: ContentItem 不再有 media_type 字段，媒体通过 MediaItem 一对多关联管理
 - **三级抓取**: L1 HTTP → L2 Browserless → L3 browser-use，按需升级
 - **数据目录**: `data/` 在项目根目录（非 backend/data/），backend 和 worker 共享同一挂载
@@ -91,6 +91,8 @@ vim scripts/utils/cleanup_data.py
 - 定时任务由 Procrastinate worker 的 periodic 功能驱动，FastAPI 进程为纯 API 服务器
 - 前后端同容器: Vite 构建产物由 FastAPI 静态服务
 - 凭证加密: `platform_credentials.credential_data` 使用 Fernet 对称加密 (`CREDENTIAL_ENCRYPTION_KEY` 环境变量)，未配置时透传明文，兼容历史数据
+- DB 连接池: `DB_POOL_SIZE`（默认 10）/ `DB_MAX_OVERFLOW`（默认 5）环境变量控制，各容器独立配置
+- LLM API Key 加密存储: `system_settings` 中 `api_key/token/password/secret` 关键词的键值与 `credential_data` 同套 Fernet 加密；`GET /api/settings` 返回解密后掩码（显示末 4 位原始字符）
 
 ## 文档导航
 

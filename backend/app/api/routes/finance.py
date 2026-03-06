@@ -3,7 +3,6 @@
 直接查询 FinanceDataPoint 列式表，无需 JSON 解析。
 """
 
-import json
 import logging
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
@@ -19,13 +18,13 @@ router = APIRouter()
 
 
 @router.get("/presets")
-async def get_presets():
+def get_presets():
     """返回金融指标预设库"""
     return {"code": 0, "data": FINANCE_PRESETS, "message": "ok"}
 
 
 @router.get("/sources")
-async def list_finance_sources(db: Session = Depends(get_db)):
+def list_finance_sources(db: Session = Depends(get_db)):
     """列出所有 AkShare 数据源, 附带分类、最新值、数据点计数"""
     sources = (
         db.query(SourceConfig)
@@ -36,7 +35,7 @@ async def list_finance_sources(db: Session = Depends(get_db)):
 
     result = []
     for src in sources:
-        config = json.loads(src.config_json) if src.config_json else {}
+        config = src.config_json if isinstance(src.config_json, dict) else {}
         category = config.get("category", "unknown")
 
         content_count = (
@@ -83,7 +82,7 @@ async def list_finance_sources(db: Session = Depends(get_db)):
 
 
 @router.get("/summary")
-async def get_finance_summary(db: Session = Depends(get_db)):
+def get_finance_summary(db: Session = Depends(get_db)):
     """所有活跃金融源的最新值概览 (Dashboard / Summary Cards)"""
     sources = (
         db.query(SourceConfig)
@@ -93,7 +92,7 @@ async def get_finance_summary(db: Session = Depends(get_db)):
 
     summaries = []
     for src in sources:
-        config = json.loads(src.config_json) if src.config_json else {}
+        config = src.config_json if isinstance(src.config_json, dict) else {}
         category = config.get("category", "unknown")
 
         recent = (
@@ -138,7 +137,7 @@ async def get_finance_summary(db: Session = Depends(get_db)):
 
 
 @router.get("/timeseries/{source_id}")
-async def get_timeseries(
+def get_timeseries(
     source_id: str,
     start_date: str | None = Query(None),
     end_date: str | None = Query(None),
@@ -150,7 +149,7 @@ async def get_timeseries(
     if not source:
         return {"code": 404, "data": None, "message": "Source not found"}
 
-    config = json.loads(source.config_json) if source.config_json else {}
+    config = source.config_json if isinstance(source.config_json, dict) else {}
     category = config.get("category", "unknown")
 
     query = (
@@ -189,10 +188,7 @@ async def get_timeseries(
             point["value"] = pt.value
 
         if pt.alert_json:
-            try:
-                point["alert"] = json.loads(pt.alert_json)
-            except json.JSONDecodeError:
-                pass
+            point["alert"] = pt.alert_json if isinstance(pt.alert_json, dict) else {}
 
         if pt.analysis_result:
             point["analysis_id"] = pt.id

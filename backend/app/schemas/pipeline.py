@@ -1,6 +1,6 @@
 """Pipeline 请求/响应模型"""
 
-from typing import Optional
+from typing import Any, Optional
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 
@@ -46,12 +46,12 @@ class PipelineDetailResponse(PipelineResponse):
 class PipelineTemplateCreate(BaseModel):
     name: str
     description: Optional[str] = None
-    steps_config: str
+    steps_config: Any  # JSON 字符串或 list，路由层统一解析为 list 后写入 JSONB
     is_active: bool = True
 
 
 class PipelineTemplateUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
-    steps_config: Optional[str] = None
+    steps_config: Optional[Any] = None  # JSON 字符串或 list，路由层统一解析
     is_active: Optional[bool] = None

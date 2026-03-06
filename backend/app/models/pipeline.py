@@ -14,6 +14,7 @@ from enum import Enum
 from sqlalchemy import (
     Column, String, Boolean, DateTime, Text, Integer, ForeignKey
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
 from app.core.database import Base
@@ -90,7 +91,7 @@ class PipelineTemplate(Base):
     id = Column(String, primary_key=True, default=_uuid)
     name = Column(String, nullable=False, unique=True)
     description = Column(Text)
-    steps_config = Column(Text, nullable=False)       # JSON
+    steps_config = Column(JSONB, nullable=False)
     is_builtin = Column(Boolean, default=False)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=_utcnow)
@@ -136,12 +137,12 @@ class PipelineStep(Base):
     pipeline_id = Column(String, ForeignKey("pipeline_executions.id", ondelete="CASCADE"), nullable=False)
     step_index = Column(Integer, nullable=False)
     step_type = Column(String, nullable=False)         # StepType 枚举
-    step_config = Column(Text)                          # 操作配置 (JSON)
+    step_config = Column(JSONB)                          # 操作配置
     is_critical = Column(Boolean, default=False)
 
     status = Column(String, default=StepStatus.PENDING.value)
-    input_data = Column(Text)
-    output_data = Column(Text)
+    input_data = Column(JSONB)
+    output_data = Column(JSONB)
     error_message = Column(Text)
     retry_count = Column(Integer, default=0)
 

@@ -1,6 +1,6 @@
 """Content 请求/响应模型"""
 
-from typing import Optional
+from typing import Any, Optional
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
@@ -55,9 +55,9 @@ class ContentResponse(BaseModel):
 
 
 class ContentDetailResponse(ContentResponse):
-    raw_data: Optional[str] = None
+    raw_data: Any = None  # JSONB
     processed_content: Optional[str] = None
-    analysis_result: Optional[str] = None
+    analysis_result: Any = None  # JSONB
     title_hash: Optional[int] = None
 
 

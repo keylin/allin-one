@@ -1,6 +1,5 @@
 """OPML 导入/导出路由 — 从 sources.py 提取"""
 
-import json
 import logging
 import xml.etree.ElementTree as ET
 
@@ -28,7 +27,7 @@ def _resolve_rss_feed_url(source_type: str, url: str | None, config: dict) -> st
         name="temp",
         source_type=source_type,
         url=url,
-        config_json=json.dumps(config) if config else None
+        config_json=config if config else None
     )
     return resolve_rss_feed_url(temp_source, settings.RSSHUB_URL)
 
@@ -112,7 +111,7 @@ async def import_opml(
 
 
 @router.get("/export")
-async def export_opml(
+def export_opml(
     db: Session = Depends(get_db),
 ):
     """导出 RSS 源为 OPML 文件"""
@@ -136,7 +135,7 @@ async def export_opml(
         # 解析实际的 Feed URL（而非直接用 source.url）
         try:
             if source.source_type in _RSS_TYPES:
-                config = json.loads(source.config_json) if source.config_json else {}
+                config = source.config_json if isinstance(source.config_json, dict) else {}
                 xml_url = _resolve_rss_feed_url(source.source_type, source.url, config)
             else:
                 xml_url = source.url or ""

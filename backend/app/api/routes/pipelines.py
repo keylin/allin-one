@@ -1,6 +1,5 @@
 """Pipelines API - 流水线管理"""
 
-import json
 import logging
 import time
 import traceback
@@ -20,7 +19,7 @@ router = APIRouter()
 
 
 @router.get("")
-async def list_pipelines(
+def list_pipelines(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     status: str | None = Query(None),
@@ -111,7 +110,7 @@ async def manual_pipeline(
 
 
 @router.post("/test-step")
-async def test_step(
+def test_step(
     body: dict,
     db: Session = Depends(get_db),
 ):
@@ -197,7 +196,7 @@ async def test_step(
 
 
 @router.post("/cancel-all")
-async def cancel_all_pipelines(db: Session = Depends(get_db)):
+def cancel_all_pipelines(db: Session = Depends(get_db)):
     """一键取消所有 pending/running 的流水线"""
     from app.core.time import utcnow
     now = utcnow()
@@ -235,7 +234,7 @@ async def cancel_all_pipelines(db: Session = Depends(get_db)):
 # ---- 单个 Pipeline 操作（参数路径必须在字面路径之后） ----
 
 @router.get("/{pipeline_id}")
-async def get_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
+def get_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
     """获取 Pipeline 详情（含步骤）"""
     execution = db.get(PipelineExecution, pipeline_id)
     if not execution:
@@ -253,7 +252,7 @@ async def get_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/{pipeline_id}/cancel")
-async def cancel_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
+def cancel_pipeline(pipeline_id: str, db: Session = Depends(get_db)):
     """取消 Pipeline 执行"""
     execution = db.get(PipelineExecution, pipeline_id)
     if not execution:

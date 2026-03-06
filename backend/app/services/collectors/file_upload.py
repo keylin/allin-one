@@ -1,6 +1,5 @@
 """文件上传采集器 — 扫描上传目录中的新文件"""
 
-import json
 import hashlib
 import logging
 import os
@@ -32,7 +31,7 @@ class FileUploadCollector(BaseCollector):
     """
 
     async def collect(self, source: SourceConfig, db: Session) -> list[ContentItem]:
-        config = json.loads(source.config_json) if source.config_json else {}
+        config = source.config_json or {}
 
         upload_dir = config.get("upload_dir") or os.path.join(settings.DATA_DIR, "uploads", source.id)
         extensions = config.get("extensions")
@@ -64,20 +63,20 @@ class FileUploadCollector(BaseCollector):
             if read_text and ext in _TEXT_EXTENSIONS:
                 try:
                     text = file_path.read_text(encoding="utf-8", errors="replace")
-                    raw_data = json.dumps({
+                    raw_data = {
                         "filename": file_path.name,
                         "content": text[:50000],  # 限制 50K 字符
                         "size": stat.st_size,
-                    }, ensure_ascii=False)
+                    }
                 except Exception as e:
                     logger.warning(f"[FileUploadCollector] Failed to read {file_path}: {e}")
-                    raw_data = json.dumps({"filename": file_path.name, "size": stat.st_size})
+                    raw_data = {"filename": file_path.name, "size": stat.st_size}
             else:
-                raw_data = json.dumps({
+                raw_data = {
                     "filename": file_path.name,
                     "size": stat.st_size,
                     "path": str(file_path),
-                })
+                }
 
             item = ContentItem(
                 source_id=source.id,

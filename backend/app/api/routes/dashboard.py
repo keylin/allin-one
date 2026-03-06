@@ -20,7 +20,7 @@ router = APIRouter()
 
 
 @router.get("/stats")
-async def get_dashboard_stats(db: Session = Depends(get_db)):
+def get_dashboard_stats(db: Session = Depends(get_db)):
     """获取仪表盘统计数据"""
     sources_count = db.query(func.count(SourceConfig.id)).scalar()
 
@@ -73,7 +73,7 @@ async def get_dashboard_stats(db: Session = Depends(get_db)):
 
 
 @router.get("/collection-trend")
-async def get_collection_trend(
+def get_collection_trend(
     days: int = Query(7, ge=1, le=30),
     db: Session = Depends(get_db),
 ):
@@ -151,7 +151,7 @@ async def get_collection_trend(
 
 
 @router.get("/daily-stats")
-async def get_daily_stats(
+def get_daily_stats(
     date: str = Query(None, description="日期 YYYY-MM-DD，默认今天（容器时区）"),
     db: Session = Depends(get_db),
 ):
@@ -232,7 +232,7 @@ async def get_daily_stats(
 
 
 @router.get("/source-health")
-async def get_source_health(db: Session = Depends(get_db)):
+def get_source_health(db: Session = Depends(get_db)):
     """获取数据源健康状态概览"""
     sources = (
         db.query(SourceConfig)
@@ -266,7 +266,7 @@ async def get_source_health(db: Session = Depends(get_db)):
 
 
 @router.get("/content-status-distribution")
-async def get_content_status_distribution(db: Session = Depends(get_db)):
+def get_content_status_distribution(db: Session = Depends(get_db)):
     """获取内容状态分布统计"""
     # 按 status 分组计数
     status_counts = dict(
@@ -361,7 +361,7 @@ async def get_storage_stats(db: Session = Depends(get_db)):
 
 
 @router.get("/dedup-stats")
-async def get_dedup_stats(db: Session = Depends(get_db)):
+def get_dedup_stats(db: Session = Depends(get_db)):
     """获取内容去重统计"""
     # 全局统计
     total_items = db.query(func.count(ContentItem.id)).scalar()
@@ -602,7 +602,7 @@ def _query_source_preference(db: Session, top_n: int) -> list[dict]:
 
 
 @router.get("/user-behavior-stats")
-async def get_user_behavior_stats(
+def get_user_behavior_stats(
     heatmap_days: int = Query(84, ge=1, le=365),
     trend_days: int = Query(7, ge=1, le=90),
     top_n: int = Query(5, ge=1, le=20),
@@ -631,7 +631,7 @@ async def get_user_behavior_stats(
 
 
 @router.get("/recent-activity")
-async def get_recent_activity(
+def get_recent_activity(
     limit: int = Query(10, ge=1, le=50),
     db: Session = Depends(get_db),
 ):

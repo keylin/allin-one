@@ -33,7 +33,7 @@ def _platform_name(source_type: str) -> str:
 # ─── Setup ────────────────────────────────────────────────────────────────────
 
 @router.post("/sync/setup")
-async def setup_video_sync(
+def setup_video_sync(
     source_type: str = Query(SourceType.SYNC_BILIBILI.value),
     db: Session = Depends(get_db),
 ):
@@ -79,7 +79,7 @@ async def setup_video_sync(
 # ─── Sync Status ──────────────────────────────────────────────────────────────
 
 @router.get("/sync/status")
-async def get_sync_status(
+def get_sync_status(
     source_id: str = Query(...),
     db: Session = Depends(get_db),
 ):
@@ -108,7 +108,7 @@ async def get_sync_status(
 # ─── Full Sync ────────────────────────────────────────────────────────────────
 
 @router.post("/sync")
-async def sync_videos(
+def sync_videos(
     body: VideoSyncRequest,
     db: Session = Depends(get_db),
 ):

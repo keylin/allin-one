@@ -33,7 +33,7 @@ class PodcastCollector(BaseCollector):
     """Apple Podcasts 采集器"""
 
     async def collect(self, source: SourceConfig, db: Session) -> list[ContentItem]:
-        config = json.loads(source.config_json or "{}")
+        config = source.config_json or {}
 
         feed_url = config.get("feed_url")
         if not feed_url:
@@ -72,7 +72,7 @@ class PodcastCollector(BaseCollector):
                 external_id=external_id,
                 url=url,
                 author=entry.get("author") or feed.feed.get("author"),
-                raw_data=json.dumps(raw_dict, ensure_ascii=False),
+                raw_data=raw_dict,
                 status=ContentStatus.PENDING.value,
                 published_at=self._parse_published(entry),
             )
@@ -133,7 +133,7 @@ class PodcastCollector(BaseCollector):
         config["feed_url"] = feed_url
         config["podcast_name"] = podcast_info.get("collectionName", "")
         config["artwork_url"] = podcast_info.get("artworkUrl600") or podcast_info.get("artworkUrl100", "")
-        source.config_json = json.dumps(config, ensure_ascii=False)
+        source.config_json = config
         db.flush()
 
         logger.info(

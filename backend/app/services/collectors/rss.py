@@ -57,7 +57,7 @@ class RSSCollector(BaseCollector):
                 external_id=external_id,
                 url=url,
                 author=entry.get("author"),
-                raw_data=json.dumps(raw_dict, ensure_ascii=False),
+                raw_data=raw_dict,
                 status=ContentStatus.PENDING.value,
                 published_at=self._parse_published(entry),
             )

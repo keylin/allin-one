@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 @proc_app.task(queue="scheduled")
-async def run_sync(source_id: str, progress_id: str, options_json: str = "{}"):
+async def run_sync(source_id: str, progress_id: str, options_str: str = "{}"):
     """执行同步任务
 
     由 POST /api/sync/run 触发，Worker 异步执行。
@@ -18,7 +18,7 @@ async def run_sync(source_id: str, progress_id: str, options_json: str = "{}"):
     Args:
         source_id: SourceConfig.id
         progress_id: SyncTaskProgress.id
-        options_json: JSON 字符串，平台特定选项
+        options_str: JSON 字符串，平台特定选项（注意：是字符串参数，非 JSONB 列）
     """
     from app.core.database import SessionLocal
     from app.core.time import utcnow
@@ -28,7 +28,7 @@ async def run_sync(source_id: str, progress_id: str, options_json: str = "{}"):
     from app.services.sync import SYNC_FETCHERS
     from app.services.sync.base import SyncProgress
 
-    options = json.loads(options_json) if options_json else {}
+    options = json.loads(options_str) if options_str else {}
 
     with SessionLocal() as db:
         # 加载进度记录
@@ -110,7 +110,7 @@ async def run_sync(source_id: str, progress_id: str, options_json: str = "{}"):
             if result.success:
                 progress.status = "completed"
                 progress.phase = "done"
-                progress.result_data = json.dumps(result.stats, ensure_ascii=False)
+                progress.result_data = result.stats
                 progress.message = result.stats.get("message", "同步完成")
             else:
                 progress.status = "failed"

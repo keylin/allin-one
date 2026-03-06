@@ -17,6 +17,7 @@ from sqlalchemy import (
     Column, String, Boolean, DateTime, Text, Integer, BigInteger,
     ForeignKey, UniqueConstraint, Index,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
 from app.core.database import Base
@@ -146,7 +147,7 @@ class SourceConfig(Base):
     next_collection_at = Column(DateTime, nullable=True)         # 预计算的下次采集时间
 
     # 高级调度字段（0007 迁移）
-    periodicity_data = Column(Text, nullable=True)               # 周期模式识别结果 JSON
+    periodicity_data = Column(JSONB, nullable=True)               # 周期模式识别结果
     periodicity_updated_at = Column(DateTime, nullable=True)     # 周期分析更新时间
     hotspot_level = Column(String, nullable=True)                # 热点等级: extreme/high/instant
     hotspot_detected_at = Column(DateTime, nullable=True)        # 热点检测时间
@@ -154,8 +155,8 @@ class SourceConfig(Base):
     # 流水线绑定 — 解耦的关键
     pipeline_template_id = Column(String, ForeignKey("pipeline_templates.id", ondelete="SET NULL"), nullable=True)
 
-    # 渠道特定配置 (JSON)
-    config_json = Column(Text)
+    # 渠道特定配置
+    config_json = Column(JSONB)
 
     # 平台凭证引用（可选，向后兼容）
     credential_id = Column(String, ForeignKey("platform_credentials.id", ondelete="SET NULL"), nullable=True)
@@ -199,9 +200,9 @@ class ContentItem(Base):
     author = Column(String)
 
     # 三层内容
-    raw_data = Column(Text)              # 原始内容 (JSON)
-    processed_content = Column(Text)     # 中间内容 (清洗/富化后)
-    analysis_result = Column(Text)       # 最终内容 (LLM 分析结果 JSON)
+    raw_data = Column(JSONB)             # 原始内容
+    processed_content = Column(Text)     # 中间内容 (清洗/富化后，可能是 HTML/文本)
+    analysis_result = Column(JSONB)      # 最终内容 (LLM 分析结果)
 
     status = Column(String, default=ContentStatus.PENDING.value)
 
@@ -211,7 +212,7 @@ class ContentItem(Base):
     is_favorited = Column(Boolean, default=False)
     favorited_at = Column(DateTime, nullable=True)
     user_note = Column(Text)
-    chat_history = Column(Text, nullable=True)  # JSON: [{"role":"user","content":"..."},{"role":"assistant","content":"..."}]
+    chat_history = Column(JSONB, nullable=True)  # [{"role":"user","content":"..."},{"role":"assistant","content":"..."}]
 
     view_count = Column(Integer, default=0)
     last_viewed_at = Column(DateTime, nullable=True)     # 最后浏览时间
@@ -274,7 +275,7 @@ class MediaItem(Base):
     local_path = Column(String, nullable=True)      # 下载后的本地路径
     filename = Column(String, nullable=True)         # 本地文件名
     status = Column(String, default="pending")       # pending / downloaded / failed
-    metadata_json = Column(Text, nullable=True)      # JSON: 类型特定元数据
+    metadata_json = Column(JSONB, nullable=True)      # 类型特定元数据
     playback_position = Column(Integer, default=0)   # 播放进度（秒）
     last_played_at = Column(DateTime, nullable=True) # 最后播放时间
 

@@ -1,6 +1,5 @@
 """共享 upsert 逻辑 — 供 API 路由和 Worker 任务共用"""
 
-import json
 import logging
 import uuid
 
@@ -57,8 +56,7 @@ def upsert_videos(db: Session, source: SourceConfig, videos: list[dict]) -> dict
             updated_videos += 1
 
         # Store complete original data in raw_data
-        raw = {**video_data, "source": platform_key}
-        content.raw_data = json.dumps(raw, ensure_ascii=False)
+        content.raw_data = {**video_data, "source": platform_key}
 
         # published_at
         if video_data.get("published_at"):
@@ -87,8 +85,6 @@ def upsert_videos(db: Session, source: SourceConfig, videos: list[dict]) -> dict
             media_meta["cover_url"] = video_data["cover_url"]
         if video_data.get("duration") is not None:
             media_meta["duration"] = video_data["duration"]
-        meta_json = json.dumps(media_meta, ensure_ascii=False) if media_meta else None
-
         for det in detected:
             media = db.query(MediaItem).filter(
                 MediaItem.content_id == content.id,
@@ -102,19 +98,14 @@ def upsert_videos(db: Session, source: SourceConfig, videos: list[dict]) -> dict
                     media_type=det.media_type,
                     status="pending",
                     original_url=det.original_url,
-                    metadata_json=meta_json,
+                    metadata_json=media_meta if media_meta else None,
                 )
                 db.add(media)
             else:
                 if media_meta:
-                    existing_meta = {}
-                    if media.metadata_json:
-                        try:
-                            existing_meta = json.loads(media.metadata_json)
-                        except (json.JSONDecodeError, TypeError):
-                            pass
+                    existing_meta = media.metadata_json or {}
                     existing_meta.update(media_meta)
-                    media.metadata_json = json.dumps(existing_meta, ensure_ascii=False)
+                    media.metadata_json = existing_meta
 
             # playback_position → MediaItem (video/audio only)
             if det.media_type in ("video", "audio") and video_data.get("playback_position", 0) > 0:
@@ -175,7 +166,7 @@ def upsert_ebooks(db: Session, source: SourceConfig, books: list[dict]) -> dict:
         raw = {**book_data, "source": platform_key}
         # Exclude annotations from raw_data (stored separately)
         raw.pop("annotations", None)
-        content.raw_data = json.dumps(raw, ensure_ascii=False)
+        content.raw_data = raw
 
         db.flush()
 
@@ -197,18 +188,13 @@ def upsert_ebooks(db: Session, source: SourceConfig, books: list[dict]) -> dict:
                 media_type="ebook",
                 status="pending",
                 original_url=f"{platform_key}://{external_id}",
-                metadata_json=json.dumps(media_meta, ensure_ascii=False) if media_meta else None,
+                metadata_json=media_meta if media_meta else None,
             )
             db.add(media)
         elif cover_url:
-            existing_meta = {}
-            if media.metadata_json:
-                try:
-                    existing_meta = json.loads(media.metadata_json)
-                except (json.JSONDecodeError, TypeError):
-                    pass
+            existing_meta = media.metadata_json or {}
             existing_meta["cover_url"] = cover_url
-            media.metadata_json = json.dumps(existing_meta, ensure_ascii=False)
+            media.metadata_json = existing_meta
 
         # --- Upsert ReadingProgress ---
         progress = db.query(ReadingProgress).filter(
@@ -329,7 +315,7 @@ def upsert_bookmarks(db: Session, source: SourceConfig, bookmarks: list[dict]) -
             "folder": bm.get("folder"),
             "added_at": bm.get("added_at"),
         }
-        content.raw_data = json.dumps(raw, ensure_ascii=False)
+        content.raw_data = raw
 
         if bm.get("added_at"):
             try:

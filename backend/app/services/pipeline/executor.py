@@ -4,7 +4,6 @@
 context 中 content_id 总是存在的。
 """
 
-import json
 import logging
 
 from app.core.database import SessionLocal
@@ -42,7 +41,7 @@ class PipelineExecutor:
                 if step.step_index == step_index:
                     current_step = step
                 elif step.step_index < step_index and step.output_data:
-                    previous_outputs[step.step_type] = json.loads(step.output_data)
+                    previous_outputs[step.step_type] = step.output_data
 
             if not current_step:
                 raise ValueError(f"Step not found: execution={execution_id}, index={step_index}")
@@ -57,9 +56,7 @@ class PipelineExecutor:
                 execution.started_at = utcnow()
                 execution.current_step = step_index
 
-            step_config = {}
-            if current_step.step_config:
-                step_config = json.loads(current_step.step_config)
+            step_config = current_step.step_config or {}
 
             # 读取 content 的 url 供步骤使用
             from app.models.content import ContentItem
@@ -122,7 +119,7 @@ class PipelineExecutor:
                 # ---- 成功处理 ----
                 step.status = StepStatus.COMPLETED.value
                 if output_data:
-                    step.output_data = json.dumps(output_data, ensure_ascii=False)
+                    step.output_data = output_data
 
             # ---- 推进流水线 ----
             execution = db.get(PipelineExecution, execution_id)

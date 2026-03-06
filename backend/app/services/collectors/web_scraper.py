@@ -1,6 +1,5 @@
 """Web Scraper 采集器 — 通过 CSS 选择器抓取网页列表"""
 
-import json
 import hashlib
 import logging
 from datetime import datetime
@@ -36,7 +35,7 @@ class ScraperCollector(BaseCollector):
         if not source.url:
             raise ValueError(f"No URL configured for source '{source.name}'")
 
-        config = json.loads(source.config_json) if source.config_json else {}
+        config = source.config_json or {}
         item_selector = config.get("item_selector")
         if not item_selector:
             raise ValueError(f"No item_selector in config for source '{source.name}'")

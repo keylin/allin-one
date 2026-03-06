@@ -41,7 +41,7 @@ def _platform_name(source_type: str) -> str:
 # ─── Setup ────────────────────────────────────────────────────────────────────
 
 @router.post("/sync/setup")
-async def setup_bookmark_sync(
+def setup_bookmark_sync(
     source_type: str = Query(SourceType.SYNC_SAFARI_BOOKMARKS.value),
     db: Session = Depends(get_db),
 ):
@@ -82,7 +82,7 @@ async def setup_bookmark_sync(
 # ─── Sync Status ──────────────────────────────────────────────────────────────
 
 @router.get("/sync/status")
-async def get_bookmark_sync_status(
+def get_bookmark_sync_status(
     source_id: str = Query(...),
     db: Session = Depends(get_db),
 ):
@@ -113,7 +113,7 @@ async def get_bookmark_sync_status(
 # ─── Full Sync ────────────────────────────────────────────────────────────────
 
 @router.post("/sync")
-async def sync_bookmarks(
+def sync_bookmarks(
     body: BookmarkSyncRequest,
     db: Session = Depends(get_db),
 ):

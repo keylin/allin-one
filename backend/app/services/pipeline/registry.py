@@ -7,7 +7,6 @@
 fetch_content 不是原子操作, 它是定时器 + CollectionService 的职责。
 """
 
-import json
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -122,83 +121,84 @@ STEP_DEFINITIONS: dict[str, StepDefinition] = {
 
 # ============ 内置流水线模板 ============
 # 流水线只做处理, 不含 fetch — 输入是已存在的 ContentItem
+# steps_config 存储为 Python list（JSONB 列，SQLAlchemy 自动序列化）
 
 BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     {
         "name": "文章分析",
         "description": "提取内容 → 媒体本地化 → LLM分析 → 推送",
-        "steps_config": json.dumps([
+        "steps_config": [
             {"step_type": "extract_content",  "is_critical": True,  "config": {}},
             {"step_type": "localize_media",   "is_critical": False, "config": {}},
             {"step_type": "analyze_content",  "is_critical": True,  "config": {}},
             {"step_type": "publish_content",  "is_critical": False, "config": {"channel": "none"}},
-        ], ensure_ascii=False),
+        ],
     },
     {
         "name": "英文文章翻译分析",
         "description": "提取内容 → 媒体本地化 → 翻译 → 分析 → 推送",
-        "steps_config": json.dumps([
+        "steps_config": [
             {"step_type": "extract_content",   "is_critical": True,  "config": {}},
             {"step_type": "localize_media",    "is_critical": False, "config": {}},
             {"step_type": "translate_content", "is_critical": True,  "config": {"target_language": "zh"}},
             {"step_type": "analyze_content",   "is_critical": False, "config": {}},
             {"step_type": "publish_content",   "is_critical": False, "config": {"channel": "none"}},
-        ], ensure_ascii=False),
+        ],
     },
     {
         "name": "视频下载分析",
         "description": "提取内容 → 媒体本地化(含视频下载) → 字幕提取 → 分析 → 推送",
-        "steps_config": json.dumps([
+        "steps_config": [
             {"step_type": "extract_content",    "is_critical": True,  "config": {}},
             {"step_type": "localize_media",     "is_critical": True,  "config": {}},
             {"step_type": "transcribe_content", "is_critical": True,  "config": {}},
             {"step_type": "analyze_content",    "is_critical": False, "config": {}},
             {"step_type": "publish_content",    "is_critical": False, "config": {"channel": "none"}},
-        ], ensure_ascii=False),
+        ],
     },
     {
         "name": "视频翻译分析",
         "description": "提取内容 → 媒体本地化 → 字幕提取 → 翻译 → 分析 → 推送",
-        "steps_config": json.dumps([
+        "steps_config": [
             {"step_type": "extract_content",    "is_critical": True,  "config": {}},
             {"step_type": "localize_media",     "is_critical": True,  "config": {}},
             {"step_type": "transcribe_content", "is_critical": True,  "config": {}},
             {"step_type": "translate_content",  "is_critical": False, "config": {"target_language": "zh"}},
             {"step_type": "analyze_content",    "is_critical": False, "config": {}},
             {"step_type": "publish_content",    "is_critical": False, "config": {"channel": "none"}},
-        ], ensure_ascii=False),
+        ],
     },
     {
         "name": "仅分析",
         "description": "提取内容 → LLM分析 → 推送",
-        "steps_config": json.dumps([
+        "steps_config": [
             {"step_type": "extract_content",  "is_critical": True,  "config": {}},
             {"step_type": "analyze_content",  "is_critical": True,  "config": {}},
             {"step_type": "publish_content",  "is_critical": False, "config": {"channel": "none"}},
-        ], ensure_ascii=False),
+        ],
     },
     {
         "name": "仅推送",
         "description": "提取内容 → 推送新内容通知",
-        "steps_config": json.dumps([
+        "steps_config": [
             {"step_type": "extract_content",  "is_critical": True,  "config": {}},
             {"step_type": "publish_content",  "is_critical": True,  "config": {"channel": "email"}},
-        ], ensure_ascii=False),
+        ],
     },
     {
         "name": "金融数据分析",
         "description": "提取内容 → LLM分析金融数据趋势 → 推送",
-        "steps_config": json.dumps([
+        "steps_config": [
             {"step_type": "extract_content",  "is_critical": True,  "config": {}},
             {"step_type": "analyze_content",  "is_critical": True,  "config": {}},
             {"step_type": "publish_content",  "is_critical": False, "config": {"channel": "none"}},
-        ], ensure_ascii=False),
+        ],
     },
     {
         "name": "媒体下载",
         "description": "仅执行媒体本地化（单个步骤），用于收藏触发或手动下载",
-        "steps_config": json.dumps([
+        "steps_config": [
             {"step_type": "localize_media", "is_critical": True, "config": {}},
-        ], ensure_ascii=False),
+        ],
     },
 ]

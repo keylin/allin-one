@@ -66,7 +66,7 @@ _PLATFORM_MAP = {
 
 
 @router.get("/status")
-async def get_sync_status(db: Session = Depends(get_db)):
+def get_sync_status(db: Session = Depends(get_db)):
     """返回所有 sync 插件的配置状态与统计"""
     # 一次性查出所有 sync.* 源
     sync_sources = db.query(SourceConfig).filter(
@@ -187,7 +187,7 @@ async def trigger_sync(
         id=uuid.uuid4().hex,
         source_id=source.id,
         status="pending",
-        options_json=json.dumps(body.options, ensure_ascii=False) if body.options else None,
+        options_json=body.options if body.options else None,
     )
     db.add(progress)
     db.commit()
@@ -198,7 +198,8 @@ async def trigger_sync(
             run_sync,
             source_id=source.id,
             progress_id=progress.id,
-            options_json=json.dumps(body.options, ensure_ascii=False) if body.options else "{}",
+            # options_str 是 JSON 字符串（Procrastinate 任务参数），区别于同名 JSONB 列
+            options_str=json.dumps(body.options, ensure_ascii=False) if body.options else "{}",
         )
     except Exception as e:
         logger.error(f"Failed to defer sync task: {e}")
@@ -245,12 +246,7 @@ async def stream_progress(
             if current_updated != last_updated:
                 last_updated = current_updated
 
-                result_data = None
-                if p.result_data:
-                    try:
-                        result_data = json.loads(p.result_data)
-                    except (json.JSONDecodeError, TypeError):
-                        pass
+                result_data = p.result_data if isinstance(p.result_data, (dict, list)) else None
 
                 event = SyncProgressEvent(
                     status=p.status,
@@ -284,7 +280,7 @@ async def stream_progress(
 
 
 @router.post("/link-credential")
-async def link_credential(
+def link_credential(
     body: LinkCredentialRequest,
     db: Session = Depends(get_db),
 ):

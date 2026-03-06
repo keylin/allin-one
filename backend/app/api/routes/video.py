@@ -1,6 +1,5 @@
 """Video API - 视频管理"""
 
-import json
 import logging
 import os
 import mimetypes
@@ -98,7 +97,7 @@ async def download_video(body: VideoDownloadRequest, db: Session = Depends(get_d
 
 
 @router.get("/downloads")
-async def list_downloads(
+def list_downloads(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     status_filter: Optional[str] = Query("completed", alias="status", description="筛选状态: pending/completed/failed，空字符串=全部"),
@@ -185,12 +184,7 @@ async def list_downloads(
     # 构建响应
     data = []
     for media, content, source in query.all():
-        meta = {}
-        if media.metadata_json:
-            try:
-                meta = json.loads(media.metadata_json)
-            except (json.JSONDecodeError, TypeError):
-                pass
+        meta = media.metadata_json if isinstance(media.metadata_json, dict) else {}
 
         # 映射 MediaItem.status 回前端状态
         display_status = "completed" if media.status == "downloaded" else media.status
@@ -234,7 +228,7 @@ async def list_downloads(
 
 
 @router.put("/{content_id}/progress")
-async def save_playback_progress(
+def save_playback_progress(
     content_id: str,
     body: PlaybackProgressBody,
     db: Session = Depends(get_db),
@@ -257,7 +251,7 @@ async def save_playback_progress(
 
 
 @router.delete("/{content_id}")
-async def delete_video(content_id: str, db: Session = Depends(get_db)):
+def delete_video(content_id: str, db: Session = Depends(get_db)):
     """删除视频：级联删除 pipeline 记录 + 磁盘文件"""
     content = db.get(ContentItem, content_id)
     if not content:
@@ -294,7 +288,7 @@ async def delete_video(content_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{content_id}/thumbnail")
-async def get_thumbnail(content_id: str, db: Session = Depends(get_db)):
+def get_thumbnail(content_id: str, db: Session = Depends(get_db)):
     """获取视频封面图"""
     thumbnail_path = _get_thumbnail_path(content_id, db)
     if not thumbnail_path or not os.path.exists(thumbnail_path):
@@ -305,7 +299,7 @@ async def get_thumbnail(content_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{content_id}/stream")
-async def stream_video(
+def stream_video(
     content_id: str,
     request: Request,
     db: Session = Depends(get_db),
@@ -412,13 +406,10 @@ def _get_video_path(content_id: str, db: Session) -> Optional[str]:
         .first()
     )
     if step and step.output_data:
-        try:
-            output = json.loads(step.output_data)
-            file_path = output.get("file_path")
-            if file_path and os.path.exists(file_path):
-                return file_path
-        except (json.JSONDecodeError, TypeError):
-            pass
+        output = step.output_data if isinstance(step.output_data, dict) else {}
+        file_path = output.get("file_path")
+        if file_path and os.path.exists(file_path):
+            return file_path
 
     # 3. 兜底：尝试在 MEDIA_DIR/content_id/ 目录下查找视频文件
     content_dir = os.path.join(settings.MEDIA_DIR, content_id)
@@ -438,13 +429,10 @@ def _get_thumbnail_path(content_id: str, db: Session) -> Optional[str]:
         MediaItem.media_type == "video",
     ).first()
     if media_item and media_item.metadata_json:
-        try:
-            meta = json.loads(media_item.metadata_json)
-            path = meta.get("thumbnail_path")
-            if path and os.path.exists(path):
-                return path
-        except (json.JSONDecodeError, TypeError):
-            pass
+        meta = media_item.metadata_json if isinstance(media_item.metadata_json, dict) else {}
+        path = meta.get("thumbnail_path")
+        if path and os.path.exists(path):
+            return path
 
     # 2. 回退: PipelineStep 输出
     step = (
@@ -458,13 +446,10 @@ def _get_thumbnail_path(content_id: str, db: Session) -> Optional[str]:
         .first()
     )
     if step and step.output_data:
-        try:
-            output = json.loads(step.output_data)
-            path = output.get("thumbnail_path")
-            if path and os.path.exists(path):
-                return path
-        except (json.JSONDecodeError, TypeError):
-            pass
+        output = step.output_data if isinstance(step.output_data, dict) else {}
+        path = output.get("thumbnail_path")
+        if path and os.path.exists(path):
+            return path
 
     # 3. 兜底：在 MEDIA_DIR/content_id/ 目录下查找图片文件
     content_dir = os.path.join(settings.MEDIA_DIR, content_id)

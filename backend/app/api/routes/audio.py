@@ -18,7 +18,7 @@ router = APIRouter()
 
 
 @router.get("/{content_id}/stream")
-async def stream_audio(
+def stream_audio(
     content_id: str,
     db: Session = Depends(get_db),
 ):

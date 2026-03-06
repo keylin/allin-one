@@ -28,7 +28,7 @@ def _handle_analyze_content(context: dict) -> dict:
         # 确定输入文本
         text = content.processed_content
         if not text and content.raw_data:
-            raw = json.loads(content.raw_data)
+            raw = content.raw_data
             text = raw.get("summary", "")
             if not text:
                 contents = raw.get("content", [])
@@ -69,7 +69,7 @@ def _handle_analyze_content(context: dict) -> dict:
     with SessionLocal() as db:
         content = db.get(ContentItem, content_id)
         if content:
-            content.analysis_result = json.dumps(result, ensure_ascii=False)
+            content.analysis_result = result
             db.commit()
 
     return {"status": "analyzed", "result_keys": list(result.keys()) if isinstance(result, dict) else []}

@@ -34,31 +34,40 @@ class LLMTestRequest(BaseModel):
 
 
 @router.get("")
-async def get_settings(db: Session = Depends(get_db)):
+def get_settings(db: Session = Depends(get_db)):
     """获取所有设置"""
+    from app.core.crypto import decrypt_credential
+
     rows = db.query(SystemSetting).all()
     data = {}
     for row in rows:
         value = row.value
         if value and any(kw in row.key.lower() for kw in _SENSITIVE_KEYWORDS):
-            value = _mask_value(value)
+            # 先解密（可能是 Fernet 密文），再掩码末4位，确保显示原始 key 末4位
+            value = _mask_value(decrypt_credential(value))
         data[row.key] = SettingItem(value=value, description=row.description).model_dump()
     return {"code": 0, "data": data, "message": "ok"}
 
 
 @router.put("")
-async def update_settings(body: SettingsUpdate, db: Session = Depends(get_db)):
+def update_settings(body: SettingsUpdate, db: Session = Depends(get_db)):
     """批量 upsert 设置"""
+    from app.core.crypto import encrypt_credential
+
     for key, value in body.settings.items():
         # 跳过掩码值，避免覆盖真实密钥（掩码格式: *** 或 ***xxxx）
         if value and re.match(r'^\*{3}\w{0,4}$', value):
             continue
+        # 敏感值加密存储
+        store_value = value
+        if value and any(kw in key.lower() for kw in _SENSITIVE_KEYWORDS):
+            store_value = encrypt_credential(value)
         existing = db.get(SystemSetting, key)
         if existing:
-            existing.value = value
+            existing.value = store_value
             existing.updated_at = utcnow()
         else:
-            db.add(SystemSetting(key=key, value=value))
+            db.add(SystemSetting(key=key, value=store_value))
     db.commit()
     logger.info(f"Settings updated: {list(body.settings.keys())}")
     return {"code": 0, "data": None, "message": "ok"}
@@ -78,9 +87,10 @@ async def test_llm_connection(body: LLMTestRequest, db: Session = Depends(get_db
     # 如果前端传来的是掩码值，从 DB 读取真实 key
     api_key = body.api_key
     if _MASK_PATTERN.match(api_key):
+        from app.core.crypto import decrypt_credential
         row = db.get(SystemSetting, "llm_api_key")
         if row and row.value:
-            api_key = row.value
+            api_key = decrypt_credential(row.value)
         else:
             return error_response(400, "未找到已保存的 API Key，请输入真实值")
 
@@ -102,7 +112,7 @@ class ClearRecordsRequest(BaseModel):
 
 
 @router.post("/clear-executions")
-async def clear_executions(body: ClearRecordsRequest = ClearRecordsRequest(), db: Session = Depends(get_db)):
+def clear_executions(body: ClearRecordsRequest = ClearRecordsRequest(), db: Session = Depends(get_db)):
     """手动清理执行记录 — 删除已终态的 PipelineExecution 及其 Steps"""
     from app.models.pipeline import PipelineExecution, PipelineStep, PipelineStatus
 
@@ -137,7 +147,7 @@ async def clear_executions(body: ClearRecordsRequest = ClearRecordsRequest(), db
 
 
 @router.post("/clear-collections")
-async def clear_collections(body: ClearRecordsRequest = ClearRecordsRequest(), db: Session = Depends(get_db)):
+def clear_collections(body: ClearRecordsRequest = ClearRecordsRequest(), db: Session = Depends(get_db)):
     """手动清理采集记录 — 删除已终态的 CollectionRecord"""
     from app.models.content import CollectionRecord
 
@@ -158,7 +168,7 @@ async def clear_collections(body: ClearRecordsRequest = ClearRecordsRequest(), d
 
 
 @router.post("/preview-cleanup")
-async def preview_cleanup(db: Session = Depends(get_db)):
+def preview_cleanup(db: Session = Depends(get_db)):
     """预览清理影响 — 计算将要删除的记录数量，不实际删除"""
     from app.models.content import ContentItem, CollectionRecord, SourceConfig
     from app.models.pipeline import PipelineExecution, PipelineStatus

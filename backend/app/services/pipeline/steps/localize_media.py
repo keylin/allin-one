@@ -1,7 +1,6 @@
 """Pipeline step: localize_media — 检测并下载内容中的图片/视频/音频"""
 
 import hashlib
-import json
 import logging
 import os
 import re
@@ -182,7 +181,7 @@ def _handle_localize_media(context: dict) -> dict:
                     existing.local_path = video_path
                     existing.filename = os.path.basename(video_path) if video_path else None
                     existing.status = "downloaded" if video_path else "failed"
-                    existing.metadata_json = json.dumps(metadata, ensure_ascii=False)
+                    existing.metadata_json = metadata
                 else:
                     db.add(MediaItem(
                         content_id=content_id,
@@ -191,7 +190,7 @@ def _handle_localize_media(context: dict) -> dict:
                         local_path=video_path,
                         filename=os.path.basename(video_path) if video_path else None,
                         status="downloaded" if video_path else "failed",
-                        metadata_json=json.dumps(metadata, ensure_ascii=False),
+                        metadata_json=metadata,
                         is_favorited=True,
                         favorited_at=content_favorited_at,
                     ))
@@ -245,14 +244,14 @@ def _handle_localize_media(context: dict) -> dict:
                 ).first()
                 if existing:
                     existing.status = "failed"
-                    existing.metadata_json = json.dumps({"error": str(e)[:200]})
+                    existing.metadata_json = {"error": str(e)[:200]}
                 else:
                     db.add(MediaItem(
                         content_id=content_id,
                         media_type=MediaType.VIDEO.value,
                         original_url=content_url,
                         status="failed",
-                        metadata_json=json.dumps({"error": str(e)[:200]}),
+                        metadata_json={"error": str(e)[:200]},
                         is_favorited=True,
                         favorited_at=content_favorited_at,
                     ))
@@ -312,9 +311,9 @@ def _handle_localize_media(context: dict) -> dict:
                 mi.local_path = local_path
                 mi.filename = filename
                 mi.status = "downloaded"
-                mi.metadata_json = json.dumps({
+                mi.metadata_json = {
                     "file_size": os.path.getsize(local_path),
-                })
+                }
                 db.commit()
             result["media_items_created"] += 1
             result["media_items"].append({
@@ -330,7 +329,7 @@ def _handle_localize_media(context: dict) -> dict:
             with SessionLocal() as db:
                 mi = db.get(MediaItem, audio_mi.id)
                 mi.status = "failed"
-                mi.metadata_json = json.dumps({"error": str(e)[:200]})
+                mi.metadata_json = {"error": str(e)[:200]}
                 db.commit()
             result["media_items"].append({
                 "type": "audio",
@@ -342,17 +341,14 @@ def _handle_localize_media(context: dict) -> dict:
     # ---- 2. Non-video: scan HTML for images ----
     # Get HTML content to scan
     if not html_content:
-        # Try extracting from raw_data
-        if raw_data_json:
-            try:
-                raw = json.loads(raw_data_json)
-                contents = raw.get("content", [])
-                if isinstance(contents, list) and contents:
-                    html_content = contents[0].get("value", "")
-                if not html_content:
-                    html_content = raw.get("summary", "")
-            except (json.JSONDecodeError, TypeError):
-                pass
+        # Try extracting from raw_data (already a dict — JSONB column)
+        if raw_data_json and isinstance(raw_data_json, dict):
+            raw = raw_data_json
+            contents = raw.get("content", [])
+            if isinstance(contents, list) and contents:
+                html_content = contents[0].get("value", "")
+            if not html_content:
+                html_content = raw.get("summary", "")
 
     if not html_content:
         logger.info(f"[localize_media] No HTML content to scan for {content_id}")
@@ -421,7 +417,7 @@ def _handle_localize_media(context: dict) -> dict:
                         local_path=local_path,
                         filename=filename,
                         status="downloaded",
-                        metadata_json=json.dumps({"alt": img.get("alt", "")}),
+                        metadata_json={"alt": img.get("alt", "")},
                         is_favorited=True,
                         favorited_at=content_favorited_at,
                     )
@@ -447,7 +443,7 @@ def _handle_localize_media(context: dict) -> dict:
                         local_path=None,
                         filename=filename,
                         status="pending",
-                        metadata_json=json.dumps({"alt": img.get("alt", "")}),
+                        metadata_json={"alt": img.get("alt", "")},
                         is_favorited=False,
                     )
                     db.add(media_item)

@@ -1,5 +1,4 @@
 """RSS 采集器共享工具"""
-import json
 from app.models.content import SourceConfig
 
 
@@ -23,7 +22,7 @@ def resolve_rss_feed_url(source: SourceConfig, rsshub_base_url: str) -> str:
         ValueError: 如果必需字段缺失或格式错误
     """
     if source.source_type == "rss.hub":
-        config = json.loads(source.config_json) if source.config_json else {}
+        config = source.config_json or {}
         route = config.get("rsshub_route", "").strip()
         if not route:
             raise ValueError(f"RSSHub source '{source.name}' missing rsshub_route in config_json")

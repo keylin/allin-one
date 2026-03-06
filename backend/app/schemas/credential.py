@@ -1,6 +1,6 @@
 """PlatformCredential 请求/响应模型"""
 
-from typing import Optional
+from typing import Any, Optional
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 
@@ -10,14 +10,14 @@ class CredentialCreate(BaseModel):
     credential_type: str = "cookie"
     credential_data: str
     display_name: str
-    extra_info: Optional[str] = None
+    extra_info: Any = None  # JSONB
 
 
 class CredentialUpdate(BaseModel):
     credential_data: Optional[str] = None
     display_name: Optional[str] = None
     status: Optional[str] = None
-    extra_info: Optional[str] = None
+    extra_info: Any = None  # JSONB
 
 
 class CredentialResponse(BaseModel):
@@ -30,7 +30,7 @@ class CredentialResponse(BaseModel):
     display_name: str
     status: str
     expires_at: Optional[datetime] = None
-    extra_info: Optional[str] = None
+    extra_info: Any = None  # JSONB
     source_count: int = 0
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None

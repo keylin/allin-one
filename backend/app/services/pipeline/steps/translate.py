@@ -1,6 +1,5 @@
 """Pipeline step: translate_content — LLM 翻译"""
 
-import json
 import logging
 
 from app.services.pipeline.steps._helpers import _run_async, _llm_chat
@@ -27,7 +26,7 @@ def _handle_translate_content(context: dict) -> dict:
         # 优先取 processed_content，否则从 raw_data 取
         text = content.processed_content
         if not text and content.raw_data:
-            raw = json.loads(content.raw_data)
+            raw = content.raw_data
             text = raw.get("summary") or raw.get("content", [{}])[0].get("value", "") if isinstance(raw.get("content"), list) else raw.get("content", "")
 
     if not text:

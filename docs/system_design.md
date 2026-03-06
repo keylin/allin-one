@@ -330,7 +330,7 @@ CREATE TABLE prompt_templates (
 ```sql
 CREATE TABLE system_settings (
     key             TEXT PRIMARY KEY,           -- 配置键
-    value           TEXT,                       -- 配置值 (JSON)
+    value           TEXT,                       -- 配置值；api_key/token/secret 等敏感键使用 Fernet 加密存储
     description     TEXT,                       -- 说明
     updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
 );

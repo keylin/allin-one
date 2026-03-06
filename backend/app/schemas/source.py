@@ -1,6 +1,6 @@
 """Source 请求/响应模型"""
 
-from typing import Optional
+from typing import Any, Optional
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 
@@ -14,7 +14,7 @@ class SourceCreate(BaseModel):
     schedule_mode: Optional[str] = "auto"
     schedule_interval_override: Optional[int] = None
     pipeline_template_id: Optional[str] = None
-    config_json: Optional[str] = None
+    config_json: Any = None  # JSONB
     credential_id: Optional[str] = None
     auto_cleanup_enabled: Optional[bool] = False
     retention_days: Optional[int] = None
@@ -29,7 +29,7 @@ class SourceUpdate(BaseModel):
     schedule_mode: Optional[str] = None
     schedule_interval_override: Optional[int] = None
     pipeline_template_id: Optional[str] = None
-    config_json: Optional[str] = None
+    config_json: Any = None  # JSONB
     credential_id: Optional[str] = None
     is_active: Optional[bool] = None
     auto_cleanup_enabled: Optional[bool] = None
@@ -51,7 +51,7 @@ class SourceResponse(BaseModel):
     calculated_interval: Optional[int] = None
     pipeline_template_id: Optional[str] = None
     pipeline_template_name: Optional[str] = None
-    config_json: Optional[str] = None
+    config_json: Any = None  # JSONB
     credential_id: Optional[str] = None
     auto_cleanup_enabled: bool = False
     retention_days: Optional[int] = None

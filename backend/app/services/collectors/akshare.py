@@ -5,7 +5,6 @@ collect() 返回空列表，避免触发 Pipeline。
 """
 
 import asyncio
-import json
 import logging
 from datetime import datetime
 
@@ -125,7 +124,7 @@ class AkShareCollector(BaseCollector):
             logger.error("[AkShareCollector] akshare not installed, run: pip install akshare")
             raise ValueError("akshare library not installed")
 
-        config = json.loads(source.config_json) if source.config_json else {}
+        config = source.config_json or {}
         indicator = config.get("indicator")
         if not indicator:
             raise ValueError(f"No indicator in config for source '{source.name}'")
@@ -210,7 +209,7 @@ class AkShareCollector(BaseCollector):
                 }
                 alert_result = _check_alerts(alerts, check_values)
                 if alert_result:
-                    point.alert_json = json.dumps(alert_result, ensure_ascii=False)
+                    point.alert_json = alert_result
 
             try:
                 with db.begin_nested():

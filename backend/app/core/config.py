@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     CORS_ORIGINS: str = "*"
     CREDENTIAL_ENCRYPTION_KEY: str = ""  # Fernet key for credential encryption
 
+    # Database Pool
+    DB_POOL_SIZE: int = 10
+    DB_MAX_OVERFLOW: int = 5
+
     # Application
     LOG_LEVEL: str = "INFO"
 
@@ -68,7 +72,8 @@ def get_llm_config(db=None) -> LLMConfig:
         with SessionLocal() as session:
             api_key, base_url, model = _read(session)
 
-    key = api_key.value if api_key and api_key.value else ""
+    from app.core.crypto import decrypt_credential
+    key = decrypt_credential(api_key.value) if api_key and api_key.value else ""
     if not key:
         raise ValueError("LLM API Key 未配置，请在系统设置中填写")
 

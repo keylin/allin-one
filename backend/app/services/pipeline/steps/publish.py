@@ -1,6 +1,5 @@
 """Pipeline step: publish_content — 消息推送"""
 
-import json
 import logging
 
 from app.services.pipeline.steps._helpers import _run_async
@@ -38,7 +37,7 @@ def _handle_publish_content(context: dict) -> dict:
                 "title": content.title,
                 "url": content.url,
                 "summary": (content.processed_content or "")[:500],
-                "analysis_result": json.loads(content.analysis_result) if content.analysis_result else None,
+                "analysis_result": content.analysis_result,
                 "source_name": source.name if source else None,
             }
 
@@ -77,7 +76,7 @@ def _handle_publish_content(context: dict) -> dict:
                 "url": content.url,
                 "author": content.author,
                 "processed_content": content.processed_content,
-                "analysis_result": json.loads(content.analysis_result) if content.analysis_result else None,
+                "analysis_result": content.analysis_result,
             }
             smtp_host_val = smtp_host.value
             smtp_port_val = int(smtp_port.value) if smtp_port else 465
@@ -118,7 +117,7 @@ def _handle_publish_content(context: dict) -> dict:
                 "url": content.url,
                 "author": content.author,
                 "processed_content": content.processed_content,
-                "analysis_result": json.loads(content.analysis_result) if content.analysis_result else None,
+                "analysis_result": content.analysis_result,
             }
 
         if not dingtalk_url:

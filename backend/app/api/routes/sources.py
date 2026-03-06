@@ -1,6 +1,5 @@
 """Sources API - 数据源管理"""
 
-import json
 import logging
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
@@ -61,13 +60,13 @@ def _validate_source_type(source_type: str) -> str | None:
 # ---- CRUD ----
 
 @router.get("")
-async def list_sources(
+def list_sources(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     source_type: str | None = Query(None),
     category: str | None = Query(None, description="分类筛选: network/user"),
     is_active: bool | None = Query(None),
-    q: str | None = Query(None, description="搜索名称或描述"),
+    q: str | None = Query(None, max_length=200, description="搜索名称或描述"),
     sort_by: str = Query("created_at", description="排序字段"),
     sort_order: str = Query("desc", description="排序方向: asc/desc"),
     db: Session = Depends(get_db),
@@ -123,7 +122,7 @@ async def list_sources(
 
 
 @router.post("")
-async def create_source(body: SourceCreate, db: Session = Depends(get_db)):
+def create_source(body: SourceCreate, db: Session = Depends(get_db)):
     """创建数据源"""
     # 校验 source_type
     err = _validate_source_type(body.source_type)
@@ -132,7 +131,7 @@ async def create_source(body: SourceCreate, db: Session = Depends(get_db)):
 
     # 验证 RSSHub 源必须有 rsshub_route
     if body.source_type == "rss.hub":
-        config = json.loads(body.config_json) if body.config_json else {}
+        config = body.config_json if isinstance(body.config_json, dict) else {}
         if not config.get("rsshub_route"):
             return error_response(400, "RSSHub 数据源必须在配置中提供 rsshub_route 字段")
 
@@ -143,7 +142,7 @@ async def create_source(body: SourceCreate, db: Session = Depends(get_db)):
 
     # 验证 Apple Podcasts 源必须有 apple_podcast_url 或 podcast_id
     elif body.source_type == "podcast.apple":
-        config = json.loads(body.config_json) if body.config_json else {}
+        config = body.config_json if isinstance(body.config_json, dict) else {}
         if not config.get("apple_podcast_url") and not config.get("podcast_id"):
             return error_response(400, "Apple Podcasts 数据源必须提供 apple_podcast_url 或 podcast_id")
 
@@ -175,7 +174,7 @@ async def create_source(body: SourceCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/options")
-async def list_source_options(db: Session = Depends(get_db)):
+def list_source_options(db: Session = Depends(get_db)):
     """轻量级来源列表，供下拉框使用"""
     sources = db.query(SourceConfig.id, SourceConfig.name)\
         .filter(SourceConfig.is_active == True)\
@@ -185,7 +184,7 @@ async def list_source_options(db: Session = Depends(get_db)):
 
 
 @router.post("/cleanup-duplicates")
-async def cleanup_duplicate_sources(db: Session = Depends(get_db)):
+def cleanup_duplicate_sources(db: Session = Depends(get_db)):
     """自动清理同名重复数据源：保留内容最多的（tie-break：最早创建），其余删除"""
     from collections import defaultdict
     from app.models.content import ContentItem
@@ -250,7 +249,7 @@ async def cleanup_duplicate_sources(db: Session = Depends(get_db)):
 # ---- 单个数据源操作（参数路径必须在字面路径之后） ----
 
 @router.get("/{source_id}")
-async def get_source(source_id: str, db: Session = Depends(get_db)):
+def get_source(source_id: str, db: Session = Depends(get_db)):
     """获取单个数据源详情"""
     source = db.get(SourceConfig, source_id)
     if not source:
@@ -260,7 +259,7 @@ async def get_source(source_id: str, db: Session = Depends(get_db)):
 
 
 @router.put("/{source_id}")
-async def update_source(source_id: str, body: SourceUpdate, db: Session = Depends(get_db)):
+def update_source(source_id: str, body: SourceUpdate, db: Session = Depends(get_db)):
     """部分更新数据源"""
     source = db.get(SourceConfig, source_id)
     if not source:
@@ -281,9 +280,9 @@ async def update_source(source_id: str, body: SourceUpdate, db: Session = Depend
     if final_source_type == "rss.hub":
         # 如果更新了 config_json，检查新配置；否则检查现有配置
         if "config_json" in update_data:
-            config = json.loads(update_data["config_json"]) if update_data["config_json"] else {}
+            config = update_data["config_json"] if isinstance(update_data["config_json"], dict) else {}
         else:
-            config = json.loads(source.config_json) if source.config_json else {}
+            config = source.config_json if isinstance(source.config_json, dict) else {}
         if not config.get("rsshub_route"):
             return error_response(400, "RSSHub 数据源必须在配置中提供 rsshub_route 字段")
 
@@ -363,7 +362,7 @@ async def batch_collect_all(db: Session = Depends(get_db)):
 
 
 @router.post("/batch-delete")
-async def batch_delete_sources(
+def batch_delete_sources(
     body: ContentBatchDelete,
     cascade: bool = Query(False, description="是否同时删除关联内容"),
     db: Session = Depends(get_db),
@@ -388,7 +387,7 @@ async def batch_delete_sources(
 
 
 @router.delete("/{source_id}")
-async def delete_source(
+def delete_source(
     source_id: str,
     cascade: bool = Query(False, description="是否同时删除关联内容"),
     db: Session = Depends(get_db),
@@ -447,7 +446,7 @@ async def trigger_collect(source_id: str, db: Session = Depends(get_db)):
 # ---- 采集历史 ----
 
 @router.get("/{source_id}/history")
-async def get_collection_history(
+def get_collection_history(
     source_id: str,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),

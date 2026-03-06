@@ -1,6 +1,5 @@
 """周期性分析与时间窗口预测"""
 
-import json
 import logging
 from collections import Counter
 from datetime import timedelta
@@ -133,9 +132,8 @@ def predict_next_window(source, now) -> Optional[tuple]:
     if not source.periodicity_data:
         return None
 
-    try:
-        periodicity = json.loads(source.periodicity_data)
-    except (json.JSONDecodeError, TypeError):
+    periodicity = source.periodicity_data
+    if not isinstance(periodicity, dict):
         logger.warning(f"Invalid periodicity_data for {source.name}")
         return None
 

@@ -1,6 +1,5 @@
 """Bilibili QR 登录路由 — 从 credentials.py 提取"""
 
-import json
 import logging
 from urllib.parse import urlparse, parse_qs
 
@@ -80,7 +79,7 @@ async def bilibili_qrcode_poll(
             uid = dede_user_id or ""
 
             # 创建或更新 PlatformCredential
-            extra = json.dumps({"uid": uid}) if uid else None
+            extra = {"uid": uid} if uid else None
 
             # 查找已有同 uid 的凭证
             existing = None
@@ -88,13 +87,10 @@ async def bilibili_qrcode_poll(
                 for cred in db.query(PlatformCredential).filter(
                     PlatformCredential.platform == "bilibili"
                 ).all():
-                    try:
-                        info = json.loads(cred.extra_info or "{}")
-                        if info.get("uid") == uid:
-                            existing = cred
-                            break
-                    except (json.JSONDecodeError, TypeError):
-                        pass
+                    info = cred.extra_info if isinstance(cred.extra_info, dict) else {}
+                    if info.get("uid") == uid:
+                        existing = cred
+                        break
 
             if existing:
                 existing.credential_data = encrypt_credential(cookie_str)

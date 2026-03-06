@@ -10,7 +10,6 @@
   - processed_content 填充改为 extract_content 步骤，由用户在模板中显式添加
 """
 
-import json
 import logging
 
 from sqlalchemy.orm import Session
@@ -78,7 +77,7 @@ class PipelineOrchestrator:
             return None
 
         # 2. 直接使用模板步骤
-        all_steps = json.loads(template.steps_config) or []
+        all_steps = template.steps_config or []
         if not all_steps:
             content.status = ContentStatus.READY.value
             self.db.flush()
@@ -103,7 +102,7 @@ class PipelineOrchestrator:
                 pipeline_id=execution.id,
                 step_index=index,
                 step_type=step_def["step_type"],
-                step_config=json.dumps(step_def.get("config", {}), ensure_ascii=False),
+                step_config=step_def.get("config", {}),
                 is_critical=step_def.get("is_critical", False),
             )
             self.db.add(step)

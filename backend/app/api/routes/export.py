@@ -33,7 +33,7 @@ def _source_to_dict(source: SourceConfig) -> dict:
 
 
 @router.get("/export/full")
-async def export_full(db: Session = Depends(get_db)):
+def export_full(db: Session = Depends(get_db)):
     """导出所有类型数据源为 JSON 备份文件"""
     sources = db.query(SourceConfig).order_by(SourceConfig.created_at).all()
 

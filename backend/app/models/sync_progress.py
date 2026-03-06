@@ -3,6 +3,7 @@
 import uuid
 
 from sqlalchemy import Column, String, DateTime, Text, Integer, ForeignKey, Index
+from sqlalchemy.dialects.postgresql import JSONB
 
 from app.core.database import Base
 from app.core.time import utcnow
@@ -32,11 +33,11 @@ class SyncTaskProgress(Base):
     total = Column(Integer, default=0)
 
     # 结果
-    result_data = Column(Text, nullable=True)        # JSON: 同步统计数据
+    result_data = Column(JSONB, nullable=True)        # 同步统计数据
     error_message = Column(Text, nullable=True)
 
-    # 同步选项（JSON，记录触发时的参数）
-    options_json = Column(Text, nullable=True)
+    # 同步选项（记录触发时的参数）
+    options_json = Column(JSONB, nullable=True)
 
     # 时间戳
     started_at = Column(DateTime, nullable=True)
