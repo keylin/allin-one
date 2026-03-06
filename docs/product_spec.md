@@ -96,6 +96,11 @@ Allin-One 是 AI 驱动的个人思维训练系统。它从海量信息源中自
 | 同步 | `sync.kindle` | Kindle 标注同步 | Fountain 客户端读取 My Clippings.txt 推送 | Fountain |
 | 同步 | `sync.safari_bookmarks` | Safari 书签同步 | Fountain 客户端读取本地书签库推送 | Fountain |
 | 同步 | `sync.chrome_bookmarks` | Chrome 书签同步 | Fountain 客户端读取本地书签文件推送 | Fountain |
+| 同步 | `sync.douban_books` | 豆瓣书单同步 | 豆瓣读书数据同步 | Fountain |
+| 同步 | `sync.douban_movies` | 豆瓣影单同步 | 豆瓣电影数据同步 | Fountain |
+| 同步 | `sync.zhihu` | 知乎收藏夹同步 | 知乎收藏数据同步 | Fountain |
+| 同步 | `sync.github_stars` | GitHub Star 同步 | GitHub Star 仓库数据同步 | Fountain |
+| 同步 | `sync.twitter` | Twitter/X 推文同步 | Twitter 推文数据同步 | Fountain |
 | 记录 | `user.note` | 日常笔记 | 用户手动输入 | 直接 POST API |
 | 记录 | `system.notification` | 系统消息 | 系统通知 | 系统生成 |
 

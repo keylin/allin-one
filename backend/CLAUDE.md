@@ -116,7 +116,7 @@ class SourceResponse(BaseModel):     # 响应模型
 ## 枚举定义
 
 枚举值以代码为准，不要凭记忆：
-- `app/models/content.py` — SourceType, MediaType (仅用于 MediaItem: image/video/audio), ContentStatus (含 ready)
+- `app/models/content.py` — SourceType, MediaType (仅用于 MediaItem: image/video/audio/ebook), ContentStatus (含 ready)
 - `app/models/pipeline.py` — StepType (含 localize_media), PipelineStatus, StepStatus, TriggerSource
 - `app/models/prompt_template.py` — TemplateType
 

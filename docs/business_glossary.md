@@ -13,7 +13,7 @@
 | **步骤 (Step)** | `PipelineStep` | 流水线中的原子操作执行记录。 |
 | **原子操作类型 (StepType)** | `StepType` 枚举 | 步骤的操作类型，如"抓取全文"、"媒体本地化"、"模型分析"。 |
 | **提示词 (Prompt)** | `PromptTemplate` | 指导 LLM 进行分析的指令模板。 |
-| **媒体项 (MediaItem)** | `MediaItem` | 内容关联的媒体文件 (图片/视频/音频)，ContentItem 一对多 MediaItem。由 localize_media 步骤创建。 |
+| **媒体项 (MediaItem)** | `MediaItem` | 内容关联的媒体文件 (图片/视频/音频/电子书)，ContentItem 一对多 MediaItem。由 localize_media 步骤创建。 |
 | **采集记录** | `CollectionRecord` | 每次数据源采集的执行记录，独立于流水线。 |
 
 ## 2. 专有名词
@@ -58,6 +58,11 @@
 | `sync.kindle` | user | Kindle 标注同步 | Fountain 客户端读取 My Clippings.txt 推送标注 |
 | `sync.safari_bookmarks` | user | Safari 书签同步 | Fountain 客户端读取本地书签库推送 |
 | `sync.chrome_bookmarks` | user | Chrome 书签同步 | Fountain 客户端读取本地书签文件推送 |
+| `sync.douban_books` | user | 豆瓣书单同步 | 豆瓣读书数据同步 |
+| `sync.douban_movies` | user | 豆瓣影单同步 | 豆瓣电影数据同步 |
+| `sync.zhihu` | user | 知乎收藏夹同步 | 知乎收藏数据同步 |
+| `sync.github_stars` | user | GitHub Star 同步 | GitHub Star 仓库数据同步 |
+| `sync.twitter` | user | Twitter/X 推文同步 | Twitter 推文数据同步 |
 | `user.note` | user | 日常笔记 | 用户手动输入，通过 `/api/content/submit` 提交 |
 | `file.upload` | user | 用户上传文件 | 文本/图片/文档，通过 `/api/content/upload` 上传 |
 | `system.notification` | user | 系统消息 | 系统通知 |
@@ -100,6 +105,7 @@ MediaType 现在仅用于 `MediaItem`（媒体项），不再是 ContentItem 或
 | `image` | 图片 |
 | `video` | 视频 |
 | `audio` | 音频 |
+| `ebook` | 电子书 |
 
 ### 3.4 ContentStatus (内容状态)
 
@@ -224,18 +230,18 @@ MediaType 现在仅用于 `MediaItem`（媒体项），不再是 ContentItem 或
 
 ### 场景 4：B 站个人观看历史同步
 - **数据源类型**：`sync.bilibili`（SourceCategory.USER）
-- **接入模式**：Fountain — 在 Fountain 客户端配置 SESSDATA，点击同步
-- **API 流程**：`POST /api/video/sync/setup` → `GET /api/video/sync/status` → `POST /api/video/sync`
+- **接入模式**：Fountain (internal 模式) — 通过 `/api/sync/run/sync.bilibili` 在服务端触发，或外部脚本 `scripts/bilibili-sync.py`
+- **API 流程**：`POST /api/sync/run/sync.bilibili` (内置) 或 `POST /api/video/sync/setup` → `GET /api/video/sync/status` → `POST /api/video/sync` (脚本)
 - **流水线模板**：媒体下载（仅收藏的视频触发 localize_media）
 
 ### 场景 5：Apple Books 阅读标注同步
 - **数据源类型**：`sync.apple_books`（SourceCategory.USER）
-- **接入模式**：Fountain — Rust 同步器读取 macOS BKLibrary SQLite
+- **接入模式**：Fountain (script 模式) — Rust 同步器读取 macOS BKLibrary SQLite，或外部脚本 `scripts/apple-books-sync.py`
 - **API 流程**：`POST /api/ebook/sync/setup` → `GET /api/ebook/sync/status` → `POST /api/ebook/sync`
 - **流水线模板**：无（标注写入 book_annotations 表）
 
 ### 场景 6：微信读书同步
 - **数据源类型**：`sync.wechat_read`（SourceCategory.USER）
-- **接入模式**：Fountain — 在 Fountain 客户端配置微信 cookies
-- **API 流程**：同上三步协议（共用 ebook sync API）
+- **接入模式**：Fountain (internal 模式) — 通过 `/api/sync/run/sync.wechat_read` 在服务端触发
+- **API 流程**：`POST /api/sync/run/sync.wechat_read` (内置)，支持 SSE 进度推送 (`GET /api/sync/progress/{id}`)
 - **流水线模板**：无（标注写入 book_annotations 表）

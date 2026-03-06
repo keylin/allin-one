@@ -1,6 +1,6 @@
 # Allin-One 系统方案
 
-> 版本: v1.3 | 更新日期: 2026-02-25
+> 版本: v1.4 | 更新日期: 2026-03-06
 
 ---
 
@@ -43,8 +43,8 @@
 │  │  ┌──────────────────┐ ┌──────────────────────┐  │     │
 │  │  │ pipeline 队列     │ │ scheduled 队列        │  │     │
 │  │  │ (concurrency=4)  │ │ (concurrency=2)      │  │     │
-│  │  │ enrich/analyze/  │ │ 采集循环/日报/清理     │  │     │
-│  │  │ localize/publish │ │                       │  │     │
+│  │  │ extract/localize │ │ 采集循环/日报/清理     │  │     │
+│  │  │ analyze/publish  │ │                       │  │     │
 │  │  └──────────────────┘ └──────────────────────┘  │     │
 │  └───────┼───────────┼───────────┼─────────────────┘     │
 │                                                           │
@@ -107,6 +107,12 @@ system_settings  (独立配置表)
 platform_credentials 1─ ─ ─ ─∞ source_configs  (credential_id FK)
 
 source_configs 1───∞ finance_data_points  (source_id FK)
+
+content_items 1───∞ reading_progress     (content_id FK, 电子书阅读进度)
+content_items 1───∞ book_annotations     (content_id FK, 书籍标注)
+content_items 1───∞ book_bookmarks       (content_id FK, 书签)
+
+sync_task_progress  (独立表, 同步任务进度追踪)
 ```
 
 **核心解耦关系**: `source_configs.pipeline_template_id → pipeline_templates.id`
@@ -120,7 +126,7 @@ source_configs 1───∞ finance_data_points  (source_id FK)
 
 数据源分为两大类（派生属性，非 DB 列）：
 - **网络数据 (network)**: rss.hub, rss.standard, api.akshare, web.scraper, podcast.apple, account.generic — 有 Collector，定时自动采集
-- **用户数据 (user)**: user.note, file.upload, system.notification, sync.apple_books, sync.wechat_read, sync.bilibili — 用户/系统主动提交或外部脚本推送，schedule_enabled 自动置 false
+- **用户数据 (user)**: user.note, file.upload, system.notification, sync.* (apple_books, wechat_read, bilibili, kindle, safari_bookmarks, chrome_bookmarks, douban_books, douban_movies, zhihu, github_stars, twitter) — 用户/系统主动提交或同步推送，schedule_enabled 自动置 false
 
 通用内容提交 API：`POST /api/content/submit`（文本）、`POST /api/content/upload`（文件），校验目标源必须为 user 分类。
 
@@ -138,13 +144,13 @@ CREATE TABLE source_configs (
     calculated_interval INTEGER,                -- 系统计算的间隔（仅供展示）
     next_collection_at DATETIME,                -- 预计算的下次采集时间
     -- 高级调度
-    periodicity_data TEXT,                      -- 周期模式识别结果 JSON
+    periodicity_data JSONB,                     -- 周期模式识别结果 JSON
     periodicity_updated_at DATETIME,            -- 周期分析更新时间
     hotspot_level   TEXT,                       -- 热点等级: extreme/high/instant
     hotspot_detected_at DATETIME,               -- 热点检测时间
     -- 流水线绑定
     pipeline_template_id TEXT,                  -- 绑定的流水线模板 (解耦关键!)
-    config_json     TEXT,                       -- 渠道特定配置 (JSON)
+    config_json     JSONB,                      -- 渠道特定配置 (JSON)
     credential_id   TEXT,                       -- 关联的平台凭证
     -- 内容保留
     auto_cleanup_enabled BOOLEAN DEFAULT FALSE, -- 启用自动清理
@@ -177,7 +183,7 @@ CREATE TABLE collection_records (
     error_message   TEXT,
     started_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
     completed_at    DATETIME,
-    FOREIGN KEY (source_id) REFERENCES source_configs(id)
+    FOREIGN KEY (source_id) REFERENCES source_configs(id) ON DELETE CASCADE
 );
 ```
 
@@ -191,22 +197,24 @@ CREATE TABLE content_items (
     external_id     TEXT NOT NULL,              -- 外部唯一标识 (URL hash)
     url             TEXT,                       -- 原始链接
     author          TEXT,                       -- 作者
-    raw_data        TEXT,                       -- 原始数据 (JSON)
+    raw_data        JSONB,                      -- 原始数据 (JSON)
     processed_content TEXT,                     -- 清洗后全文
-    analysis_result TEXT,                       -- LLM 分析结果 (JSON/Markdown/Text)
+    analysis_result JSONB,                      -- LLM 分析结果 (JSON)
     status          TEXT DEFAULT 'pending',     -- ContentStatus 枚举 (pending/processing/ready/analyzed/failed)
-    language        TEXT,                       -- 内容语言 (zh/en/ja...)
+    title_hash      BIGINT,                     -- SimHash 64 位去重指纹
+    duplicate_of_id TEXT,                       -- 标记重复项 (指向原始 content_id)
     published_at    DATETIME,                   -- 原始发布时间
     collected_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
     is_favorited    BOOLEAN DEFAULT FALSE,      -- 是否收藏
     favorited_at    DATETIME,                   -- 收藏时间
     user_note       TEXT,                       -- 用户笔记
-    chat_history    TEXT,                       -- AI 对话历史 (JSON: [{role, content}, ...])
+    chat_history    JSONB,                      -- AI 对话历史 (JSON: [{role, content}, ...])
     view_count      INTEGER DEFAULT 0,           -- 浏览次数
     last_viewed_at  DATETIME,                     -- 最后浏览时间
     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (source_id) REFERENCES source_configs(id) ON DELETE SET NULL,
+    FOREIGN KEY (duplicate_of_id) REFERENCES content_items(id) ON DELETE SET NULL,
     UNIQUE (source_id, external_id)            -- 去重约束
 );
 
@@ -232,8 +240,10 @@ CREATE TABLE media_items (
     metadata_json   TEXT,                       -- JSON: 类型特定元数据 (thumbnail_path, duration 等)
     playback_position INTEGER DEFAULT 0,       -- 播放进度（秒）
     last_played_at  DATETIME,                  -- 最后播放时间
+    is_favorited    BOOLEAN DEFAULT FALSE,      -- 是否收藏
+    favorited_at    DATETIME,                  -- 收藏时间
     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (content_id) REFERENCES content_items(id)
+    FOREIGN KEY (content_id) REFERENCES content_items(id) ON DELETE CASCADE
 );
 
 CREATE INDEX ix_media_item_content_id ON media_items(content_id);
@@ -270,17 +280,17 @@ CREATE TABLE pipeline_steps (
     pipeline_id     TEXT NOT NULL,
     step_index      INTEGER NOT NULL,
     step_type       TEXT NOT NULL,              -- 原子操作类型 (StepType 枚举)
-    step_config     TEXT,                       -- 操作配置 (JSON, 从模板复制)
+    step_config     JSONB,                      -- 操作配置 (JSON, 从模板复制)
     status          TEXT DEFAULT 'pending',
     is_critical     BOOLEAN DEFAULT FALSE,
-    input_data      TEXT,                       -- 输入 (JSON)
-    output_data     TEXT,                       -- 输出 (JSON)
+    input_data      JSONB,                      -- 输入 (JSON)
+    output_data     JSONB,                      -- 输出 (JSON)
     error_message   TEXT,
     retry_count     INTEGER DEFAULT 0,
     started_at      DATETIME,
     completed_at    DATETIME,
     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (pipeline_id) REFERENCES pipeline_executions(id)
+    FOREIGN KEY (pipeline_id) REFERENCES pipeline_executions(id) ON DELETE CASCADE
 );
 ```
 
@@ -291,7 +301,7 @@ CREATE TABLE pipeline_templates (
     id              TEXT PRIMARY KEY,
     name            TEXT NOT NULL UNIQUE,
     description     TEXT,
-    steps_config    TEXT NOT NULL,              -- 步骤定义列表 (JSON)
+    steps_config    JSONB NOT NULL,             -- 步骤定义列表 (JSON)
     is_builtin      BOOLEAN DEFAULT FALSE,     -- 是否内置模板
     is_active       BOOLEAN DEFAULT TRUE,
     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -380,8 +390,8 @@ CREATE TABLE finance_data_points (
     unit_nav        FLOAT,                      -- 单位净值
     cumulative_nav  FLOAT,                      -- 累计净值
     -- 分析
-    alert_json      TEXT,                       -- 告警信息 (JSON)
-    analysis_result TEXT,                       -- LLM 分析结果
+    alert_json      JSONB,                      -- 告警信息 (JSON)
+    analysis_result JSONB,                      -- LLM 分析结果
     collected_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (source_id) REFERENCES source_configs(id)
@@ -389,6 +399,66 @@ CREATE TABLE finance_data_points (
 
 CREATE UNIQUE INDEX uq_finance_source_date ON finance_data_points(source_id, date_key);
 CREATE INDEX ix_finance_source_date ON finance_data_points(source_id, date_key);
+```
+
+#### reading_progress (电子书阅读进度)
+
+```sql
+CREATE TABLE reading_progress (
+    id              TEXT PRIMARY KEY,
+    content_id      TEXT NOT NULL,              -- 外键 -> content_items
+    progress        FLOAT DEFAULT 0,            -- 阅读进度 (0.0-1.0)
+    updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (content_id) REFERENCES content_items(id) ON DELETE CASCADE
+);
+```
+
+#### book_annotations (书籍标注)
+
+```sql
+CREATE TABLE book_annotations (
+    id              TEXT PRIMARY KEY,
+    content_id      TEXT NOT NULL,              -- 外键 -> content_items (书籍)
+    chapter         TEXT,                       -- 章节
+    text            TEXT NOT NULL,              -- 标注文本
+    note            TEXT,                       -- 用户笔记
+    color           TEXT,                       -- 标注颜色
+    location        TEXT,                       -- 位置信息
+    external_id     TEXT,                       -- 外部唯一标识
+    annotated_at    DATETIME,                   -- 标注时间
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (content_id) REFERENCES content_items(id) ON DELETE CASCADE
+);
+```
+
+#### book_bookmarks (书签)
+
+```sql
+CREATE TABLE book_bookmarks (
+    id              TEXT PRIMARY KEY,
+    content_id      TEXT NOT NULL,              -- 外键 -> content_items
+    title           TEXT,
+    url             TEXT NOT NULL,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (content_id) REFERENCES content_items(id) ON DELETE CASCADE
+);
+```
+
+#### sync_task_progress (同步任务进度)
+
+```sql
+CREATE TABLE sync_task_progress (
+    id              TEXT PRIMARY KEY,
+    source_type     TEXT NOT NULL,              -- 同步类型 (sync.wechat_read 等)
+    status          TEXT DEFAULT 'pending',     -- pending/running/completed/failed
+    progress        FLOAT DEFAULT 0,            -- 进度 (0.0-1.0)
+    message         TEXT,                       -- 当前状态描述
+    items_total     INTEGER DEFAULT 0,
+    items_processed INTEGER DEFAULT 0,
+    started_at      DATETIME,
+    completed_at    DATETIME,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 ```
 
 ---
@@ -535,8 +605,7 @@ class BaseCollector(ABC):
 
 | Collector | 适用 SourceType | 采集方式 | 说明 |
 |-----------|-----------------|----------|------|
-| `RSSHubCollector` | `rss.hub` | RSSHub 服务 → feedparser | 统一处理 B站/YouTube/微博等 |
-| `RSSStdCollector` | `rss.standard` | feedparser 直接解析 | 标准 RSS/Atom |
+| `RSSCollector` | `rss.hub`, `rss.standard` | RSSHub 服务 / feedparser 直接解析 | 统一处理所有 RSS 类型 |
 | `ScraperCollector` | `web.scraper` | L1/L2/L3 三级策略 | 通用网页抓取 |
 | `AkShareCollector` | `api.akshare` | AkShare API | 金融数据 |
 | `PodcastCollector` | `podcast.apple` | 播客 RSS 解析 | Apple Podcasts |
@@ -545,7 +614,9 @@ class BaseCollector(ABC):
 
 注意:
 - 没有 BilibiliVideoCollector / YouTubeVideoCollector。视频下载由流水线中的 `localize_media` 步骤 (yt-dlp) 处理, 不是 Collector 的职责。
-- `sync.*` 类型（apple_books / wechat_read / bilibili / kindle / safari_bookmarks / chrome_bookmarks）均属于 **Fountain 模式**，无 Collector 实现，不参与定时调度。数据由 Fountain 桌面客户端采集后通过 Sync API 三步协议推送（见 §4.4）。
+- `sync.*` 类型均属于 **Fountain 模式**，无 Collector 实现，不参与定时调度。数据通过两种方式推送：
+  - **internal 模式**: 微信读书、B站等可通过 `/api/sync/run/{source_type}` 在服务端 Worker 内置 Fetcher 直接触发
+  - **script 模式**: Apple Books 等需要本地数据的走外部脚本推送
 
 ### 4.3 三级抓取策略实现
 
@@ -582,16 +653,31 @@ class ContentEnricher:
 
 ### 4.4 外部数据同步 (Sync API)
 
-对于需要用户凭证（Cookie）且不适合作为 Collector 的平台，采用「外部脚本 + 同步 API」模式。
+对于需要用户凭证（Cookie）且不适合作为 Collector 的平台，支持两种同步模式：
 
-**架构**: 外部脚本（独立运行，不依赖后端环境）负责从平台获取数据，通过 HTTP API 推送到后端。
+**同步模式**:
 
-**同步 API 端点**:
+| 模式 | 说明 | 适用类型 |
+|------|------|---------|
+| **internal** | Worker 内置 Fetcher，通过 `/api/sync/run/{source_type}` 触发 | sync.wechat_read, sync.bilibili |
+| **script** | 外部脚本独立采集后推送 | sync.apple_books 等需要本地数据的类型 |
+
+**统一同步管理 API** (`/api/sync`):
+
+| 端点 | 说明 |
+|------|------|
+| `GET /api/sync/status` | 所有同步源状态 |
+| `POST /api/sync/run/{source_type}` | 触发 internal 模式同步 |
+| `GET /api/sync/progress/{progress_id}` | SSE 实时进度推送 |
+| `POST /api/sync/link-credential` | 关联凭证到同步源 |
+
+**传统三步式同步 API** (兼容外部脚本):
 
 | API 前缀 | 适用类型 | 端点 |
 |----------|---------|------|
 | `/api/ebook/sync` | `sync.apple_books`, `sync.wechat_read` | setup / status / sync (书籍+标注) |
 | `/api/video/sync` | `sync.bilibili` | setup / status / sync (视频元数据) |
+| `/api/bookmark/sync` | `sync.safari_bookmarks`, `sync.chrome_bookmarks` | setup / status / sync (书签) |
 
 **同步流程** (三步式):
 1. `POST /setup?source_type=sync.xxx` — 获取或创建 SourceConfig，返回 source_id
@@ -604,8 +690,11 @@ class ContentEnricher:
 |------|------|------|
 | `scripts/bilibili-sync.py` | B站 | 收藏夹/历史/动态视频 |
 | `scripts/wechat-read-sync.py` | 微信读书 | 书籍元数据、阅读进度、划线标注 |
+| `scripts/apple-books-sync.py` | Apple Books | 书籍+标注 (读取本地 BKLibrary SQLite) |
 
 脚本独立于后端环境，仅依赖 `httpx`，支持增量/全量/预览模式。
+
+**同步进度机制**: `sync_task_progress` 表记录同步任务进度，Worker 更新进度行，API 端通过 SSE (`/api/sync/progress/{id}`) 推送给前端实时显示。
 
 ---
 
@@ -825,6 +914,7 @@ DELETE /api/media/{content_id}          → 删除媒体
 GET    /api/media/{content_id}/thumbnail → 封面图
 GET    /api/media/{content_id}/{file_path} → FileResponse (从 MEDIA_DIR 读取)
 POST   /api/media/{content_id}/retry    → 重试媒体下载
+POST   /api/media/{media_id}/favorite  → 切换媒体收藏
 ```
 
 #### Audio
@@ -844,10 +934,10 @@ POST   /api/credentials/{id}/check     → { valid } (校验凭证)
 POST   /api/credentials/{id}/sync-rsshub → { synced } (同步 RSSHub)
 ```
 
-#### Bilibili Auth (B站认证)
+#### Bilibili Auth (B站认证，挂载在 Credentials 路由下)
 ```
-POST   /api/bilibili-auth/qrcode/generate → { qr_url, token } (B站扫码登录)
-GET    /api/bilibili-auth/qrcode/poll     → { status } (轮询扫码结果)
+POST   /api/credentials/bilibili/qrcode/generate → { qr_url, token } (B站扫码登录)
+GET    /api/credentials/bilibili/qrcode/poll     → { status } (轮询扫码结果)
 ```
 
 #### Finance (金融数据)
@@ -858,10 +948,33 @@ GET    /api/finance/summary             → 金融数据概要
 GET    /api/finance/timeseries/{source_id} → 时间序列数据
 ```
 
-#### Export (全量导入导出)
+#### Export (全量导入导出，挂载在 Sources 路由下)
 ```
-GET    /api/export/export/full         → 全量导出
-POST   /api/export/import/full         → 全量导入
+GET    /api/sources/export/full        → 全量导出
+POST   /api/sources/import/full        → 全量导入
+```
+
+#### Bookmark Sync (书签同步)
+```
+POST   /api/bookmark/sync/setup        → { source_id } (创建/获取 sync 数据源)
+GET    /api/bookmark/sync/status        → SyncStatus (同步状态)
+POST   /api/bookmark/sync               → SyncResponse (推送书签数据)
+```
+
+#### Sync (统一同步管理)
+```
+GET    /api/sync/status                 → 所有同步源状态
+POST   /api/sync/run/{source_type}      → 触发内置同步 (internal 模式)
+GET    /api/sync/progress/{progress_id} → SSE 实时进度推送
+POST   /api/sync/link-credential        → 关联凭证到同步源
+```
+
+#### Ebook (书架管理)
+```
+GET    /api/ebook/books                 → 书籍列表
+GET    /api/ebook/books/{id}            → 书籍详情 (含标注)
+PUT    /api/ebook/books/{id}            → 更新书籍元数据
+GET    /api/ebook/annotations           → 标注列表
 ```
 
 ---

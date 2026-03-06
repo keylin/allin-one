@@ -10,14 +10,19 @@ services/
 │   └── executor.py      # 执行步骤，管理状态转换
 ├── collectors/          # 数据采集器（每种 SourceType 一个）
 │   ├── base.py          # BaseCollector 接口
-│   ├── rss.py           # RSSHubCollector + RSSStdCollector
+│   ├── rss.py           # RSSCollector（统一处理 rss.hub 和 rss.standard）
 │   ├── web_scraper.py   # ScraperCollector (L1/L2/L3)
 │   ├── akshare.py       # AkShareCollector (金融数据)
 │   ├── podcast.py       # PodcastCollector (Apple Podcasts)
 │   ├── generic_account.py # GenericAccountCollector
 │   ├── file_upload.py   # FileUploadCollector
 │   └── utils.py         # 采集器工具函数
-│   # 注: sync.* 类型无 Collector，由外部脚本通过 API 推送 (见 api/routes/video_sync.py, ebook_sync.py)
+│   # 注: sync.* 类型无 Collector，由外部脚本或 Worker 内置 Fetcher 通过 API 推送
+├── sync/               # 外部数据同步服务
+│   ├── base.py          # BaseSyncService 接口
+│   ├── bilibili.py      # B站同步
+│   ├── wechat_read.py   # 微信读书同步
+│   └── upsert.py        # 通用 upsert 逻辑
 ├── scheduling/          # 智能调度服务
 │   ├── calculator.py    # SchedulingService (间隔计算)
 │   ├── config.py        # SchedulingConfig (调度参数)
@@ -30,7 +35,10 @@ services/
 │   ├── email.py
 │   └── dingtalk.py
 ├── chat_service.py      # 内容 AI 对话服务
+├── dedup.py             # SimHash 去重
 ├── enrichment.py        # 内容富化 (enrich_content 步骤实现)
+├── ebook_parser.py      # 电子书解析
+├── book_metadata.py     # 书籍元数据服务
 ├── media_detection.py   # 媒体检测
 ├── rsshub_sync.py       # RSSHub 同步服务
 ├── scheduling_service.py # 向后兼容入口 → scheduling/
@@ -79,18 +87,19 @@ class BaseCollector(ABC):
         """从数据源抓取新条目。去重在 DB 层处理。"""
 ```
 
-SourceType → Collector 映射见 `app/tasks/collection_tasks.py` 中的 COLLECTOR_MAP。
+SourceType → Collector 映射见 `app/services/collectors/__init__.py` 中的 COLLECTOR_MAP。
 
 没有 BilibiliVideoCollector 或 YouTubeVideoCollector。B站/YouTube 视频通过 RSSHub 发现，由流水线的 `localize_media` 步骤处理。
 
-`sync.*` 类型（Apple Books、微信读书、B站视频）不走 Collector，由外部脚本通过同步 API 推送:
-- 电子书同步: `api/routes/ebook_sync.py` (sync.apple_books, sync.wechat_read)
-- 视频同步: `api/routes/video_sync.py` (sync.bilibili)
-- 外部脚本: `scripts/bilibili-sync.py`, `scripts/wechat-read-sync.py`
+`sync.*` 类型不走 Collector，通过同步 API 推送数据。支持两种同步模式:
+- **internal**（Worker 内置 Fetcher）: 微信读书、B站可通过 `/api/sync/run/{source_type}` 在服务端直接触发
+- **script**（外部脚本）: Apple Books 等需要本地数据的走外部脚本
+- 同步 API: `api/routes/sync.py` (统一管理)、`api/routes/ebook_sync.py`、`api/routes/video_sync.py`、`api/routes/bookmark_sync.py`
+- 外部脚本: `scripts/bilibili-sync.py`、`scripts/wechat-read-sync.py`、`scripts/apple-books-sync.py`
 
 ## 步骤处理器开发
 
-步骤处理器在 `app/tasks/pipeline_tasks.py` 中。每个处理器接收 context 字典:
+步骤处理器在 `app/services/pipeline/steps/` 目录中，每种步骤一个文件。每个处理器接收 context 字典:
 ```python
 context = {
     "execution_id": str,
@@ -117,7 +126,9 @@ def _handle_xxx(context: dict) -> dict:
     return {"status": "done", "key": "value"}
 ```
 
-在 `pipeline_tasks.py` 底部的 `STEP_HANDLERS` 字典中注册处理器。
+在 `app/services/pipeline/steps/__init__.py` 的 `STEP_HANDLERS` 字典中注册处理器。`pipeline_tasks.py` 仅向后兼容再导出。
+
+**执行模式**: 一条流水线在同一个 worker slot 内通过内联循环跑完所有步骤（`while current_index is not None`），避免每步之间经过 PG 队列往返带来的延迟。
 
 ### localize_media 步骤输出
 
@@ -128,7 +139,9 @@ def _handle_xxx(context: dict) -> dict:
 - `file_path`: 视频文件绝对路径（视频时）
 - `subtitle_path`: 字幕文件路径（视频时）
 - `thumbnail_path`: 封面图绝对路径（yt-dlp 下载优先，ffmpeg 截取回退）
-- `duration`: 时长（秒，视频时）
+- `duration`: 时长（秒，存储在 `MediaItem.metadata_json["duration"]` 中）
+- `media_items`: 列表，记录所有创建的 MediaItem 信息
+- `summary`: 图片扫描时的汇总信息
 
 ## 关键步骤 vs 非关键步骤
 

@@ -31,7 +31,7 @@
 ```vue
 <script setup>
 import { ref, onMounted } from 'vue'
-import api from '@/api'
+import { listSources } from '@/api/sources'
 
 const items = ref([])
 const loading = ref(false)
@@ -39,7 +39,7 @@ const loading = ref(false)
 onMounted(async () => {
   loading.value = true
   try {
-    const res = await api.get('/sources', { params: { page: 1, page_size: 20 } })
+    const res = await listSources({ page: 1, page_size: 20 })
     items.value = res.data
   } finally {
     loading.value = false
@@ -59,18 +59,15 @@ onMounted(async () => {
 `src/api/index.js` 中的 Axios 实例会自动解包 `response.data`。
 后端返回 `{code, data, message}`，经过拦截器后直接拿到这个结构。
 
+**推荐用法**: 从模块化 API 文件导入命名函数（`src/api/` 下有 sources.js、content.js、pipelines.js、media.js、ebook.js、sync.js 等 13 个模块）：
 ```javascript
-const res = await api.get('/sources')                    // res = {code, data, message}
-const res = await api.post('/sources', sourceData)       // POST
-const res = await api.put(`/sources/${id}`, updateData)  // PUT
-const res = await api.delete(`/sources/${id}`)           // DELETE
+import { listSources, createSource } from '@/api/sources'
+import { listContent, toggleFavorite } from '@/api/content'
 
-// 分页模式:
-const res = await api.get('/content', {
-  params: { page: 1, page_size: 20, source_id: 'xxx', status: 'pending' }
-})
-// res = {code, data: [...], total, page, page_size, message}
+const res = await listSources({ page: 1, page_size: 20 })  // res = {code, data, message}
 ```
+
+底层 axios 实例 `import api from '@/api'` 仅在少数场景直接使用。
 
 ## 页面路由
 
@@ -87,8 +84,12 @@ const res = await api.get('/content', {
 | /media            | media-view.vue       | 媒体管理（视频/音频） |
 | /finance          | FinanceView.vue      | 金融数据展示      |
 | /settings         | SettingsView.vue     | 系统设置          |
+| /ebook            | EbookView.vue        | 书架管理          |
+| /ebook/:id        | ebook-detail-view.vue | 书籍详情         |
+| /sync             | SyncView.vue         | 同步管理          |
+| /reading          | ReadingView.vue      | 阅读标注          |
 
-旧路由兼容: `/video-download` → `/media`, `/videos` → `/media`, `/processing` → `/pipelines`
+旧路由兼容: `/video-download` → `/media`, `/videos` → `/media`, `/processing` → `/pipelines`, `/prompt-templates` → `/pipelines?tab=prompts`, `/annotations` → `/reading`
 
 ## URL 状态持久化
 
@@ -162,6 +163,8 @@ error('操作失败', { duration: 5000 })
 | `useModelOptions` | LLM 模型选项 |
 | `usePullToRefresh` | 下拉刷新 |
 | `useSwipe` | 滑动手势 |
+| `useDoubleTapClose` | 双击关闭（移动端 Modal/卡片） |
+| `useDoubleTapFavorite` | 双击收藏手势 |
 
 ## Pinia Store 模式
 
@@ -169,7 +172,7 @@ error('操作失败', { duration: 5000 })
 // stores/sources.js
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import api from '@/api'
+import { listSources, createSource as apiCreate } from '@/api/sources'
 
 export const useSourcesStore = defineStore('sources', () => {
   const sources = ref([])
@@ -178,7 +181,7 @@ export const useSourcesStore = defineStore('sources', () => {
   async function fetchSources(params = {}) {
     loading.value = true
     try {
-      const res = await api.get('/sources', { params })
+      const res = await listSources({ page: 1, page_size: 20, ...params })
       sources.value = res.data
     } finally {
       loading.value = false

@@ -74,6 +74,25 @@ model: sonnet
 
 **注意**: 不自动 commit，留给 `/g-accept` 验收后提交。
 
+### 阶段 4: 文档同步（主动执行）
+
+审查+修复完成后，主动评估并更新文档:
+
+1. `git diff --name-only` 获取变更文件
+2. 对照映射规则判断哪些文档受影响:
+   - models/*.py 变更 → `docs/system_design.md`、`docs/business_glossary.md`
+   - routers/*.py / schemas 变更 → `docs/system_design.md`
+   - 枚举值变更 → `docs/business_glossary.md`
+   - 部署/配置变更 → `CLAUDE.md`
+   - Collector/StepHandler 变更 → `backend/app/services/CLAUDE.md`
+   - 前端路由/组件规范变更 → `frontend/CLAUDE.md`
+3. 执行策略:
+   - **有把握**: 直接修改文档，不需要用户确认
+   - **不确定**: 列出疑点，询问用户后再决定
+   - **无需更新**: 在报告中简要说明理由
+4. 文档变更随功能代码一起提交，不单独 commit（纯文档维护除外）
+5. 完成报告中增加 `### 文档同步` 章节，列出已更新/无需更新的文档
+
 ## 开发铁律
 
 ### 后端

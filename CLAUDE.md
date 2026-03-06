@@ -1,6 +1,6 @@
 # Allin-One
 
-个人信息聚合与智能分析平台。从 RSS/Bilibili/YouTube/网页等渠道自动采集内容，通过 LLM 分析后结构化呈现。
+个人信息聚合与智能分析平台。从 RSS/YouTube/网页等渠道自动采集内容，通过外部同步脚本接入 Bilibili/微信读书/Apple Books 等个人数据，经 LLM 分析后结构化呈现。
 
 ## 核心架构约束
 
@@ -43,6 +43,7 @@ docker compose up -d --build
 - 命名: snake_case (Python), camelCase (JS), kebab-case (文件名)
 - Git: `feat:`, `fix:`, `refactor:`, `docs:`, `chore:` 前缀
 - **时间戳**: 全项目使用 `from app.core.time import utcnow`，禁止 `datetime.now(timezone.utc)`（详见 `backend/CLAUDE.md` 时间戳陷阱章节）
+- **文档同步**: 完成涉及架构、API、数据模型、枚举、配置、部署方式等变更后，须主动评估并更新 `docs/` 和 `CLAUDE.md` 系列文档。评估标准见 `.claude/agents/doc-maintainer.md` 中的变更类型→文档映射矩阵。有把握的直接更新，不确定的才问用户。文档变更随功能代码同 commit，保持原子性；纯文档维护（定期对齐、批量校正）才用独立 `docs:` commit。
 
 ## 项目组织规范
 
