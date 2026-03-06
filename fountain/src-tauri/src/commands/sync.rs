@@ -1,5 +1,6 @@
 use crate::config::{AppSettings, SyncPlatformStatus, SyncState};
 use crate::sync;
+use crate::sync::api_client::SyncError;
 use crate::sync::apple_books::BookManifestEntry;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -21,10 +22,6 @@ pub enum Platform {
     Kindle,
     SafariBookmarks,
     ChromeBookmarks,
-    Douban,
-    Zhihu,
-    GithubStars,
-    Twitter,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -65,22 +62,6 @@ pub async fn sync_now(app: AppHandle) -> Result<Vec<SyncResult>, String> {
         let r = run_chrome_bookmarks_sync(&app, &settings).await;
         results.push(r);
     }
-    if settings.douban_enabled {
-        let r = run_douban_sync(&app, &settings).await;
-        results.push(r);
-    }
-    if settings.zhihu_enabled {
-        let r = run_zhihu_sync(&app, &settings).await;
-        results.push(r);
-    }
-    if settings.github_stars_enabled {
-        let r = run_github_stars_sync(&app, &settings).await;
-        results.push(r);
-    }
-    if settings.twitter_enabled {
-        let r = run_twitter_sync(&app, &settings).await;
-        results.push(r);
-    }
 
     Ok(results)
 }
@@ -96,10 +77,6 @@ pub async fn sync_platform(app: AppHandle, platform: Platform) -> Result<SyncRes
         Platform::Kindle => Ok(run_kindle_sync(&app, &settings).await),
         Platform::SafariBookmarks => Ok(run_safari_bookmarks_sync(&app, &settings).await),
         Platform::ChromeBookmarks => Ok(run_chrome_bookmarks_sync(&app, &settings).await),
-        Platform::Douban => Ok(run_douban_sync(&app, &settings).await),
-        Platform::Zhihu => Ok(run_zhihu_sync(&app, &settings).await),
-        Platform::GithubStars => Ok(run_github_stars_sync(&app, &settings).await),
-        Platform::Twitter => Ok(run_twitter_sync(&app, &settings).await),
     }
 }
 
@@ -235,33 +212,7 @@ pub(crate) async fn run_wechat_read_sync(app: &AppHandle, settings: &AppSettings
             }
         }
         Err(e) => {
-            let msg = format!("{:#}", e);
-            let needs_auth = msg.contains("401") || msg.contains("expired") || msg.contains("auth");
-            if needs_auth {
-                update_platform_status(app, Platform::WechatRead, SyncPlatformStatus::NeedsAuth);
-                if settings.notifications_enabled {
-                    let _ = app.notification()
-                        .builder()
-                        .title("微信读书登录已过期")
-                        .body("请重新扫码登录")
-                        .show();
-                }
-            } else {
-                update_platform_error(app, Platform::WechatRead, msg.clone());
-                if settings.notifications_enabled {
-                    let _ = app.notification()
-                        .builder()
-                        .title("微信读书同步失败")
-                        .body(&msg)
-                        .show();
-                }
-            }
-            SyncResult {
-                platform: Platform::WechatRead,
-                success: false,
-                message: msg,
-                items_synced: 0,
-            }
+            handle_sync_error(app, settings, Platform::WechatRead, "微信读书", e)
         }
     }
 }
@@ -288,33 +239,7 @@ pub(crate) async fn run_bilibili_sync(app: &AppHandle, settings: &AppSettings) -
             }
         }
         Err(e) => {
-            let msg = format!("{:#}", e);
-            let needs_auth = msg.contains("401") || msg.contains("expired") || msg.contains("not_login");
-            if needs_auth {
-                update_platform_status(app, Platform::Bilibili, SyncPlatformStatus::NeedsAuth);
-                if settings.notifications_enabled {
-                    let _ = app.notification()
-                        .builder()
-                        .title("Bilibili 登录已过期")
-                        .body("请重新扫码登录")
-                        .show();
-                }
-            } else {
-                update_platform_error(app, Platform::Bilibili, msg.clone());
-                if settings.notifications_enabled {
-                    let _ = app.notification()
-                        .builder()
-                        .title("Bilibili Sync Failed")
-                        .body(&msg)
-                        .show();
-                }
-            }
-            SyncResult {
-                platform: Platform::Bilibili,
-                success: false,
-                message: msg,
-                items_synced: 0,
-            }
+            handle_sync_error(app, settings, Platform::Bilibili, "Bilibili", e)
         }
     }
 }
@@ -346,22 +271,7 @@ pub(crate) async fn run_kindle_sync(app: &AppHandle, settings: &AppSettings) -> 
             }
         }
         Err(e) => {
-            let msg = format!("{:#}", e);
-            update_platform_error(app, Platform::Kindle, msg.clone());
-            if settings.notifications_enabled {
-                let _ = app
-                    .notification()
-                    .builder()
-                    .title("Kindle Sync Failed")
-                    .body(&msg)
-                    .show();
-            }
-            SyncResult {
-                platform: Platform::Kindle,
-                success: false,
-                message: msg,
-                items_synced: 0,
-            }
+            handle_sync_error(app, settings, Platform::Kindle, "Kindle", e)
         }
     }
 }
@@ -468,261 +378,57 @@ pub(crate) async fn run_chrome_bookmarks_sync(
     }
 }
 
-pub(crate) async fn run_douban_sync(app: &AppHandle, settings: &AppSettings) -> SyncResult {
-    update_platform_status(app, Platform::Douban, SyncPlatformStatus::Syncing);
+/// Unified error handler for sync operations.
+/// Checks if the error is a SyncError and uses its user-friendly message;
+/// falls back to string matching for legacy anyhow errors.
+fn handle_sync_error(
+    app: &AppHandle,
+    settings: &AppSettings,
+    platform: Platform,
+    platform_name: &str,
+    error: anyhow::Error,
+) -> SyncResult {
+    // Try to downcast to SyncError for structured handling
+    let (user_msg, needs_auth) = if let Some(sync_err) = error.downcast_ref::<SyncError>() {
+        let needs_auth = matches!(sync_err, SyncError::AuthExpired(_));
+        (sync_err.user_message().to_string(), needs_auth)
+    } else {
+        // Fallback: string-based detection for errors from anyhow/other sources
+        // Fallback path: should not be reached once all sync modules return SyncError.
+        let msg = format!("{:#}", error);
+        let needs_auth = msg.contains("401") || msg.contains("expired");
+        (msg, needs_auth)
+    };
 
-    let result = sync::douban::run_sync(settings).await;
-    match result {
-        Ok((book_count, movie_count)) => {
-            let total = book_count + movie_count;
-            // Inline update because douban has two separate counts
-            if let Ok(store) = app.store(SETTINGS_STORE) {
-                let mut state: SyncState = store
-                    .get(SYNC_STATE_KEY)
-                    .and_then(|v| serde_json::from_value(v).ok())
-                    .unwrap_or_default();
-                let now = chrono::Utc::now().to_rfc3339();
-                state.douban_status = SyncPlatformStatus::Success;
-                state.douban_last_sync = Some(now);
-                state.douban_book_count = book_count;
-                state.douban_movie_count = movie_count;
-                state.douban_error = None;
-                if let Ok(val) = serde_json::to_value(&state) {
-                    store.set(SYNC_STATE_KEY, val);
-                    let _ = store.save();
-                }
-                let _ = app.emit("sync-status-changed", &state);
-            }
-            if total > 0 && settings.notifications_enabled {
-                let _ = app
-                    .notification()
-                    .builder()
-                    .title("豆瓣已同步")
-                    .body(format!("书单 {} 本，影单 {} 部", book_count, movie_count))
-                    .show();
-            }
-            SyncResult {
-                platform: Platform::Douban,
-                success: true,
-                message: if total > 0 {
-                    format!("Synced {} books, {} movies", book_count, movie_count)
-                } else {
-                    "No changes detected".to_string()
-                },
-                items_synced: total,
-            }
+    log::error!("{} sync failed: {:#}", platform_name, error);
+
+    if needs_auth {
+        update_platform_status(app, platform.clone(), SyncPlatformStatus::NeedsAuth);
+        if settings.notifications_enabled {
+            let _ = app
+                .notification()
+                .builder()
+                .title(&format!("{} 登录已过期", platform_name))
+                .body(&user_msg)
+                .show();
         }
-        Err(e) => {
-            let msg = format!("{:#}", e);
-            let needs_auth = msg.contains("auth expired") || msg.contains("401") || msg.contains("403");
-            if needs_auth {
-                update_platform_status(app, Platform::Douban, SyncPlatformStatus::NeedsAuth);
-                if settings.notifications_enabled {
-                    let _ = app
-                        .notification()
-                        .builder()
-                        .title("豆瓣登录已过期")
-                        .body("请重新登录豆瓣")
-                        .show();
-                }
-            } else {
-                update_platform_error(app, Platform::Douban, msg.clone());
-                if settings.notifications_enabled {
-                    let _ = app
-                        .notification()
-                        .builder()
-                        .title("豆瓣同步失败")
-                        .body(&msg)
-                        .show();
-                }
-            }
-            SyncResult {
-                platform: Platform::Douban,
-                success: false,
-                message: msg,
-                items_synced: 0,
-            }
+    } else {
+        update_platform_error(app, platform.clone(), user_msg.clone());
+        if settings.notifications_enabled {
+            let _ = app
+                .notification()
+                .builder()
+                .title(&format!("{} 同步失败", platform_name))
+                .body(&user_msg)
+                .show();
         }
     }
-}
 
-pub(crate) async fn run_zhihu_sync(app: &AppHandle, settings: &AppSettings) -> SyncResult {
-    update_platform_status(app, Platform::Zhihu, SyncPlatformStatus::Syncing);
-
-    let result = sync::zhihu::run_sync(settings).await;
-    match result {
-        Ok(count) => {
-            update_platform_success(app, Platform::Zhihu, count);
-            if count > 0 && settings.notifications_enabled {
-                let _ = app
-                    .notification()
-                    .builder()
-                    .title("知乎收藏已同步")
-                    .body(format!("成功同步 {} 条收藏", count))
-                    .show();
-            }
-            SyncResult {
-                platform: Platform::Zhihu,
-                success: true,
-                message: if count > 0 {
-                    format!("Synced {} items", count)
-                } else {
-                    "No new favorites".to_string()
-                },
-                items_synced: count,
-            }
-        }
-        Err(e) => {
-            let msg = format!("{:#}", e);
-            let needs_auth = msg.contains("auth expired") || msg.contains("401") || msg.contains("403");
-            if needs_auth {
-                update_platform_status(app, Platform::Zhihu, SyncPlatformStatus::NeedsAuth);
-                if settings.notifications_enabled {
-                    let _ = app
-                        .notification()
-                        .builder()
-                        .title("知乎登录已过期")
-                        .body("请重新登录知乎")
-                        .show();
-                }
-            } else {
-                update_platform_error(app, Platform::Zhihu, msg.clone());
-                if settings.notifications_enabled {
-                    let _ = app
-                        .notification()
-                        .builder()
-                        .title("知乎同步失败")
-                        .body(&msg)
-                        .show();
-                }
-            }
-            SyncResult {
-                platform: Platform::Zhihu,
-                success: false,
-                message: msg,
-                items_synced: 0,
-            }
-        }
-    }
-}
-
-pub(crate) async fn run_github_stars_sync(app: &AppHandle, settings: &AppSettings) -> SyncResult {
-    update_platform_status(app, Platform::GithubStars, SyncPlatformStatus::Syncing);
-
-    let result = sync::github_stars::run_sync(settings).await;
-    match result {
-        Ok(count) => {
-            update_platform_success(app, Platform::GithubStars, count);
-            if count > 0 && settings.notifications_enabled {
-                let _ = app
-                    .notification()
-                    .builder()
-                    .title("GitHub Stars Synced")
-                    .body(format!("{} stars synced", count))
-                    .show();
-            }
-            SyncResult {
-                platform: Platform::GithubStars,
-                success: true,
-                message: if count > 0 {
-                    format!("Synced {} stars", count)
-                } else {
-                    "No new stars".to_string()
-                },
-                items_synced: count,
-            }
-        }
-        Err(e) => {
-            let msg = format!("{:#}", e);
-            let needs_auth = msg.contains("401") || msg.contains("invalid or expired");
-            if needs_auth {
-                update_platform_status(app, Platform::GithubStars, SyncPlatformStatus::NeedsAuth);
-                if settings.notifications_enabled {
-                    let _ = app
-                        .notification()
-                        .builder()
-                        .title("GitHub Token Invalid")
-                        .body("Please update your GitHub Personal Access Token")
-                        .show();
-                }
-            } else {
-                update_platform_error(app, Platform::GithubStars, msg.clone());
-                if settings.notifications_enabled {
-                    let _ = app
-                        .notification()
-                        .builder()
-                        .title("GitHub Stars Sync Failed")
-                        .body(&msg)
-                        .show();
-                }
-            }
-            SyncResult {
-                platform: Platform::GithubStars,
-                success: false,
-                message: msg,
-                items_synced: 0,
-            }
-        }
-    }
-}
-
-pub(crate) async fn run_twitter_sync(app: &AppHandle, settings: &AppSettings) -> SyncResult {
-    update_platform_status(app, Platform::Twitter, SyncPlatformStatus::Syncing);
-
-    let result = sync::twitter::run_sync(settings).await;
-    match result {
-        Ok(count) => {
-            update_platform_success(app, Platform::Twitter, count);
-            if count > 0 && settings.notifications_enabled {
-                let _ = app
-                    .notification()
-                    .builder()
-                    .title("Twitter Synced")
-                    .body(format!("{} tweets synced", count))
-                    .show();
-            }
-            SyncResult {
-                platform: Platform::Twitter,
-                success: true,
-                message: if count > 0 {
-                    format!("Synced {} tweets", count)
-                } else {
-                    "No new tweets".to_string()
-                },
-                items_synced: count,
-            }
-        }
-        Err(e) => {
-            let msg = format!("{:#}", e);
-            let needs_auth = msg.contains("auth expired") || msg.contains("401") || msg.contains("403");
-            if needs_auth {
-                update_platform_status(app, Platform::Twitter, SyncPlatformStatus::NeedsAuth);
-                if settings.notifications_enabled {
-                    let _ = app
-                        .notification()
-                        .builder()
-                        .title("Twitter 登录已过期")
-                        .body("请重新登录 Twitter / X")
-                        .show();
-                }
-            } else {
-                update_platform_error(app, Platform::Twitter, msg.clone());
-                if settings.notifications_enabled {
-                    let _ = app
-                        .notification()
-                        .builder()
-                        .title("Twitter Sync Failed")
-                        .body(&msg)
-                        .show();
-                }
-            }
-            SyncResult {
-                platform: Platform::Twitter,
-                success: false,
-                message: msg,
-                items_synced: 0,
-            }
-        }
+    SyncResult {
+        platform,
+        success: false,
+        message: user_msg,
+        items_synced: 0,
     }
 }
 
@@ -740,10 +446,6 @@ fn update_platform_status(app: &AppHandle, platform: Platform, status: SyncPlatf
             Platform::Kindle => state.kindle_status = status,
             Platform::SafariBookmarks => state.safari_bookmarks_status = status,
             Platform::ChromeBookmarks => state.chrome_bookmarks_status = status,
-            Platform::Douban => state.douban_status = status,
-            Platform::Zhihu => state.zhihu_status = status,
-            Platform::GithubStars => state.github_stars_status = status,
-            Platform::Twitter => state.twitter_status = status,
         }
 
         if let Ok(val) = serde_json::to_value(&state) {
@@ -800,30 +502,6 @@ fn update_platform_success(app: &AppHandle, platform: Platform, count: u32) {
                 state.chrome_bookmarks_count += count;
                 state.chrome_bookmarks_error = None;
             }
-            Platform::Douban => {
-                // Douban has separate book/movie counts; handled inline in run_douban_sync
-                state.douban_status = SyncPlatformStatus::Success;
-                state.douban_last_sync = Some(now);
-                state.douban_error = None;
-            }
-            Platform::Zhihu => {
-                state.zhihu_status = SyncPlatformStatus::Success;
-                state.zhihu_last_sync = Some(now);
-                state.zhihu_item_count += count;
-                state.zhihu_error = None;
-            }
-            Platform::GithubStars => {
-                state.github_stars_status = SyncPlatformStatus::Success;
-                state.github_stars_last_sync = Some(now);
-                state.github_stars_count += count;
-                state.github_stars_error = None;
-            }
-            Platform::Twitter => {
-                state.twitter_status = SyncPlatformStatus::Success;
-                state.twitter_last_sync = Some(now);
-                state.twitter_tweet_count += count;
-                state.twitter_error = None;
-            }
         }
 
         if let Ok(val) = serde_json::to_value(&state) {
@@ -868,22 +546,6 @@ pub(crate) fn reset_stale_sync_state(app: &AppHandle) {
             state.chrome_bookmarks_status = SyncPlatformStatus::Idle;
             changed = true;
         }
-        if state.douban_status == SyncPlatformStatus::Syncing {
-            state.douban_status = SyncPlatformStatus::Idle;
-            changed = true;
-        }
-        if state.zhihu_status == SyncPlatformStatus::Syncing {
-            state.zhihu_status = SyncPlatformStatus::Idle;
-            changed = true;
-        }
-        if state.github_stars_status == SyncPlatformStatus::Syncing {
-            state.github_stars_status = SyncPlatformStatus::Idle;
-            changed = true;
-        }
-        if state.twitter_status == SyncPlatformStatus::Syncing {
-            state.twitter_status = SyncPlatformStatus::Idle;
-            changed = true;
-        }
 
         if changed {
             if let Ok(val) = serde_json::to_value(&state) {
@@ -926,22 +588,6 @@ fn update_platform_error(app: &AppHandle, platform: Platform, error: String) {
             Platform::ChromeBookmarks => {
                 state.chrome_bookmarks_status = SyncPlatformStatus::Error;
                 state.chrome_bookmarks_error = Some(error);
-            }
-            Platform::Douban => {
-                state.douban_status = SyncPlatformStatus::Error;
-                state.douban_error = Some(error);
-            }
-            Platform::Zhihu => {
-                state.zhihu_status = SyncPlatformStatus::Error;
-                state.zhihu_error = Some(error);
-            }
-            Platform::GithubStars => {
-                state.github_stars_status = SyncPlatformStatus::Error;
-                state.github_stars_error = Some(error);
-            }
-            Platform::Twitter => {
-                state.twitter_status = SyncPlatformStatus::Error;
-                state.twitter_error = Some(error);
             }
         }
 

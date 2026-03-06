@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 
 use crate::config::AppSettings;
 use crate::credential_store;
-use crate::sync::api_client::ApiClient;
+use crate::sync::api_client::{ApiClient, SyncError};
 
 const WEREAD_BASE: &str = "https://i.weread.qq.com";
 const BATCH_SIZE: usize = 20;
@@ -53,11 +53,12 @@ pub async fn run_sync(settings: &AppSettings) -> Result<u32> {
         .await
         .context("WeChat Read shelf request failed")?;
 
-    if shelf_resp.status() == 401 {
-        bail!("WeChat Read auth expired (401)");
+    if shelf_resp.status().as_u16() == 401 || shelf_resp.status().as_u16() == 403 {
+        return Err(SyncError::AuthExpired("微信读书登录已过期".into()).into());
     }
     if !shelf_resp.status().is_success() {
-        bail!("WeChat Read shelf error: {}", shelf_resp.status());
+        let status = shelf_resp.status();
+        return Err(SyncError::from_status(status, "WeChat Read shelf error").into());
     }
 
     // Check for refreshed cookies in response headers

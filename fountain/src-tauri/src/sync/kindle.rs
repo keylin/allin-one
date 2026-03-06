@@ -17,7 +17,7 @@ use std::path::PathBuf;
 
 use crate::config::AppSettings;
 use crate::credential_store;
-use crate::sync::api_client::ApiClient;
+use crate::sync::api_client::{ApiClient, SyncError};
 
 const SEPARATOR: &str = "==========";
 const BATCH_SIZE: usize = 50;
@@ -161,7 +161,9 @@ fn find_clippings_file(settings: &AppSettings) -> Result<PathBuf> {
         if p.exists() {
             return Ok(p);
         }
-        bail!("Kindle clippings file not found at configured path: {:?}", p);
+        return Err(SyncError::DataError(
+            format!("Kindle 剪贴文件未找到: {:?}", p)
+        ).into());
     }
 
     // Auto-detect: Kindle appears as a volume under /Volumes on macOS
@@ -177,7 +179,9 @@ fn find_clippings_file(settings: &AppSettings) -> Result<PathBuf> {
         }
     }
 
-    bail!("Kindle not found. Connect your Kindle device or set the clippings file path in Settings.");
+    Err(SyncError::DataError(
+        "未检测到 Kindle，请连接设备或设置剪贴路径".into()
+    ).into())
 }
 
 /// Parse My Clippings.txt content into a list of Clipping records.

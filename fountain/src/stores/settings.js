@@ -12,19 +12,11 @@ const DEFAULT_SETTINGS = {
   kindle_enabled: false,
   safari_bookmarks_enabled: false,
   chrome_bookmarks_enabled: false,
-  douban_enabled: false,
-  zhihu_enabled: false,
-  github_stars_enabled: false,
-  twitter_enabled: false,
   apple_books_interval_hours: 6,
   wechat_read_interval_hours: 12,
   bilibili_interval_hours: 6,
   kindle_interval_hours: 24,
   bookmarks_interval_hours: 6,
-  douban_interval_hours: 24,
-  zhihu_interval_hours: 12,
-  github_stars_interval_hours: 12,
-  twitter_interval_hours: 6,
   autostart: false,
   notifications_enabled: true,
   apple_books_db_path: null,
@@ -53,8 +45,7 @@ export const useSettingsStore = defineStore('settings', () => {
     const payload = { ...settings.value }
     const numberFields = [
       'apple_books_interval_hours', 'wechat_read_interval_hours', 'bilibili_interval_hours',
-      'kindle_interval_hours', 'bookmarks_interval_hours', 'douban_interval_hours',
-      'zhihu_interval_hours', 'github_stars_interval_hours', 'twitter_interval_hours',
+      'kindle_interval_hours', 'bookmarks_interval_hours',
     ]
     for (const field of numberFields) {
       const v = payload[field]

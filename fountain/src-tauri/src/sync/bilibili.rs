@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 
 use crate::config::AppSettings;
 use crate::credential_store;
-use crate::sync::api_client::ApiClient;
+use crate::sync::api_client::{ApiClient, SyncError};
 
 const BILI_API: &str = "https://api.bilibili.com";
 const BATCH_SIZE: usize = 20;
@@ -66,11 +66,17 @@ pub async fn run_sync(settings: &AppSettings) -> Result<u32> {
         .context("Bilibili nav request failed")?;
 
     let nav: Value = nav_resp.json().await?;
+    let nav_code = nav["code"].as_i64().unwrap_or(0);
+    if nav_code == -101 {
+        return Err(SyncError::AuthExpired("Bilibili 登录已过期".into()).into());
+    }
+    if nav_code == -412 {
+        return Err(SyncError::RateLimited("Bilibili 请求被限流".into()).into());
+    }
     if nav["data"]["isLogin"].as_bool() != Some(true) {
-        bail!("Bilibili auth expired — not logged in");
+        return Err(SyncError::AuthExpired("Bilibili 未登录".into()).into());
     }
     let uid = nav["data"]["mid"].as_i64().unwrap_or(0);
-    let _uid_str = uid.to_string();
 
     // Three-step protocol
     let source_id = api_client

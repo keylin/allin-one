@@ -5,6 +5,48 @@ use tauri::AppHandle;
 use tokio::sync::{oneshot, RwLock};
 use tokio::time::{interval, Duration};
 
+/// Per-platform failure tracking for adaptive backoff.
+struct PlatformState {
+    last_run: Option<std::time::Instant>,
+    consecutive_failures: u32,
+}
+
+impl PlatformState {
+    fn new() -> Self {
+        Self {
+            last_run: None,
+            consecutive_failures: 0,
+        }
+    }
+
+    /// Check if sync is due, accounting for failure backoff.
+    /// 3 consecutive failures → 2x interval; 4+ failures → 4x interval (cap).
+    fn is_due(&self, now: std::time::Instant, base_interval_secs: u64) -> bool {
+        let multiplier = if self.consecutive_failures >= 3 {
+            std::cmp::min(1u64 << (self.consecutive_failures - 2), 4)
+        } else {
+            1
+        };
+        let effective_secs = base_interval_secs * multiplier;
+        self.last_run
+            .map(|last| now.duration_since(last).as_secs() >= effective_secs)
+            .unwrap_or(true)
+    }
+
+    fn on_success(&mut self) {
+        self.last_run = Some(std::time::Instant::now());
+        self.consecutive_failures = 0;
+    }
+
+    fn on_failure(&mut self, is_network_error: bool) {
+        self.consecutive_failures += 1;
+        // NetworkError: don't update last_run so next tick retries immediately
+        if !is_network_error {
+            self.last_run = Some(std::time::Instant::now());
+        }
+    }
+}
+
 pub struct Scheduler {
     app_handle: AppHandle,
     settings: Arc<RwLock<AppSettings>>,
@@ -20,25 +62,20 @@ impl Scheduler {
     }
 
     pub async fn run(&self, mut shutdown: oneshot::Receiver<()>) {
-        // Check every 5 minutes if any sync is due
         let mut tick = interval(Duration::from_secs(300));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        let mut apple_books_last: Option<std::time::Instant> = None;
-        let mut wechat_read_last: Option<std::time::Instant> = None;
-        let mut bilibili_last: Option<std::time::Instant> = None;
-        let mut kindle_last: Option<std::time::Instant> = None;
-        let mut safari_bookmarks_last: Option<std::time::Instant> = None;
-        let mut chrome_bookmarks_last: Option<std::time::Instant> = None;
-        let mut douban_last: Option<std::time::Instant> = None;
-        let mut zhihu_last: Option<std::time::Instant> = None;
-        let mut github_stars_last: Option<std::time::Instant> = None;
-        let mut twitter_last: Option<std::time::Instant> = None;
+
+        let mut apple_books = PlatformState::new();
+        let mut wechat_read = PlatformState::new();
+        let mut bilibili = PlatformState::new();
+        let mut kindle = PlatformState::new();
+        let mut safari_bookmarks = PlatformState::new();
+        let mut chrome_bookmarks = PlatformState::new();
 
         loop {
             tokio::select! {
                 biased;
 
-                // Shutdown signal takes priority — stop immediately
                 _ = &mut shutdown => {
                     info!("Scheduler received shutdown signal, stopping");
                     break;
@@ -55,221 +92,112 @@ impl Scheduler {
 
                     if settings.apple_books_enabled {
                         let secs = settings.apple_books_interval_hours as u64 * 3600;
-                        let due = apple_books_last
-                            .map(|last| now.duration_since(last).as_secs() >= secs)
-                            .unwrap_or(true);
-                        if due {
+                        if apple_books.is_due(now, secs) {
                             info!("Scheduled: Apple Books sync starting");
                             let result = crate::commands::sync::run_apple_books_sync(
-                                &self.app_handle,
-                                &settings,
-                            )
-                            .await;
+                                &self.app_handle, &settings,
+                            ).await;
                             if result.success {
                                 info!("Scheduled: Apple Books done ({} books)", result.items_synced);
+                                apple_books.on_success();
                             } else {
                                 log::error!("Scheduled: Apple Books failed: {}", result.message);
+                                apple_books.on_failure(is_network_error(&result.message));
                             }
-                            apple_books_last = Some(std::time::Instant::now());
                         }
                     }
 
                     if settings.wechat_read_enabled {
                         let secs = settings.wechat_read_interval_hours as u64 * 3600;
-                        let due = wechat_read_last
-                            .map(|last| now.duration_since(last).as_secs() >= secs)
-                            .unwrap_or(true);
-                        if due {
+                        if wechat_read.is_due(now, secs) {
                             info!("Scheduled: WeChat Read sync starting");
                             let result = crate::commands::sync::run_wechat_read_sync(
-                                &self.app_handle,
-                                &settings,
-                            )
-                            .await;
+                                &self.app_handle, &settings,
+                            ).await;
                             if result.success {
                                 info!("Scheduled: WeChat Read done ({} books)", result.items_synced);
+                                wechat_read.on_success();
                             } else {
                                 log::error!("Scheduled: WeChat Read failed: {}", result.message);
+                                wechat_read.on_failure(is_network_error(&result.message));
                             }
-                            wechat_read_last = Some(std::time::Instant::now());
                         }
                     }
 
                     if settings.bilibili_enabled {
                         let secs = settings.bilibili_interval_hours as u64 * 3600;
-                        let due = bilibili_last
-                            .map(|last| now.duration_since(last).as_secs() >= secs)
-                            .unwrap_or(true);
-                        if due {
+                        if bilibili.is_due(now, secs) {
                             info!("Scheduled: Bilibili sync starting");
                             let result = crate::commands::sync::run_bilibili_sync(
-                                &self.app_handle,
-                                &settings,
-                            )
-                            .await;
+                                &self.app_handle, &settings,
+                            ).await;
                             if result.success {
                                 info!("Scheduled: Bilibili done ({} videos)", result.items_synced);
+                                bilibili.on_success();
                             } else {
                                 log::error!("Scheduled: Bilibili failed: {}", result.message);
+                                bilibili.on_failure(is_network_error(&result.message));
                             }
-                            bilibili_last = Some(std::time::Instant::now());
                         }
                     }
 
                     if settings.kindle_enabled {
                         let secs = settings.kindle_interval_hours as u64 * 3600;
-                        let due = kindle_last
-                            .map(|last| now.duration_since(last).as_secs() >= secs)
-                            .unwrap_or(true);
-                        if due {
+                        if kindle.is_due(now, secs) {
                             info!("Scheduled: Kindle sync starting");
                             let result = crate::commands::sync::run_kindle_sync(
-                                &self.app_handle,
-                                &settings,
-                            )
-                            .await;
+                                &self.app_handle, &settings,
+                            ).await;
                             if result.success {
                                 info!("Scheduled: Kindle done ({} books)", result.items_synced);
+                                kindle.on_success();
                             } else {
                                 log::error!("Scheduled: Kindle failed: {}", result.message);
+                                kindle.on_failure(is_network_error(&result.message));
                             }
-                            kindle_last = Some(std::time::Instant::now());
                         }
                     }
 
                     if settings.safari_bookmarks_enabled {
                         let secs = settings.bookmarks_interval_hours as u64 * 3600;
-                        let due = safari_bookmarks_last
-                            .map(|last| now.duration_since(last).as_secs() >= secs)
-                            .unwrap_or(true);
-                        if due {
+                        if safari_bookmarks.is_due(now, secs) {
                             info!("Scheduled: Safari bookmarks sync starting");
                             let result = crate::commands::sync::run_safari_bookmarks_sync(
-                                &self.app_handle,
-                                &settings,
-                            )
-                            .await;
+                                &self.app_handle, &settings,
+                            ).await;
                             if result.success {
-                                info!(
-                                    "Scheduled: Safari bookmarks done ({} bookmarks)",
-                                    result.items_synced
-                                );
+                                info!("Scheduled: Safari bookmarks done ({} bookmarks)", result.items_synced);
+                                safari_bookmarks.on_success();
                             } else {
                                 log::error!("Scheduled: Safari bookmarks failed: {}", result.message);
+                                safari_bookmarks.on_failure(is_network_error(&result.message));
                             }
-                            safari_bookmarks_last = Some(std::time::Instant::now());
                         }
                     }
 
                     if settings.chrome_bookmarks_enabled {
                         let secs = settings.bookmarks_interval_hours as u64 * 3600;
-                        let due = chrome_bookmarks_last
-                            .map(|last| now.duration_since(last).as_secs() >= secs)
-                            .unwrap_or(true);
-                        if due {
+                        if chrome_bookmarks.is_due(now, secs) {
                             info!("Scheduled: Chrome bookmarks sync starting");
                             let result = crate::commands::sync::run_chrome_bookmarks_sync(
-                                &self.app_handle,
-                                &settings,
-                            )
-                            .await;
+                                &self.app_handle, &settings,
+                            ).await;
                             if result.success {
-                                info!(
-                                    "Scheduled: Chrome bookmarks done ({} bookmarks)",
-                                    result.items_synced
-                                );
+                                info!("Scheduled: Chrome bookmarks done ({} bookmarks)", result.items_synced);
+                                chrome_bookmarks.on_success();
                             } else {
                                 log::error!("Scheduled: Chrome bookmarks failed: {}", result.message);
+                                chrome_bookmarks.on_failure(is_network_error(&result.message));
                             }
-                            chrome_bookmarks_last = Some(std::time::Instant::now());
-                        }
-                    }
-
-                    if settings.douban_enabled {
-                        let secs = settings.douban_interval_hours as u64 * 3600;
-                        let due = douban_last
-                            .map(|last| now.duration_since(last).as_secs() >= secs)
-                            .unwrap_or(true);
-                        if due {
-                            info!("Scheduled: Douban sync starting");
-                            let result = crate::commands::sync::run_douban_sync(
-                                &self.app_handle,
-                                &settings,
-                            )
-                            .await;
-                            if result.success {
-                                info!("Scheduled: Douban done ({} items)", result.items_synced);
-                            } else {
-                                log::error!("Scheduled: Douban failed: {}", result.message);
-                            }
-                            douban_last = Some(std::time::Instant::now());
-                        }
-                    }
-
-                    if settings.zhihu_enabled {
-                        let secs = settings.zhihu_interval_hours as u64 * 3600;
-                        let due = zhihu_last
-                            .map(|last| now.duration_since(last).as_secs() >= secs)
-                            .unwrap_or(true);
-                        if due {
-                            info!("Scheduled: Zhihu sync starting");
-                            let result = crate::commands::sync::run_zhihu_sync(
-                                &self.app_handle,
-                                &settings,
-                            )
-                            .await;
-                            if result.success {
-                                info!("Scheduled: Zhihu done ({} items)", result.items_synced);
-                            } else {
-                                log::error!("Scheduled: Zhihu failed: {}", result.message);
-                            }
-                            zhihu_last = Some(std::time::Instant::now());
-                        }
-                    }
-
-                    if settings.github_stars_enabled {
-                        let secs = settings.github_stars_interval_hours as u64 * 3600;
-                        let due = github_stars_last
-                            .map(|last| now.duration_since(last).as_secs() >= secs)
-                            .unwrap_or(true);
-                        if due {
-                            info!("Scheduled: GitHub Stars sync starting");
-                            let result = crate::commands::sync::run_github_stars_sync(
-                                &self.app_handle,
-                                &settings,
-                            )
-                            .await;
-                            if result.success {
-                                info!("Scheduled: GitHub Stars done ({} items)", result.items_synced);
-                            } else {
-                                log::error!("Scheduled: GitHub Stars failed: {}", result.message);
-                            }
-                            github_stars_last = Some(std::time::Instant::now());
-                        }
-                    }
-
-                    if settings.twitter_enabled {
-                        let secs = settings.twitter_interval_hours as u64 * 3600;
-                        let due = twitter_last
-                            .map(|last| now.duration_since(last).as_secs() >= secs)
-                            .unwrap_or(true);
-                        if due {
-                            info!("Scheduled: Twitter sync starting");
-                            let result = crate::commands::sync::run_twitter_sync(
-                                &self.app_handle,
-                                &settings,
-                            )
-                            .await;
-                            if result.success {
-                                info!("Scheduled: Twitter done ({} tweets)", result.items_synced);
-                            } else {
-                                log::error!("Scheduled: Twitter failed: {}", result.message);
-                            }
-                            twitter_last = Some(std::time::Instant::now());
                         }
                     }
                 }
             }
         }
     }
+}
+
+/// Heuristic: check if the error message indicates a network error.
+fn is_network_error(msg: &str) -> bool {
+    msg.contains("network error") || msg.contains("connection") || msg.contains("timed out")
 }

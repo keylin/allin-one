@@ -20,21 +20,6 @@ fn main() {
                 "open_wechat_webview",
                 "capture_wechat_cookies",
                 "close_wechat_webview",
-                // credentials — douban
-                "open_douban_webview",
-                "capture_douban_cookies",
-                "validate_douban_cookie",
-                // credentials — zhihu
-                "open_zhihu_webview",
-                "capture_zhihu_cookies",
-                "validate_zhihu_cookie",
-                // credentials — github
-                "validate_github_token",
-                // credentials — twitter
-                "open_twitter_webview",
-                "capture_twitter_ct0",
-                "save_twitter_cookies",
-                "validate_twitter_cookie",
                 // sync
                 "sync_now",
                 "sync_platform",

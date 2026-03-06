@@ -79,17 +79,6 @@ pub const KEY_BILIBILI_BILI_JCT: &str = "bilibili_bili_jct";
 pub const KEY_BILIBILI_BUVID3: &str = "bilibili_buvid3";
 pub const KEY_WECHAT_READ_SKEY: &str = "wechat_read_skey";
 pub const KEY_WECHAT_READ_VID: &str = "wechat_read_vid";
-pub const KEY_DOUBAN_DBCL2: &str = "douban_dbcl2";
-pub const KEY_DOUBAN_BID: &str = "douban_bid";
-pub const KEY_DOUBAN_UID: &str = "douban_uid";
-pub const KEY_ZHIHU_Z_C0: &str = "zhihu_z_c0";
-/// Twitter web app's built-in Bearer token — embedded in x.com frontend JS.
-pub const TWITTER_BEARER: &str = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA";
-pub const KEY_GITHUB_TOKEN: &str = "github_token";
-pub const KEY_TWITTER_AUTH_TOKEN: &str = "twitter_auth_token";
-pub const KEY_TWITTER_CT0: &str = "twitter_ct0";
-pub const KEY_TWITTER_SCREEN_NAME: &str = "twitter_screen_name";
-pub const KEY_TWITTER_USER_ID: &str = "twitter_user_id";
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn cred_file_path(key: &str) -> std::path::PathBuf {

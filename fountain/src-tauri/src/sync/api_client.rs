@@ -5,6 +5,73 @@
 use anyhow::{bail, Context, Result};
 use reqwest::header::HeaderValue;
 use serde_json::Value;
+use std::fmt;
+
+// ─── SyncError ──────────────────────────────────────────────────────────────
+
+#[derive(Debug)]
+pub enum SyncError {
+    AuthExpired(String),
+    NetworkError(String),
+    ServerError(String),
+    RateLimited(String),
+    DataError(String),
+}
+
+impl fmt::Display for SyncError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SyncError::AuthExpired(msg) => write!(f, "auth expired: {}", msg),
+            SyncError::NetworkError(msg) => write!(f, "network error: {}", msg),
+            SyncError::ServerError(msg) => write!(f, "server error: {}", msg),
+            SyncError::RateLimited(msg) => write!(f, "rate limited: {}", msg),
+            SyncError::DataError(msg) => write!(f, "data error: {}", msg),
+        }
+    }
+}
+
+impl std::error::Error for SyncError {}
+
+impl SyncError {
+    /// Classify a reqwest error into a SyncError category.
+    pub fn from_reqwest(e: &reqwest::Error) -> Self {
+        if e.is_timeout() {
+            SyncError::NetworkError(format!("request timed out: {}", e))
+        } else if e.is_connect() {
+            SyncError::NetworkError(format!("connection failed: {}", e))
+        } else {
+            SyncError::NetworkError(format!("{}", e))
+        }
+    }
+
+    /// Classify an HTTP response status into a SyncError.
+    pub fn from_status(status: reqwest::StatusCode, body: &str) -> Self {
+        match status.as_u16() {
+            401 | 403 => SyncError::AuthExpired(format!("{}: {}", status, body)),
+            429 => SyncError::RateLimited(format!("{}: {}", status, body)),
+            500..=599 => SyncError::ServerError(format!("{}: {}", status, body)),
+            _ => SyncError::DataError(format!("{}: {}", status, body)),
+        }
+    }
+
+    /// Whether this error type should be retried.
+    pub fn is_retryable(&self) -> bool {
+        matches!(self, SyncError::NetworkError(_) | SyncError::ServerError(_))
+    }
+
+    /// User-friendly error message.
+    pub fn user_message(&self) -> &str {
+        match self {
+            SyncError::AuthExpired(_) => "登录已过期，请重新认证",
+            SyncError::NetworkError(_) => "网络连接失败，请检查网络",
+            SyncError::ServerError(_) => "无法连接 Allin-One 服务器",
+            SyncError::RateLimited(_) => "请求过于频繁，请稍后再试",
+            SyncError::DataError(_) => "数据处理失败",
+        }
+    }
+}
+
+// ─── ApiClient ──────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
 pub struct ApiClient {
@@ -30,7 +97,6 @@ impl ApiClient {
     fn auth_headers(&self) -> reqwest::header::HeaderMap {
         let mut headers = reqwest::header::HeaderMap::new();
         if !self.api_key.is_empty() {
-            // Use try_from to avoid panicking on malformed API keys from Keychain
             if let Ok(val) = HeaderValue::try_from(&self.api_key) {
                 headers.insert("X-API-Key", val);
             }
@@ -38,9 +104,57 @@ impl ApiClient {
         headers
     }
 
-    /// Setup sync source. `source_type` must be a valid sync.* SourceType value
-    /// (e.g. "sync.apple_books", "sync.wechat_read", "sync.bilibili").
-    /// Returns the source UUID string from the backend.
+    /// POST with retry: up to 3 attempts, exponential backoff 1s/3s/9s.
+    /// Only retries on NetworkError or ServerError.
+    async fn post_with_retry(&self, url: &str, payload: &Value) -> Result<Value> {
+        let delays = [1, 3, 9];
+        let max_attempts = 3;
+
+        for attempt in 0..max_attempts {
+            let result = self
+                .client
+                .post(url)
+                .headers(self.auth_headers())
+                .json(payload)
+                .send()
+                .await;
+
+            match result {
+                Ok(resp) => {
+                    let status = resp.status();
+                    if status.is_success() {
+                        return Ok(resp.json().await?);
+                    }
+                    let body = resp.text().await.unwrap_or_default();
+                    let sync_err = SyncError::from_status(status, &body);
+                    if sync_err.is_retryable() && attempt < max_attempts - 1 {
+                        log::warn!(
+                            "Retryable error on attempt {}/{}: {} (retrying in {}s)",
+                            attempt + 1, max_attempts, sync_err, delays[attempt]
+                        );
+                        tokio::time::sleep(std::time::Duration::from_secs(delays[attempt])).await;
+                        continue;
+                    }
+                    return Err(sync_err.into());
+                }
+                Err(e) => {
+                    let sync_err = SyncError::from_reqwest(&e);
+                    if sync_err.is_retryable() && attempt < max_attempts - 1 {
+                        log::warn!(
+                            "Network error on attempt {}/{}: {} (retrying in {}s)",
+                            attempt + 1, max_attempts, sync_err, delays[attempt]
+                        );
+                        tokio::time::sleep(std::time::Duration::from_secs(delays[attempt])).await;
+                        continue;
+                    }
+                    return Err(sync_err.into());
+                }
+            }
+        }
+
+        unreachable!()
+    }
+
     pub async fn ebook_setup(&self, source_type: &str) -> Result<String> {
         let url = format!("{}/api/ebook/sync/setup", self.base_url);
         let resp = self
@@ -84,26 +198,9 @@ impl ApiClient {
 
     pub async fn ebook_sync(&self, payload: Value) -> Result<Value> {
         let url = format!("{}/api/ebook/sync", self.base_url);
-        let resp = self
-            .client
-            .post(&url)
-            .headers(self.auth_headers())
-            .json(&payload)
-            .send()
-            .await
-            .context("ebook sync request failed")?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            bail!("ebook sync error {}: {}", status, body);
-        }
-
-        Ok(resp.json().await?)
+        self.post_with_retry(&url, &payload).await
     }
 
-    /// Setup video sync source. `source_type` must be a valid sync.* SourceType value
-    /// (e.g. "sync.bilibili"). Returns the source UUID string from the backend.
     pub async fn video_setup(&self, source_type: &str) -> Result<String> {
         let url = format!("{}/api/video/sync/setup", self.base_url);
         let resp = self
@@ -147,26 +244,9 @@ impl ApiClient {
 
     pub async fn video_sync(&self, payload: Value) -> Result<Value> {
         let url = format!("{}/api/video/sync", self.base_url);
-        let resp = self
-            .client
-            .post(&url)
-            .headers(self.auth_headers())
-            .json(&payload)
-            .send()
-            .await
-            .context("video sync request failed")?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            bail!("video sync error {}: {}", status, body);
-        }
-
-        Ok(resp.json().await?)
+        self.post_with_retry(&url, &payload).await
     }
 
-    /// Setup bookmark sync source. `source_type` must be "sync.safari_bookmarks"
-    /// or "sync.chrome_bookmarks". Returns the source UUID string from the backend.
     pub async fn bookmark_setup(&self, source_type: &str) -> Result<String> {
         let url = format!("{}/api/bookmark/sync/setup", self.base_url);
         let resp = self
@@ -210,21 +290,6 @@ impl ApiClient {
 
     pub async fn bookmark_sync(&self, payload: Value) -> Result<Value> {
         let url = format!("{}/api/bookmark/sync", self.base_url);
-        let resp = self
-            .client
-            .post(&url)
-            .headers(self.auth_headers())
-            .json(&payload)
-            .send()
-            .await
-            .context("bookmark sync request failed")?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            bail!("bookmark sync error {}: {}", status, body);
-        }
-
-        Ok(resp.json().await?)
+        self.post_with_retry(&url, &payload).await
     }
 }
