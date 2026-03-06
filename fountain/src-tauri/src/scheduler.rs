@@ -199,5 +199,8 @@ impl Scheduler {
 
 /// Heuristic: check if the error message indicates a network error.
 fn is_network_error(msg: &str) -> bool {
-    msg.contains("network error") || msg.contains("connection") || msg.contains("timed out")
+    msg.contains("network error")
+        || msg.contains("connection")
+        || msg.contains("timed out")
+        || msg.contains("网络连接失败") // SyncError::NetworkError user_message
 }

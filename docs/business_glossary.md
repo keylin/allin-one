@@ -52,9 +52,12 @@
 | `web.scraper` | network | 网页抓取 | 内部分 L1/L2/L3 级别 |
 | `podcast.apple` | network | Apple Podcasts | 播客 RSS 解析 |
 | `account.generic` | network | 其他平台账号 | 需要认证的平台 |
-| `sync.apple_books` | user | Apple Books 同步 | 外部脚本推送书籍+标注 |
-| `sync.wechat_read` | user | 微信读书同步 | 外部脚本推送书籍+标注 |
-| `sync.bilibili` | user | B站视频同步 | 外部脚本推送视频元数据 |
+| `sync.apple_books` | user | Apple Books 同步 | Fountain 客户端读取 macOS BKLibrary SQLite 推送书籍+标注 |
+| `sync.wechat_read` | user | 微信读书同步 | Fountain 客户端调用微信 API 推送书籍+标注 |
+| `sync.bilibili` | user | B站视频同步 | Fountain 客户端调用 B站 API 推送视频元数据 |
+| `sync.kindle` | user | Kindle 标注同步 | Fountain 客户端读取 My Clippings.txt 推送标注 |
+| `sync.safari_bookmarks` | user | Safari 书签同步 | Fountain 客户端读取本地书签库推送 |
+| `sync.chrome_bookmarks` | user | Chrome 书签同步 | Fountain 客户端读取本地书签文件推送 |
 | `user.note` | user | 日常笔记 | 用户手动输入，通过 `/api/content/submit` 提交 |
 | `file.upload` | user | 用户上传文件 | 文本/图片/文档，通过 `/api/content/upload` 上传 |
 | `system.notification` | user | 系统消息 | 系统通知 |
