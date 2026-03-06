@@ -1,7 +1,7 @@
 """Text columns → JSONB for JSON data
 
 Revision ID: 0019_text_to_jsonb
-Revises: 0018_encrypt_existing_credentials
+Revises: 0018_encrypt_credentials
 Create Date: 2026-03-05
 
 """
@@ -11,7 +11,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = '0019_text_to_jsonb'
-down_revision: Union[str, Sequence[str], None] = '0018_encrypt_existing_credentials'
+down_revision: Union[str, Sequence[str], None] = '0018_encrypt_credentials'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
