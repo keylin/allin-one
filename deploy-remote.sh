@@ -62,7 +62,7 @@ else
         ./ ${REMOTE_HOST}:${REMOTE_DIR}/ --quiet
 
     echo ">> [4] Restarting containers..."
-    ${SSH} "cd ${REMOTE_DIR} && docker compose -f ${COMPOSE_FILE} up -d allin-one allin-worker-pipeline allin-worker-scheduled" 2>&1
+    ${SSH} "cd ${REMOTE_DIR} && docker compose -f ${COMPOSE_FILE} up -d allin-one allin-worker-pipeline allin-worker-scheduled allin-mcp" 2>&1
 fi
 
 # Health check & migration
