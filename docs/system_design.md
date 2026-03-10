@@ -82,6 +82,7 @@
 | FastAPI (uvicorn) | allin-one | Web 服务、API、静态文件服务 |
 | Procrastinate Worker (pipeline) | allin-worker-pipeline | 流水线步骤执行 (concurrency=4) |
 | Procrastinate Worker (scheduled) | allin-worker-scheduled | 定时采集/报告/清理 (concurrency=2) |
+| MCP Server (FastMCP) | mcp | AI 助手数据接口，stdio/streamable-http 双模式 |
 | PostgreSQL | allin-postgres | 主数据库 + Procrastinate 任务队列 |
 | RSSHub | allin-rsshub | RSS 转换服务 |
 | Browserless | allin-browserless | 无头浏览器服务 |
@@ -1222,3 +1223,52 @@ docker compose exec postgres pg_dump -U allinone allinone > data/backups/backup_
 # 恢复
 docker compose exec -T postgres psql -U allinone allinone < data/backups/backup_20260221.sql
 ```
+
+---
+
+## 10. MCP Server
+
+### 10.1 概述
+
+`backend/mcp_server.py` 基于 FastMCP，直连 PostgreSQL（独立 SQLAlchemy engine，pool_size=3），供 Claude Code / Cursor 等 AI 助手查询和管理个人信息流数据。
+
+传输模式：
+- 默认 `stdio`（本地开发，Claude Code 直接调用）
+- `MCP_TRANSPORT=http` 时使用 `streamable-http`，监听 `0.0.0.0:8001`（远程部署）
+
+### 10.2 工具清单
+
+共 9 个工具，按读写属性分类：
+
+**只读工具 (readOnlyHint=True)**
+
+| 工具名 | 功能 | 关键参数 |
+|--------|------|----------|
+| `list_content` | 搜索内容列表 | time_range / start_date / end_date / source_name / keyword / status / favorites_only / limit |
+| `get_content_detail` | 获取内容全文及 AI 分析 | content_id |
+| `get_sources` | 列出所有数据源及状态 | status / keyword |
+| `get_favorites_summary` | 收藏统计（按源分布、按月趋势、最近列表） | time_range (7d/30d/90d/all) |
+
+**写操作工具 (readOnlyHint=False)**
+
+| 工具名 | destructiveHint | idempotentHint | 功能 |
+|--------|----------------|----------------|------|
+| `toggle_favorite` | False | False | 批量收藏/取消收藏内容 |
+| `create_source` | False | False | 创建数据源（支持 URL 自动推导 source_type） |
+| `update_source` | False | True | 更新数据源配置 |
+| `delete_source` | True | False | 删除数据源（cascade 参数控制是否级联删除内容） |
+| `toggle_source` | False | True | 启用/禁用数据源 |
+
+### 10.3 数据源定位辅助函数
+
+`_resolve_source(db, source_id, source_name)` — 写操作工具共用的定位逻辑：
+- `source_id` 精确匹配（优先）
+- `source_name` 模糊匹配（ilike），匹配多条时返回候选列表供 AI 确认
+
+### 10.4 服务层复用
+
+MCP 写操作调用 `app/services/source_service.py` 中的共享校验函数，与 Router 保持一致：
+- `validate_source_type(source_type)` — 校验 SourceType 合法性
+- `validate_source_config(source_type, url, config_json)` — 校验各类型必填配置
+- `validate_source_name_unique(name, db, exclude_id)` — 校验名称唯一性
+- `validate_template_exists(pipeline_template_id, db)` — 校验模板存在性

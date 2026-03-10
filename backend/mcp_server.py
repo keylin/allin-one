@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import sys
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 
@@ -29,7 +30,17 @@ from app.core.time import utcnow
 from app.models.content import (
     ContentItem,
     ContentStatus,
+    SourceCategory,
     SourceConfig,
+    SourceType,
+    get_source_category,
+)
+from app.models.pipeline import PipelineTemplate
+from app.services.source_cleanup import cascade_delete_source
+from app.services.source_service import (
+    validate_source_config,
+    validate_source_name_unique,
+    validate_source_type,
 )
 
 logger = logging.getLogger(__name__)
@@ -75,17 +86,14 @@ def _parse_date(date_str: str | None) -> datetime | None:
 
 
 def _extract_analysis(item: ContentItem) -> dict:
-    """安全解析 analysis_result JSON"""
-    try:
-        data = json.loads(item.analysis_result) if item.analysis_result else {}
-        if isinstance(data, dict):
-            return {
-                "summary": data.get("summary") or data.get("content", ""),
-                "tags": data.get("tags", []),
-                "sentiment": data.get("sentiment", ""),
-            }
-    except (json.JSONDecodeError, TypeError):
-        pass
+    """安全解析 analysis_result JSONB 字段"""
+    data = item.analysis_result if isinstance(item.analysis_result, dict) else {}
+    if data:
+        return {
+            "summary": data.get("summary") or data.get("content", ""),
+            "tags": data.get("tags", []),
+            "sentiment": data.get("sentiment", ""),
+        }
     return {"summary": "", "tags": [], "sentiment": ""}
 
 
@@ -101,12 +109,51 @@ def _time_range_to_dates(time_range: str | None) -> tuple[datetime | None, datet
     return start, now
 
 
+def _resolve_source(db, source_id: str | None, source_name: str | None) -> tuple[SourceConfig | None, str | None]:
+    """通过 ID 或名称定位数据源。
+
+    返回: (source, error_json) — 恰好一个为 None。
+    - source_id 优先精确匹配
+    - source_name 使用模糊匹配，多个匹配时返回候选列表的 error_json
+    """
+    if not source_id and not source_name:
+        return None, json.dumps({"error": "需要提供 source_id 或 source_name"})
+    if source_id:
+        source = db.get(SourceConfig, source_id)
+        if not source:
+            return None, json.dumps({"error": f"数据源不存在: {source_id}"})
+        return source, None
+    # 按名称模糊查找
+    matches = db.query(SourceConfig).filter(SourceConfig.name.ilike(f"%{source_name}%")).all()
+    if not matches:
+        return None, json.dumps({"error": f"找不到名称匹配 '{source_name}' 的数据源"})
+    if len(matches) > 1:
+        candidates = [{"id": s.id, "name": s.name, "source_type": s.source_type} for s in matches]
+        return None, json.dumps({"error": f"找到 {len(matches)} 个匹配，请用 source_id 精确指定", "candidates": candidates})
+    return matches[0], None
+
+
+def _resolve_template_by_name(db, template_name: str) -> tuple[str | None, str | None]:
+    """通过模板名称（模糊匹配）获取模板 ID。
+
+    返回: (template_id, error_msg)
+    """
+    matches = db.query(PipelineTemplate).filter(PipelineTemplate.name.ilike(f"%{template_name}%")).all()
+    if not matches:
+        all_names = [row[0] for row in db.query(PipelineTemplate.name).limit(20).all()]
+        return None, f"找不到模板 '{template_name}'，可用模板: {all_names}"
+    if len(matches) > 1:
+        candidates = [t.name for t in matches]
+        return None, f"找到 {len(matches)} 个匹配模板: {candidates}，请提供更精确的名称"
+    return matches[0].id, None
+
+
 # ============ MCP Server ============
 
 mcp = FastMCP("allin-one")
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 def list_content(
     time_range: str = "",
     start_date: str = "",
@@ -209,7 +256,7 @@ def list_content(
         return json.dumps({"error": str(e)})
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 def get_content_detail(content_id: str) -> str:
     """Get full details of a specific content item including processed text,
     AI analysis results, media attachments, and user notes.
@@ -259,7 +306,7 @@ def get_content_detail(content_id: str) -> str:
         return json.dumps({"error": str(e)})
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": True})
 def get_sources(
     status: str = "",
     keyword: str = "",
@@ -335,7 +382,7 @@ def get_sources(
         return json.dumps({"error": str(e)})
 
 
-@mcp.tool()
+@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False})
 def toggle_favorite(
     content_ids: list[str],
     action: str = "favorite",
@@ -379,6 +426,338 @@ def toggle_favorite(
             return json.dumps(result, ensure_ascii=False)
     except Exception as e:
         logger.error("toggle_favorite failed: %s", e, exc_info=True)
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False})
+def create_source(
+    name: str,
+    url: str = "",
+    source_type: str = "",
+    rsshub_route: str = "",
+    pipeline_template_name: str = "",
+    description: str = "",
+    schedule_interval_minutes: int = 0,
+) -> str:
+    """Create a new data source for content collection.
+
+    Supports smart type inference: provide url for RSS feeds, rsshub_route for RSSHub sources.
+
+    Args:
+        name: Display name for the source (must be unique).
+        url: RSS/Atom feed URL or webpage URL. Required for rss.standard sources.
+        source_type: Source type code (e.g. "rss.standard", "rss.hub", "web.scraper").
+                     Auto-inferred from url/rsshub_route if omitted.
+        rsshub_route: RSSHub route path (e.g. "/bilibili/user/video/123"). Required for rss.hub sources.
+        pipeline_template_name: Pipeline template name (fuzzy match). Auto-recommended if omitted.
+        description: Optional description.
+        schedule_interval_minutes: Collection interval in minutes (0 = auto mode).
+    """
+    try:
+        with get_db() as db:
+            # 智能推导 source_type
+            inferred_type = source_type.strip()
+            if not inferred_type:
+                if rsshub_route:
+                    inferred_type = "rss.hub"
+                elif url:
+                    inferred_type = "rss.standard"
+                else:
+                    valid = sorted(e.value for e in SourceType)
+                    return json.dumps({"error": "无法推导 source_type，请明确提供", "valid_values": valid})
+
+            # 校验 source_type
+            err = validate_source_type(inferred_type)
+            if err:
+                return json.dumps({"error": err})
+
+            # 构造 config_json
+            config_json: dict = {}
+            if rsshub_route:
+                config_json["rsshub_route"] = rsshub_route.strip()
+
+            # 校验必填配置
+            err = validate_source_config(inferred_type, url or None, config_json)
+            if err:
+                return json.dumps({"error": err})
+
+            # 名称唯一性
+            err = validate_source_name_unique(name, db)
+            if err:
+                return json.dumps({"error": err})
+
+            # 解析模板
+            template_id = None
+            if pipeline_template_name:
+                template_id, err = _resolve_template_by_name(db, pipeline_template_name)
+                if err:
+                    return json.dumps({"error": err})
+
+            # 构造数据源对象
+            source_data = {
+                "id": uuid.uuid4().hex,
+                "name": name.strip(),
+                "source_type": inferred_type,
+                "url": url.strip() or None,
+                "description": description.strip() or None,
+                "pipeline_template_id": template_id,
+                "config_json": config_json if config_json else None,
+                "schedule_enabled": get_source_category(inferred_type) != SourceCategory.USER,
+                "schedule_mode": "auto" if schedule_interval_minutes == 0 else "fixed",
+                "schedule_interval_override": schedule_interval_minutes if schedule_interval_minutes > 0 else None,
+            }
+            source = SourceConfig(**source_data)
+            db.add(source)
+            db.commit()
+            db.refresh(source)
+
+            logger.info("MCP create_source: %s (%s, type=%s)", source.id, source.name, source.source_type)
+            return json.dumps({
+                "created": True,
+                "source": {"id": source.id, "name": source.name, "source_type": source.source_type, "url": source.url},
+            }, ensure_ascii=False)
+    except Exception as e:
+        logger.error("create_source failed: %s", e, exc_info=True)
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True})
+def update_source(
+    source_id: str = "",
+    source_name: str = "",
+    name: str = "",
+    url: str = "",
+    pipeline_template_name: str = "",
+    description: str = "",
+    schedule_interval_minutes: int = -1,
+) -> str:
+    """Update an existing data source configuration.
+
+    Locate the source by source_id (exact) or source_name (fuzzy match).
+
+    Args:
+        source_id: Source ID (exact match, preferred).
+        source_name: Source name (fuzzy match, used if source_id not provided).
+        name: New display name (leave empty to keep current).
+        url: New feed/webpage URL (leave empty to keep current).
+        pipeline_template_name: New pipeline template name (fuzzy match, leave empty to keep current).
+        description: New description (leave empty to keep current).
+        schedule_interval_minutes: New interval in minutes (-1 = keep current, 0 = switch to auto mode).
+    """
+    try:
+        with get_db() as db:
+            source, err = _resolve_source(db, source_id or None, source_name or None)
+            if err:
+                return err
+
+            updates = {}
+            if name.strip():
+                err = validate_source_name_unique(name.strip(), db, exclude_id=source.id)
+                if err:
+                    return json.dumps({"error": err})
+                updates["name"] = name.strip()
+            if url.strip():
+                updates["url"] = url.strip()
+            if description.strip():
+                updates["description"] = description.strip()
+            if pipeline_template_name.strip():
+                template_id, err = _resolve_template_by_name(db, pipeline_template_name.strip())
+                if err:
+                    return json.dumps({"error": err})
+                updates["pipeline_template_id"] = template_id
+            if schedule_interval_minutes == 0:
+                updates["schedule_mode"] = "auto"
+                updates["schedule_interval_override"] = None
+            elif schedule_interval_minutes > 0:
+                updates["schedule_mode"] = "fixed"
+                updates["schedule_interval_override"] = schedule_interval_minutes
+
+            if not updates:
+                return json.dumps({"error": "没有提供任何要更新的字段"})
+
+            for k, v in updates.items():
+                setattr(source, k, v)
+            db.commit()
+
+            logger.info("MCP update_source: %s (%s)", source.id, source.name)
+            return json.dumps({
+                "updated": True,
+                "source_id": source.id,
+                "source_name": source.name,
+                "changes": list(updates.keys()),
+            }, ensure_ascii=False)
+    except Exception as e:
+        logger.error("update_source failed: %s", e, exc_info=True)
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False})
+def delete_source(
+    source_id: str = "",
+    source_name: str = "",
+    cascade: bool = False,
+) -> str:
+    """Delete a data source.
+
+    By default keeps associated content items (only removes the source config).
+    Set cascade=True to also delete all associated content.
+
+    Args:
+        source_id: Source ID (exact match, preferred).
+        source_name: Source name (fuzzy match, used if source_id not provided).
+        cascade: If True, delete all associated content items. Default False (keep content).
+    """
+    try:
+        with get_db() as db:
+            source, err = _resolve_source(db, source_id or None, source_name or None)
+            if err:
+                return err
+
+            sid = source.id
+            sname = source.name
+
+            cascade_delete_source([sid], db, cascade=cascade)
+            db.commit()
+
+            logger.info("MCP delete_source: %s (%s) cascade=%s", sid, sname, cascade)
+            return json.dumps({
+                "deleted": True,
+                "source_id": sid,
+                "source_name": sname,
+                "content_deleted": cascade,
+                "note": "关联内容已删除" if cascade else "关联内容已保留（source_id 已置空）",
+            }, ensure_ascii=False)
+    except Exception as e:
+        logger.error("delete_source failed: %s", e, exc_info=True)
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True})
+def toggle_source(
+    source_id: str = "",
+    source_name: str = "",
+    action: str = "enable",
+) -> str:
+    """Enable or disable a data source.
+
+    Disabled sources are not collected automatically but their content is preserved.
+
+    Args:
+        source_id: Source ID (exact match, preferred).
+        source_name: Source name (fuzzy match, used if source_id not provided).
+        action: "enable" or "disable".
+    """
+    if action not in ("enable", "disable"):
+        return json.dumps({"error": f"Invalid action '{action}'. Use 'enable' or 'disable'."})
+
+    try:
+        with get_db() as db:
+            source, err = _resolve_source(db, source_id or None, source_name or None)
+            if err:
+                return err
+
+            source.is_active = (action == "enable")
+            db.commit()
+
+            logger.info("MCP toggle_source: %s (%s) -> %s", source.id, source.name, action)
+            return json.dumps({
+                "updated": True,
+                "source_id": source.id,
+                "source_name": source.name,
+                "is_active": source.is_active,
+            }, ensure_ascii=False)
+    except Exception as e:
+        logger.error("toggle_source failed: %s", e, exc_info=True)
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+def get_favorites_summary(
+    time_range: str = "all",
+) -> str:
+    """Get statistics and summary of your favorited content.
+
+    Useful for understanding your reading patterns and content preferences.
+
+    Args:
+        time_range: "7d", "30d", "90d", or "all" (default).
+    """
+    try:
+        with get_db() as db:
+            # 时间范围解析
+            since = None
+            if time_range and time_range != "all":
+                days_map = {"7d": 7, "30d": 30, "90d": 90}
+                days = days_map.get(time_range)
+                if days is None:
+                    return json.dumps({"error": f"Invalid time_range '{time_range}'. Use '7d', '30d', '90d', or 'all'."})
+                since = utcnow() - timedelta(days=days)
+
+            # 基础过滤条件（所有子查询复用）
+            base_filters = [ContentItem.is_favorited == True]  # noqa: E712
+            if since is not None:
+                base_filters.append(ContentItem.favorited_at >= since)
+
+            total = db.query(ContentItem).filter(*base_filters).count()
+            if total == 0:
+                return json.dumps({"total_favorites": 0, "by_source": [], "by_month": [], "recent": []})
+
+            # 按数据源分布（top 10）— 以 ContentItem 为驱动表，left join SourceConfig
+            source_counts = (
+                db.query(SourceConfig.name, func.count(ContentItem.id))
+                .select_from(ContentItem)
+                .outerjoin(SourceConfig, ContentItem.source_id == SourceConfig.id)
+                .filter(*base_filters)
+                .group_by(SourceConfig.name)
+                .order_by(func.count(ContentItem.id).desc())
+                .limit(10)
+                .all()
+            )
+            by_source = [{"source_name": name or "未知来源", "count": cnt} for name, cnt in source_counts]
+
+            # 按月分布（最近 12 个月）— 同样受时间范围约束
+            month_counts = (
+                db.query(
+                    func.to_char(ContentItem.favorited_at, "YYYY-MM").label("month"),
+                    func.count(ContentItem.id),
+                )
+                .filter(*base_filters, ContentItem.favorited_at.isnot(None))
+                .group_by(func.to_char(ContentItem.favorited_at, "YYYY-MM"))
+                .order_by(func.to_char(ContentItem.favorited_at, "YYYY-MM").desc())
+                .limit(12)
+                .all()
+            )
+            by_month = [{"month": month, "count": cnt} for month, cnt in month_counts]
+
+            # 最近 10 条收藏
+            recent_items = (
+                db.query(ContentItem)
+                .options(joinedload(ContentItem.source))
+                .filter(*base_filters)
+                .order_by(ContentItem.favorited_at.desc())
+                .limit(10)
+                .all()
+            )
+            recent = [
+                {
+                    "id": item.id,
+                    "title": item.title,
+                    "source_name": item.source.name if item.source else None,
+                    "favorited_at": str(item.favorited_at) if item.favorited_at else None,
+                    "url": item.url,
+                }
+                for item in recent_items
+            ]
+
+            return json.dumps({
+                "total_favorites": total,
+                "time_range": time_range,
+                "by_source": by_source,
+                "by_month": by_month,
+                "recent": recent,
+            }, ensure_ascii=False, default=str)
+    except Exception as e:
+        logger.error("get_favorites_summary failed: %s", e, exc_info=True)
         return json.dumps({"error": str(e)})
 
 

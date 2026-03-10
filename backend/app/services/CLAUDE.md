@@ -42,7 +42,8 @@ services/
 ├── media_detection.py   # 媒体检测
 ├── rsshub_sync.py       # RSSHub 同步服务
 ├── scheduling_service.py # 向后兼容入口 → scheduling/
-└── source_cleanup.py    # 数据源清理
+├── source_cleanup.py    # 数据源清理
+└── source_service.py    # 数据源共享校验函数（Router 与 MCP server 共用）
 ```
 
 ## 两条独立流程：采集 vs 处理

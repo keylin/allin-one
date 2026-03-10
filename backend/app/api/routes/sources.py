@@ -12,6 +12,12 @@ from app.models.pipeline import PipelineTemplate
 from app.schemas import (
     SourceCreate, SourceUpdate, SourceResponse, CollectionRecordResponse, ContentBatchDelete, error_response,
 )
+from app.services.source_service import (
+    validate_source_type,
+    validate_source_config,
+    validate_template_exists,
+    validate_source_name_unique,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -47,14 +53,6 @@ def _batch_load_source_extras(sources: list[SourceConfig], db: Session) -> tuple
     ) if template_ids else {}
 
     return content_counts, template_names
-
-
-def _validate_source_type(source_type: str) -> str | None:
-    """校验 source_type 是否合法，返回错误信息或 None"""
-    valid = {e.value for e in SourceType}
-    if source_type not in valid:
-        return f"Invalid source_type '{source_type}'. Valid: {sorted(valid)}"
-    return None
 
 
 # ---- CRUD ----
@@ -125,37 +123,29 @@ def list_sources(
 def create_source(body: SourceCreate, db: Session = Depends(get_db)):
     """创建数据源"""
     # 校验 source_type
-    err = _validate_source_type(body.source_type)
+    err = validate_source_type(body.source_type)
     if err:
         return error_response(400, err)
 
-    # 验证 RSSHub 源必须有 rsshub_route
-    if body.source_type == "rss.hub":
-        config = body.config_json if isinstance(body.config_json, dict) else {}
-        if not config.get("rsshub_route"):
-            return error_response(400, "RSSHub 数据源必须在配置中提供 rsshub_route 字段")
-
-    # 验证标准 RSS 源必须有 url
-    elif body.source_type == "rss.standard":
-        if not body.url:
-            return error_response(400, "RSS/Atom 数据源必须提供 url 字段")
-
-    # 验证 Apple Podcasts 源必须有 apple_podcast_url 或 podcast_id
-    elif body.source_type == "podcast.apple":
-        config = body.config_json if isinstance(body.config_json, dict) else {}
-        if not config.get("apple_podcast_url") and not config.get("podcast_id"):
-            return error_response(400, "Apple Podcasts 数据源必须提供 apple_podcast_url 或 podcast_id")
+    # 校验各类型必填配置
+    err = validate_source_config(
+        body.source_type,
+        body.url,
+        body.config_json if isinstance(body.config_json, dict) else {},
+    )
+    if err:
+        return error_response(400, err)
 
     # 校验 pipeline_template_id
     if body.pipeline_template_id:
-        tpl = db.get(PipelineTemplate, body.pipeline_template_id)
-        if not tpl:
-            return error_response(400, f"Pipeline template '{body.pipeline_template_id}' not found")
+        err = validate_template_exists(body.pipeline_template_id, db)
+        if err:
+            return error_response(400, err)
 
     # 名称唯一性校验
-    existing = db.query(SourceConfig).filter(SourceConfig.name == body.name.strip()).first()
-    if existing:
-        return error_response(400, f"数据源「{body.name}」已存在，请使用不同名称")
+    err = validate_source_name_unique(body.name, db)
+    if err:
+        return error_response(400, err)
 
     data = body.model_dump()
 
@@ -269,7 +259,7 @@ def update_source(source_id: str, body: SourceUpdate, db: Session = Depends(get_
 
     # 校验 source_type
     if "source_type" in update_data:
-        err = _validate_source_type(update_data["source_type"])
+        err = validate_source_type(update_data["source_type"])
         if err:
             return error_response(400, err)
 
