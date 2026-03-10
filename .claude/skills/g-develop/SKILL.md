@@ -50,7 +50,7 @@ model: sonnet
 
 **子 skill 引用**: 新采集器用 `/new-collector`，新步骤用 `/new-step-handler`，新 API 用 `/new-api`，新页面用 `/new-vue-page`
 
-### 阶段 2: 自动审查
+### 阶段 2: 自动审查 + 修复循环
 
 实现完成后，**并行启动两个 agent**（使用 Agent tool，在同一条消息中发起两个调用）:
 
@@ -62,36 +62,15 @@ model: sonnet
 - 先运行 `git diff --name-only` 确定变更范围
 - 要求输出结构化报告，问题按 🔴/🟡/🔵 分级
 
-### 阶段 3: 自动修复循环（最多 2 轮）
-
-根据审查结果:
+根据审查结果自动修复（最多 2 轮）:
 
 - **无 🔴 问题** → 直接输出完成报告
 - **有 🔴 问题** → 执行修复循环:
   1. 根据问题自动修复（自身或调对应 agent）
-  2. 修复后重新触发阶段 2 审查（第 2 轮）
+  2. 修复后重新触发审查（第 2 轮）
   3. 第 2 轮仍有 🔴 → 停止，输出报告让用户介入
 
-**注意**: 不自动 commit，留给 `/g-accept` 验收后提交。
-
-### 阶段 4: 文档同步（主动执行）
-
-审查+修复完成后，主动评估并更新文档:
-
-1. `git diff --name-only` 获取变更文件
-2. 对照映射规则判断哪些文档受影响:
-   - models/*.py 变更 → `docs/system_design.md`、`docs/business_glossary.md`
-   - routers/*.py / schemas 变更 → `docs/system_design.md`
-   - 枚举值变更 → `docs/business_glossary.md`
-   - 部署/配置变更 → `CLAUDE.md`
-   - Collector/StepHandler 变更 → `backend/app/services/CLAUDE.md`
-   - 前端路由/组件规范变更 → `frontend/CLAUDE.md`
-3. 执行策略:
-   - **有把握**: 直接修改文档，不需要用户确认
-   - **不确定**: 列出疑点，询问用户后再决定
-   - **无需更新**: 在报告中简要说明理由
-4. 文档变更随功能代码一起提交，不单独 commit（纯文档维护除外）
-5. 完成报告中增加 `### 文档同步` 章节，列出已更新/无需更新的文档
+**注意**: 不自动 commit，不做文档同步，均留给 `/g-accept` 统一处理。
 
 ## 开发铁律
 
