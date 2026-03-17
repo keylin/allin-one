@@ -5,7 +5,7 @@
 
 传输模式：
 - 默认 stdio（本地开发）
-- 设置 MCP_TRANSPORT=http 时使用 streamable-http，监听 0.0.0.0:8001（远程部署）
+- MCP_TRANSPORT=http → streamable-http (stateless JSON)，监听 0.0.0.0:8001/mcp
 """
 
 import json
@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 import app.models  # noqa: F401 — 确保 mapper 初始化
 
-from fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP
 from sqlalchemy import create_engine, func
 from sqlalchemy.orm import joinedload, sessionmaker
 
@@ -150,7 +150,14 @@ def _resolve_template_by_name(db, template_name: str) -> tuple[str | None, str |
 
 # ============ MCP Server ============
 
-mcp = FastMCP("allin-one")
+mcp = FastMCP(
+    "allin-one",
+    host="0.0.0.0",
+    port=8001,
+    transport_security={
+        "enable_dns_rebinding_protection": False,
+    },
+)
 
 
 @mcp.tool(annotations={"readOnlyHint": True})
@@ -764,6 +771,6 @@ def get_favorites_summary(
 if __name__ == "__main__":
     transport = os.environ.get("MCP_TRANSPORT", "stdio")
     if transport == "http":
-        mcp.run(transport="streamable-http", host="0.0.0.0", port=8001)
+        mcp.run(transport="streamable-http")
     else:
         mcp.run()
