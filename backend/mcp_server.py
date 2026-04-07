@@ -820,17 +820,20 @@ def _df_to_records(
     return records
 
 
-async def _ak_call(func, *args, timeout: int = 15, **kwargs) -> pd.DataFrame | None:
-    """带超时的 akshare 调用"""
-    try:
-        df = await asyncio.wait_for(
-            asyncio.to_thread(func, *args, **kwargs),
-            timeout=timeout,
-        )
-        return df if df is not None and not df.empty else None
-    except (asyncio.TimeoutError, Exception) as e:
-        logger.warning("akshare call %s failed: %s", func.__name__, e)
-        return None
+async def _ak_call(func, *args, timeout: int = 15, retries: int = 2, **kwargs) -> pd.DataFrame | None:
+    """带超时和重试退避的 akshare 调用"""
+    for attempt in range(retries):
+        try:
+            df = await asyncio.wait_for(
+                asyncio.to_thread(func, *args, **kwargs),
+                timeout=timeout,
+            )
+            return df if df is not None and not df.empty else None
+        except (asyncio.TimeoutError, Exception) as e:
+            logger.warning("akshare call %s attempt %d/%d failed: %s", func.__name__, attempt + 1, retries, e)
+            if attempt < retries - 1:
+                await asyncio.sleep(2 ** attempt)  # 1s, 2s 指数退避
+    return None
 
 
 # --- 列映射 ---
@@ -974,7 +977,11 @@ async def get_stock_quote(
             # 搜索
             if symbols:
                 keys = [s.strip().upper() for s in symbols.split(",") if s.strip()]
-                df = df[df["交易品种"].str.upper().isin(keys)]
+                # 加密货币交易品种是交易对（如 BTCUSD），用 contains 模糊匹配
+                mask = df["交易品种"].str.upper().apply(
+                    lambda x: any(k in x for k in keys)
+                )
+                df = df[mask]
             elif keyword:
                 df = df[df["交易品种"].str.contains(keyword, case=False, na=False)]
             df = df.head(limit)
