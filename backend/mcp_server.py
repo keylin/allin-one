@@ -8,13 +8,17 @@
 - MCP_TRANSPORT=http → streamable-http (stateless JSON)，监听 0.0.0.0:8001/mcp
 """
 
+import asyncio
 import json
 import logging
 import os
 import sys
+import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta
+
+import pandas as pd
 
 # 确保 backend/ 在 sys.path 中，使 import app.* 可用
 sys.path.insert(0, os.path.dirname(__file__))
@@ -765,6 +769,375 @@ def get_favorites_summary(
             }, ensure_ascii=False, default=str)
     except Exception as e:
         logger.error("get_favorites_summary failed: %s", e, exc_info=True)
+        return json.dumps({"error": str(e)})
+
+
+# ============ 金融数据工具 ============
+
+_finance_cache: dict[str, tuple[float, pd.DataFrame]] = {}
+
+
+def _finance_get_cached(key: str, ttl: int = 30) -> pd.DataFrame | None:
+    if key in _finance_cache:
+        ts, df = _finance_cache[key]
+        if time.time() - ts < ttl:
+            return df
+    return None
+
+
+def _finance_set_cache(key: str, df: pd.DataFrame):
+    _finance_cache[key] = (time.time(), df)
+
+
+def _safe_val(val, as_str: bool = False):
+    """安全提取 DataFrame 值"""
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return None
+    if as_str:
+        return str(val)
+    try:
+        return round(float(val), 4)
+    except (ValueError, TypeError):
+        return str(val)
+
+
+def _df_to_records(
+    df: pd.DataFrame,
+    field_map: dict[str, str],
+    str_fields: set[str] | None = None,
+) -> list[dict]:
+    """DataFrame → list[dict]，按 field_map {输出键: 源列名} 映射"""
+    str_fields = str_fields or set()
+    records = []
+    for _, row in df.iterrows():
+        rec = {}
+        for out_key, src_col in field_map.items():
+            if src_col not in row.index:
+                rec[out_key] = None
+                continue
+            rec[out_key] = _safe_val(row[src_col], as_str=(out_key in str_fields))
+        records.append(rec)
+    return records
+
+
+async def _ak_call(func, *args, timeout: int = 15, **kwargs) -> pd.DataFrame | None:
+    """带超时的 akshare 调用"""
+    try:
+        df = await asyncio.wait_for(
+            asyncio.to_thread(func, *args, **kwargs),
+            timeout=timeout,
+        )
+        return df if df is not None and not df.empty else None
+    except (asyncio.TimeoutError, Exception) as e:
+        logger.warning("akshare call %s failed: %s", func.__name__, e)
+        return None
+
+
+# --- 列映射 ---
+
+_SPOT_FIELDS = {
+    "code": "代码", "name": "名称", "price": "最新价",
+    "change_pct": "涨跌幅", "change_amount": "涨跌额",
+    "volume": "成交量", "amount": "成交额",
+    "high": "最高", "low": "最低", "open": "今开", "prev_close": "昨收",
+    "turnover_rate": "换手率", "pe_ratio": "市盈率-动态",
+    "pb_ratio": "市净率", "market_cap": "总市值",
+}
+_SPOT_STR = {"code", "name"}
+
+_INDEX_SPOT_FIELDS = {
+    "code": "代码", "name": "名称", "price": "最新价",
+    "change_pct": "涨跌幅", "change_amount": "涨跌额",
+    "volume": "成交量", "amount": "成交额",
+    "high": "最高", "low": "最低", "open": "今开", "prev_close": "昨收",
+}
+
+_KLINE_FIELDS_CN = {
+    "date": "日期", "open": "开盘", "close": "收盘",
+    "high": "最高", "low": "最低", "volume": "成交量",
+    "amount": "成交额", "change_pct": "涨跌幅", "turnover": "换手率",
+}
+
+_KLINE_FIELDS_EN = {
+    "date": "date", "open": "open", "close": "close",
+    "high": "high", "low": "low", "volume": "volume",
+}
+
+_CRYPTO_FIELDS = {
+    "name": "交易品种", "price": "最近报价",
+    "change_amount": "涨跌额", "change_pct": "涨跌幅",
+    "high_24h": "24小时最高", "low_24h": "24小时最低",
+    "volume_24h": "24小时成交量", "market": "市场",
+    "updated_at": "更新时间",
+}
+
+# --- 宏观指标定义 ---
+
+_MACRO_MAP: dict[str, tuple] = {
+    "cpi": ("macro_china_cpi_monthly", {}, "日期", "今值", "CPI 月率"),
+    "ppi": ("macro_china_ppi", {}, "月份", "当月", "PPI 工业品出厂价格指数"),
+    "pmi": ("macro_china_pmi", {}, "月份", "制造业-指数", "PMI 采购经理指数"),
+    "gdp": ("macro_china_gdp", {}, "季度", "国内生产总值-绝对值", "GDP 国内生产总值"),
+    "m2":  ("macro_china_money_supply", {}, "月份", "货币和准货币(M2)-数量(亿元)", "M2 货币供应量"),
+    "shibor": (
+        "rate_interbank",
+        {"market": "上海银行同业拆借市场", "symbol": "Shibor人民币", "indicator": "隔夜"},
+        "报告日", "利率", "Shibor 隔夜利率",
+    ),
+}
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+async def get_market_snapshot() -> str:
+    """获取主要市场指数实时行情概览。
+
+    返回 A 股主要指数（上证、深证、创业板、沪深300、中证500、科创50）
+    以及港股主要指数（恒生指数等）的最新价和涨跌幅。
+    非交易时段返回最近收盘数据。
+    """
+    import akshare as ak
+
+    results: list[dict] = []
+
+    # A 股指数 — 三个系列合并后按代码筛选
+    a_codes = {"000001", "399001", "399006", "000300", "000905", "000688"}
+    for series in ["上证系列指数", "深证系列指数", "沪深重要指数"]:
+        cache_key = f"index_spot_{series}"
+        df = _finance_get_cached(cache_key, ttl=30)
+        if df is None:
+            df = await _ak_call(ak.stock_zh_index_spot_em, symbol=series, timeout=30)
+            if df is not None:
+                _finance_set_cache(cache_key, df)
+        if df is not None:
+            matched = df[df["代码"].isin(a_codes)]
+            for rec in _df_to_records(matched, _INDEX_SPOT_FIELDS, _SPOT_STR):
+                if not any(r["code"] == rec["code"] for r in results):
+                    rec["market"] = "A"
+                    results.append(rec)
+
+    # 港股指数
+    hk_df = _finance_get_cached("hk_index_spot", ttl=30)
+    if hk_df is None:
+        hk_df = await _ak_call(ak.stock_hk_index_spot_em, timeout=30)
+        if hk_df is not None:
+            _finance_set_cache("hk_index_spot", hk_df)
+    if hk_df is not None:
+        hk_codes = {"HSI", "HSCEI", "HSCCI", "HSTECH"}
+        hk_matched = hk_df[hk_df["代码"].isin(hk_codes)] if "代码" in hk_df.columns else hk_df.head(4)
+        for rec in _df_to_records(hk_matched, _INDEX_SPOT_FIELDS, _SPOT_STR):
+            rec["market"] = "HK"
+            results.append(rec)
+
+    if not results:
+        return json.dumps({"error": "行情接口暂不可用，请稍后重试"})
+
+    return json.dumps({"indices": results, "count": len(results)}, ensure_ascii=False, default=str)
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+async def get_stock_quote(
+    symbols: str = "",
+    keyword: str = "",
+    market: str = "A",
+    limit: int = 10,
+) -> str:
+    """查询个股实时行情。
+
+    支持 A 股、港股、美股和加密货币。通过代码精确查询或名称关键词搜索。
+
+    Args:
+        symbols: 代码，逗号分隔。A股如 "600519,000001"；港股如 "00700"；美股如 "105.MSFT"
+        keyword: 名称关键词，如 "茅台"、"银行"、"腾讯"
+        market: "A"（A股，默认）| "HK"（港股）| "US"（美股）| "crypto"（加密货币）
+        limit: 最大返回条数（默认 10，上限 50）
+    """
+    if not symbols and not keyword:
+        return json.dumps({"error": "请提供 symbols（代码）或 keyword（关键词）"})
+
+    import akshare as ak
+
+    market = market.upper() if market != "crypto" else "crypto"
+    limit = max(1, min(limit, 50))
+
+    try:
+        # 获取行情数据
+        if market == "crypto":
+            cache_key = "crypto_spot"
+            ttl = 60
+            df = _finance_get_cached(cache_key, ttl=ttl)
+            if df is None:
+                df = await _ak_call(ak.crypto_js_spot)
+                if df is not None:
+                    _finance_set_cache(cache_key, df)
+            if df is None:
+                return json.dumps({"error": "加密货币行情接口暂不可用"})
+            # 搜索
+            if symbols:
+                keys = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+                df = df[df["交易品种"].str.upper().isin(keys)]
+            elif keyword:
+                df = df[df["交易品种"].str.contains(keyword, case=False, na=False)]
+            df = df.head(limit)
+            records = _df_to_records(df, _CRYPTO_FIELDS, {"name", "market", "updated_at"})
+            return json.dumps({"stocks": records, "count": len(records), "market": "crypto"},
+                              ensure_ascii=False, default=str)
+
+        # 股票市场 (A/HK/US)
+        func_map = {"A": ak.stock_zh_a_spot_em, "HK": ak.stock_hk_spot_em, "US": ak.stock_us_spot_em}
+        func = func_map.get(market)
+        if not func:
+            return json.dumps({"error": f"不支持的市场: {market}，可选: A, HK, US, crypto"})
+
+        cache_key = f"stock_spot_{market}"
+        df = _finance_get_cached(cache_key, ttl=30)
+        if df is None:
+            df = await _ak_call(func, timeout=30)
+            if df is not None:
+                _finance_set_cache(cache_key, df)
+        if df is None:
+            return json.dumps({"error": f"{market} 股行情接口暂不可用，请稍后重试"})
+
+        if symbols:
+            codes = [s.strip() for s in symbols.split(",") if s.strip()]
+            df = df[df["代码"].isin(codes)]
+        elif keyword:
+            df = df[df["名称"].str.contains(keyword, na=False)]
+
+        df = df.head(limit)
+        records = _df_to_records(df, _SPOT_FIELDS, _SPOT_STR)
+        return json.dumps({"stocks": records, "count": len(records), "market": market},
+                          ensure_ascii=False, default=str)
+    except Exception as e:
+        logger.error("get_stock_quote failed: %s", e, exc_info=True)
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+async def get_kline(
+    symbol: str,
+    market: str = "A",
+    period: str = "daily",
+    count: int = 30,
+    adjust: str = "qfq",
+) -> str:
+    """查询历史 K 线数据（OHLCV）。
+
+    Args:
+        symbol: 代码。A股 "600519"；港股 "00700"；美股 "105.MSFT"；指数 "000300"；ETF "510050"
+        market: "A"（A股，默认）| "HK"（港股）| "US"（美股）| "index"（A股指数）| "etf"
+        period: "daily"（日K，默认）| "weekly"（周K）| "monthly"（月K）
+        count: 返回最近 N 条（默认 30，上限 250）
+        adjust: "qfq"（前复权，默认）| "hfq"（后复权）| ""（不复权）。指数无效
+    """
+    import akshare as ak
+
+    valid_markets = {"A", "HK", "US", "index", "etf"}
+    if market not in valid_markets:
+        return json.dumps({"error": f"market 须为 {'/'.join(valid_markets)}，收到: {market}"})
+
+    count = max(1, min(count, 250))
+    _period_multiplier = {"daily": 2, "weekly": 10, "monthly": 45}
+    days_back = count * _period_multiplier.get(period, 2)
+    start = (datetime.now() - timedelta(days=days_back)).strftime("%Y%m%d")
+
+    try:
+        if market == "index":
+            df = await _ak_call(ak.stock_zh_index_daily_em, symbol=symbol, start_date=start, timeout=20)
+            fields = _KLINE_FIELDS_EN
+        elif market == "HK":
+            df = await _ak_call(ak.stock_hk_hist, symbol=symbol, period=period, start_date=start, adjust=adjust, timeout=20)
+            fields = _KLINE_FIELDS_CN
+        elif market == "US":
+            df = await _ak_call(ak.stock_us_hist, symbol=symbol, period=period, start_date=start, adjust=adjust, timeout=20)
+            fields = _KLINE_FIELDS_CN
+        elif market == "etf":
+            df = await _ak_call(ak.fund_etf_hist_em, symbol=symbol, period=period, start_date=start, adjust=adjust, timeout=20)
+            fields = _KLINE_FIELDS_CN
+        else:  # A
+            df = await _ak_call(ak.stock_zh_a_hist, symbol=symbol, period=period, start_date=start, adjust=adjust, timeout=20)
+            fields = _KLINE_FIELDS_CN
+
+        if df is None:
+            return json.dumps({"error": f"未找到 {symbol} ({market}) 的数据，请检查代码和市场类型"})
+
+        df = df.tail(count)
+        data = _df_to_records(df, fields, str_fields={"date"})
+
+        return json.dumps({
+            "symbol": symbol, "market": market, "period": period,
+            "adjust": adjust if market not in ("index",) else "N/A",
+            "data": data, "count": len(data),
+        }, ensure_ascii=False, default=str)
+    except Exception as e:
+        logger.error("get_kline failed: %s", e, exc_info=True)
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+async def get_macro_indicator(
+    indicator: str,
+    count: int = 12,
+) -> str:
+    """查询中国宏观经济指标最近数据。
+
+    Args:
+        indicator: 指标名 — cpi | ppi | pmi | gdp | m2 | shibor
+        count: 返回最近 N 条（默认 12，上限 120）
+    """
+    import akshare as ak
+
+    key = indicator.lower().strip()
+    if key not in _MACRO_MAP:
+        available = ", ".join(_MACRO_MAP.keys())
+        return json.dumps({"error": f"未知指标 '{indicator}'，可选: {available}"})
+
+    func_name, params, date_field, value_field, label = _MACRO_MAP[key]
+    count = max(1, min(count, 120))
+
+    try:
+        cache_key = f"macro_{key}"
+        df = _finance_get_cached(cache_key, ttl=3600)
+        if df is None:
+            func = getattr(ak, func_name)
+            df = await _ak_call(func, **params, timeout=20)
+            if df is not None:
+                _finance_set_cache(cache_key, df)
+
+        if df is None:
+            return json.dumps({"error": f"{label}: 接口暂不可用"})
+
+        # akshare 部分指标按时间倒序排列，统一取最近 count 条
+        if len(df) > 1 and date_field in df.columns:
+            first_date = str(df.iloc[0][date_field])
+            last_date = str(df.iloc[-1][date_field])
+            if first_date > last_date:
+                # 倒序（新→旧），取 head 并反转为正序
+                df = df.head(count).iloc[::-1].reset_index(drop=True)
+            else:
+                df = df.tail(count)
+        else:
+            df = df.tail(count)
+
+        data = []
+        for _, row in df.iterrows():
+            date_val = _safe_val(row.get(date_field), as_str=True)
+            value = _safe_val(row.get(value_field))
+            if date_val:
+                entry = {"date": date_val, "value": value}
+                for col in df.columns:
+                    if col != date_field and col not in entry:
+                        v = _safe_val(row.get(col))
+                        if v is not None:
+                            entry[col] = v
+                data.append(entry)
+
+        return json.dumps({
+            "indicator": key, "label": label,
+            "value_field": value_field,
+            "data": data, "count": len(data),
+        }, ensure_ascii=False, default=str)
+    except Exception as e:
+        logger.error("get_macro_indicator failed: %s", e, exc_info=True)
         return json.dumps({"error": str(e)})
 
 

@@ -1238,7 +1238,7 @@ docker compose exec -T postgres psql -U allinone allinone < data/backups/backup_
 
 ### 10.2 工具清单
 
-共 9 个工具，按读写属性分类：
+共 13 个工具，按读写属性分类：
 
 **只读工具 (readOnlyHint=True)**
 
@@ -1248,6 +1248,12 @@ docker compose exec -T postgres psql -U allinone allinone < data/backups/backup_
 | `get_content_detail` | 获取内容全文及 AI 分析 | content_id |
 | `get_sources` | 列出所有数据源及状态 | status / keyword |
 | `get_favorites_summary` | 收藏统计（按源分布、按月趋势、最近列表） | time_range (7d/30d/90d/all) |
+| `get_market_snapshot` | 主要市场指数实时概览（A 股六大指数 + 恒生指数） | — |
+| `get_stock_quote` | 个股实时行情查询 | symbols / keyword / market (A/HK/US/crypto) / limit |
+| `get_kline` | 历史 K 线数据 | symbol / market (A/HK/US/index/etf) / period (daily/weekly/monthly) / count / adjust |
+| `get_macro_indicator` | 中国宏观经济指标 | indicator (cpi/ppi/pmi/gdp/m2/shibor) / count |
+
+金融数据工具通过 akshare 库获取数据，带内存缓存（TTL 按工具类型区分）和超时保护（15 秒），不写入本地数据库。
 
 **写操作工具 (readOnlyHint=False)**
 
