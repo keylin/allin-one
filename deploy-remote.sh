@@ -63,6 +63,8 @@ else
 
     echo ">> [4] Restarting containers..."
     ${SSH} "cd ${REMOTE_DIR} && docker compose -f ${COMPOSE_FILE} up -d allin-one allin-worker-pipeline allin-worker-scheduled allin-mcp" 2>&1
+    # MCP 容器通过 volume mount 加载代码，up -d 不会检测文件变更，需显式 restart
+    ${SSH} "cd ${REMOTE_DIR} && docker compose -f ${COMPOSE_FILE} restart allin-mcp" 2>&1
 fi
 
 # Health check & migration
