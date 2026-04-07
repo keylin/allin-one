@@ -912,24 +912,33 @@ async def _crypto_quote(symbols: str, keyword: str, limit: int) -> str:
     import httpx
 
     cache_key = "crypto_coingecko"
-    cached = _finance_get_cached(cache_key, ttl=60)
+    cached = _finance_get_cached(cache_key, ttl=120)  # 2 分钟缓存，避免 rate limit
 
     if cached is not None:
         records = cached  # 缓存的是 list[dict]
     else:
-        # 请求 Top 100 币种
-        try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                r = await client.get(f"{_COINGECKO_API}/coins/markets", params={
-                    "vs_currency": "usd", "order": "market_cap_desc",
-                    "per_page": 100, "page": 1, "sparkline": "false",
-                    "price_change_percentage": "24h",
-                })
-                r.raise_for_status()
-                data = r.json()
-        except Exception as e:
-            logger.warning("CoinGecko API failed: %s", e)
-            return json.dumps({"error": f"加密货币接口暂不可用: {e}"})
+        # 请求 Top 100 币种（含重试退避）
+        data = None
+        for attempt in range(3):
+            try:
+                async with httpx.AsyncClient(timeout=15) as client:
+                    r = await client.get(f"{_COINGECKO_API}/coins/markets", params={
+                        "vs_currency": "usd", "order": "market_cap_desc",
+                        "per_page": 100, "page": 1, "sparkline": "false",
+                        "price_change_percentage": "24h",
+                    })
+                    if r.status_code == 429:
+                        await asyncio.sleep(2 ** attempt * 5)  # 5s, 10s, 20s
+                        continue
+                    r.raise_for_status()
+                    data = r.json()
+                    break
+            except Exception as e:
+                logger.warning("CoinGecko API attempt %d failed: %s", attempt + 1, e)
+                if attempt < 2:
+                    await asyncio.sleep(2 ** attempt * 5)
+        if data is None:
+            return json.dumps({"error": "加密货币接口暂不可用（CoinGecko rate limit），请稍后重试"})
 
         records = []
         for coin in data:
