@@ -998,7 +998,7 @@ async def get_stock_quote(
     Args:
         symbols: 代码，逗号分隔。A股 "600519,000001"；港股 "00700"；美股 "AAPL,MSFT"
         keyword: 名称关键词，如 "茅台"（仅 A 股，需东方财富接口可用）
-        market: "A"（A股，默认）| "HK"（港股）| "US"（美股）| "crypto"（加密货币）
+        market: "A"（A股，默认）| "HK"（港股）| "US"（美股）| "crypto"（加密货币，仅 BTC/LTC/BCH）
         limit: 最大返回条数（默认 10，上限 50）
     """
     if not symbols and not keyword:
@@ -1148,11 +1148,23 @@ async def get_kline(
                 df = await _ak_call(ak.stock_zh_index_daily_em, symbol=symbol, start_date=start, timeout=20)
                 fields = _KLINE_FIELDS_EN
         elif market == "HK":
-            df = await _ak_call(ak.stock_hk_hist, symbol=symbol, period=period, start_date=start, adjust=adjust, timeout=20)
+            # 新浪港股日线（不走 push2）
+            df = await _ak_call(ak.stock_hk_index_daily_sina, symbol=symbol, timeout=20)
+            fields = _KLINE_FIELDS_EN
         elif market == "US":
-            df = await _ak_call(ak.stock_us_hist, symbol=symbol, period=period, start_date=start, adjust=adjust, timeout=20)
+            # 新浪美股日线（不走 push2）
+            us_adjust = adjust if adjust in ("qfq", "hfq") else ""
+            df = await _ak_call(ak.stock_us_daily, symbol=symbol, adjust=us_adjust or "qfq", timeout=20)
+            fields = _KLINE_FIELDS_EN
         elif market == "etf":
-            df = await _ak_call(ak.fund_etf_hist_em, symbol=symbol, period=period, start_date=start, adjust=adjust, timeout=20)
+            # 复用腾讯 A 股接口（ETF 和股票共用）
+            tx_sym = f"sz{symbol}" if symbol.startswith("159") or symbol[0] not in "569" else f"sh{symbol}"
+            tx_adjust = {"qfq": "qfq", "hfq": "hfq", "": ""}.get(adjust, "qfq")
+            df = await _ak_call(
+                ak.stock_zh_a_hist_tx, symbol=tx_sym, start_date=start, end_date=end,
+                adjust=tx_adjust, timeout=20,
+            )
+            fields = _KLINE_FIELDS_TX
 
         if df is None:
             return json.dumps({"error": f"未找到 {symbol} ({market}) 的数据，请检查代码和市场类型"})
