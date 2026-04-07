@@ -890,6 +890,74 @@ _MACRO_MAP: dict[str, tuple] = {
 }
 
 
+# --- 加密货币 CoinGecko ---
+
+# 常用币种 symbol → CoinGecko ID 映射
+_COIN_IDS = {
+    "BTC": "bitcoin", "ETH": "ethereum", "BNB": "binancecoin",
+    "SOL": "solana", "XRP": "ripple", "DOGE": "dogecoin",
+    "ADA": "cardano", "DOT": "polkadot", "AVAX": "avalanche-2",
+    "MATIC": "matic-network", "LINK": "chainlink", "UNI": "uniswap",
+    "LTC": "litecoin", "ATOM": "cosmos", "FIL": "filecoin",
+    "TRX": "tron", "NEAR": "near", "APT": "aptos",
+    "ARB": "arbitrum", "OP": "optimism", "SUI": "sui",
+    "PEPE": "pepe", "SHIB": "shiba-inu", "TON": "the-open-network",
+}
+
+_COINGECKO_API = "https://api.coingecko.com/api/v3"
+
+
+async def _crypto_quote(symbols: str, keyword: str, limit: int) -> str:
+    """通过 CoinGecko 查询加密货币行情"""
+    import httpx
+
+    cache_key = "crypto_coingecko"
+    cached = _finance_get_cached(cache_key, ttl=60)
+
+    if cached is not None:
+        records = cached  # 缓存的是 list[dict]
+    else:
+        # 请求 Top 100 币种
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                r = await client.get(f"{_COINGECKO_API}/coins/markets", params={
+                    "vs_currency": "usd", "order": "market_cap_desc",
+                    "per_page": 100, "page": 1, "sparkline": "false",
+                    "price_change_percentage": "24h",
+                })
+                r.raise_for_status()
+                data = r.json()
+        except Exception as e:
+            logger.warning("CoinGecko API failed: %s", e)
+            return json.dumps({"error": f"加密货币接口暂不可用: {e}"})
+
+        records = []
+        for coin in data:
+            records.append({
+                "symbol": (coin.get("symbol") or "").upper(),
+                "name": coin.get("name", ""),
+                "price": _safe_val(coin.get("current_price")),
+                "change_pct": _safe_val(coin.get("price_change_percentage_24h")),
+                "market_cap": _safe_val(coin.get("market_cap")),
+                "volume_24h": _safe_val(coin.get("total_volume")),
+                "high_24h": _safe_val(coin.get("high_24h")),
+                "low_24h": _safe_val(coin.get("low_24h")),
+            })
+        _finance_set_cache(cache_key, records)
+
+    # 过滤
+    if symbols:
+        keys = {s.strip().upper() for s in symbols.split(",") if s.strip()}
+        records = [r for r in records if r["symbol"] in keys]
+    elif keyword:
+        kw = keyword.lower()
+        records = [r for r in records if kw in r["symbol"].lower() or kw in r["name"].lower()]
+
+    records = records[:limit]
+    return json.dumps({"stocks": records, "count": len(records), "market": "crypto"},
+                      ensure_ascii=False, default=str)
+
+
 _SNAPSHOT_INDICES = [
     # (雪球 symbol, 代码, 市场)
     ("SH000001", "000001", "A", "上证指数"),
@@ -998,7 +1066,7 @@ async def get_stock_quote(
     Args:
         symbols: 代码，逗号分隔。A股 "600519,000001"；港股 "00700"；美股 "AAPL,MSFT"
         keyword: 名称关键词，如 "茅台"（仅 A 股，需东方财富接口可用）
-        market: "A"（A股，默认）| "HK"（港股）| "US"（美股）| "crypto"（加密货币，仅 BTC/LTC/BCH）
+        market: "A"（A股，默认）| "HK"（港股）| "US"（美股）| "crypto"（加密货币）
         limit: 最大返回条数（默认 10，上限 50）
     """
     if not symbols and not keyword:
@@ -1010,26 +1078,9 @@ async def get_stock_quote(
     limit = max(1, min(limit, 50))
 
     try:
-        # 加密货币走独立接口
+        # 加密货币 — CoinGecko 免费 API
         if market == "crypto":
-            cache_key = "crypto_spot"
-            df = _finance_get_cached(cache_key, ttl=60)
-            if df is None:
-                df = await _ak_call(ak.crypto_js_spot)
-                if df is not None:
-                    _finance_set_cache(cache_key, df)
-            if df is None:
-                return json.dumps({"error": "加密货币行情接口暂不可用"})
-            if symbols:
-                keys = [s.strip().upper() for s in symbols.split(",") if s.strip()]
-                mask = df["交易品种"].str.upper().apply(lambda x: any(k in x for k in keys))
-                df = df[mask]
-            elif keyword:
-                df = df[df["交易品种"].str.contains(keyword, case=False, na=False)]
-            df = df.head(limit)
-            records = _df_to_records(df, _CRYPTO_FIELDS, {"name", "market", "updated_at"})
-            return json.dumps({"stocks": records, "count": len(records), "market": "crypto"},
-                              ensure_ascii=False, default=str)
+            return await _crypto_quote(symbols, keyword, limit)
 
         if market not in ("A", "HK", "US"):
             return json.dumps({"error": f"不支持的市场: {market}，可选: A, HK, US, crypto"})
