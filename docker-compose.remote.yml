@@ -168,7 +168,7 @@ services:
     image: allin-one:local
     container_name: allin-mcp
     restart: unless-stopped
-    command: ["python", "mcp_server.py"]
+    command: ["sh", "-c", "pip install --quiet 'akshare>=1.18.52' 2>/dev/null; exec python mcp_server.py"]
     ports:
       - "8001:8001"
     volumes:
