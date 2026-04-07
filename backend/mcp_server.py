@@ -960,7 +960,8 @@ _XQ_PREFIX = {"A": {"SH": "6", "SZ": "0,3"}, "HK": {}, "US": {}}
 def _to_xq_symbol(code: str, market: str) -> str:
     """将代码转换为雪球 symbol 格式"""
     if market == "A":
-        return f"SH{code}" if code.startswith("6") else f"SZ{code}"
+        # 6/5/9 开头 → 上交所，0/1/2/3 开头 → 深交所
+        return f"SH{code}" if code[0] in "569" else f"SZ{code}"
     if market == "HK":
         return code  # 00700
     if market == "US":
@@ -1114,7 +1115,7 @@ async def get_kline(
 
         if market == "A":
             # 腾讯数据源（不走 push2）
-            tx_sym = f"sh{symbol}" if symbol.startswith("6") else f"sz{symbol}"
+            tx_sym = f"sh{symbol}" if symbol[0] in "569" else f"sz{symbol}"
             tx_adjust = {"qfq": "qfq", "hfq": "hfq", "": ""}.get(adjust, "qfq")
             df = await _ak_call(
                 ak.stock_zh_a_hist_tx, symbol=tx_sym, start_date=start, end_date=end,
