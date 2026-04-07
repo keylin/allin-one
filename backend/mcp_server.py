@@ -958,10 +958,23 @@ _XQ_PREFIX = {"A": {"SH": "6", "SZ": "0,3"}, "HK": {}, "US": {}}
 
 
 def _to_xq_symbol(code: str, market: str) -> str:
-    """将代码转换为雪球 symbol 格式"""
+    """将代码转换为雪球 symbol 格式
+
+    交易所映射规则:
+      SH: 6xx(主板) 688(科创板) 5xx(ETF/基金,除159) 9xx(B股) 11x(可转债)
+      SZ: 0xx(主板) 002(中小板) 3xx(创业板) 159(ETF) 12x(可转债)
+      BJ: 4xx 8xx 920(北交所)
+    """
     if market == "A":
-        # 6/5/9 开头 → 上交所，0/1/2/3 开头 → 深交所
-        return f"SH{code}" if code[0] in "569" else f"SZ{code}"
+        if code.startswith("159"):
+            return f"SZ{code}"  # 深市 ETF
+        if code[0] in "569":
+            return f"SH{code}"  # 沪市股票/ETF/B股
+        if code[0] in "48":
+            return f"BJ{code}"  # 北交所
+        if code[:3] in ("110", "113"):
+            return f"SH{code}"  # 沪市可转债
+        return f"SZ{code}"      # 深市股票/创业板/可转债
     if market == "HK":
         return code  # 00700
     if market == "US":
@@ -1115,7 +1128,7 @@ async def get_kline(
 
         if market == "A":
             # 腾讯数据源（不走 push2）
-            tx_sym = f"sh{symbol}" if symbol[0] in "569" else f"sz{symbol}"
+            tx_sym = f"sz{symbol}" if symbol.startswith("159") or symbol[0] not in "569" else f"sh{symbol}"
             tx_adjust = {"qfq": "qfq", "hfq": "hfq", "": ""}.get(adjust, "qfq")
             df = await _ak_call(
                 ak.stock_zh_a_hist_tx, symbol=tx_sym, start_date=start, end_date=end,
