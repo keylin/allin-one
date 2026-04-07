@@ -35,7 +35,7 @@ trafilatura>=2.0.0
 crawl4ai>=0.5.0
 
 # Finance Data
-akshare>=1.14.0
+akshare>=1.18.52
 
 # Ebook Parsing
 ebooklib>=0.18
