@@ -890,51 +890,82 @@ _MACRO_MAP: dict[str, tuple] = {
 }
 
 
+_SNAPSHOT_INDICES = [
+    # (雪球 symbol, 代码, 市场)
+    ("SH000001", "000001", "A", "上证指数"),
+    ("SZ399001", "399001", "A", "深证成指"),
+    ("SZ399006", "399006", "A", "创业板指"),
+    ("SH000300", "000300", "A", "沪深300"),
+    ("SH000905", "000905", "A", "中证500"),
+    ("SH000688", "000688", "A", "科创50"),
+    ("HKHSI", "HSI", "HK", "恒生指数"),
+    ("HKHSCEI", "HSCEI", "HK", "国企指数"),
+    ("HKHSTECH", "HSTECH", "HK", "恒生科技"),
+    (".DJI", "DJI", "US", "道琼斯"),
+    (".IXIC", "IXIC", "US", "纳斯达克"),
+]
+
+
+async def _xq_spot(symbol: str) -> dict | None:
+    """通过雪球查询单只标的行情"""
+    import akshare as ak
+    df = await _ak_call(ak.stock_individual_spot_xq, symbol=symbol, timeout=10, retries=1)
+    if df is None:
+        return None
+    data = dict(zip(df["item"], df["value"]))
+    return data
+
+
 @mcp.tool(annotations={"readOnlyHint": True})
 async def get_market_snapshot() -> str:
     """获取主要市场指数实时行情概览。
 
-    返回 A 股主要指数（上证、深证、创业板、沪深300、中证500、科创50）
-    以及港股主要指数（恒生指数等）的最新价和涨跌幅。
-    非交易时段返回最近收盘数据。
+    返回 A 股主要指数（上证、深证、创业板、沪深300、中证500、科创50）、
+    港股指数（恒生、国企、恒生科技）和美股指数（道琼斯、纳斯达克）。
+    非交易时段返回最近收盘数据。数据来源：雪球。
     """
-    import akshare as ak
+    cache_key = "market_snapshot"
+    cached = _finance_get_cached(cache_key, ttl=30)
+    if cached is not None:
+        return cached  # 缓存的是 JSON 字符串
 
     results: list[dict] = []
-
-    # A 股指数 — 三个系列合并后按代码筛选
-    a_codes = {"000001", "399001", "399006", "000300", "000905", "000688"}
-    for series in ["上证系列指数", "深证系列指数", "沪深重要指数"]:
-        cache_key = f"index_spot_{series}"
-        df = _finance_get_cached(cache_key, ttl=30)
-        if df is None:
-            df = await _ak_call(ak.stock_zh_index_spot_em, symbol=series, timeout=30)
-            if df is not None:
-                _finance_set_cache(cache_key, df)
-        if df is not None:
-            matched = df[df["代码"].isin(a_codes)]
-            for rec in _df_to_records(matched, _INDEX_SPOT_FIELDS, _SPOT_STR):
-                if not any(r["code"] == rec["code"] for r in results):
-                    rec["market"] = "A"
-                    results.append(rec)
-
-    # 港股指数
-    hk_df = _finance_get_cached("hk_index_spot", ttl=30)
-    if hk_df is None:
-        hk_df = await _ak_call(ak.stock_hk_index_spot_em, timeout=30)
-        if hk_df is not None:
-            _finance_set_cache("hk_index_spot", hk_df)
-    if hk_df is not None:
-        hk_codes = {"HSI", "HSCEI", "HSCCI", "HSTECH"}
-        hk_matched = hk_df[hk_df["代码"].isin(hk_codes)] if "代码" in hk_df.columns else hk_df.head(4)
-        for rec in _df_to_records(hk_matched, _INDEX_SPOT_FIELDS, _SPOT_STR):
-            rec["market"] = "HK"
-            results.append(rec)
+    for xq_sym, code, mkt, name in _SNAPSHOT_INDICES:
+        data = await _xq_spot(xq_sym)
+        if data:
+            results.append({
+                "code": code, "name": data.get("名称", name), "market": mkt,
+                "price": _safe_val(data.get("现价")),
+                "change_pct": _safe_val(data.get("涨幅")),
+                "change_amount": _safe_val(data.get("涨跌")),
+                "open": _safe_val(data.get("今开")),
+                "prev_close": _safe_val(data.get("昨收")),
+                "high": _safe_val(data.get("最高")),
+                "low": _safe_val(data.get("最低")),
+                "volume": _safe_val(data.get("成交量")),
+                "amount": _safe_val(data.get("成交额")),
+            })
 
     if not results:
         return json.dumps({"error": "行情接口暂不可用，请稍后重试"})
 
-    return json.dumps({"indices": results, "count": len(results)}, ensure_ascii=False, default=str)
+    result_json = json.dumps({"indices": results, "count": len(results)}, ensure_ascii=False, default=str)
+    _finance_set_cache(cache_key, result_json)
+    return result_json
+
+
+_XQ_PREFIX = {"A": {"SH": "6", "SZ": "0,3"}, "HK": {}, "US": {}}
+
+
+def _to_xq_symbol(code: str, market: str) -> str:
+    """将代码转换为雪球 symbol 格式"""
+    if market == "A":
+        return f"SH{code}" if code.startswith("6") else f"SZ{code}"
+    if market == "HK":
+        return code  # 00700
+    if market == "US":
+        return code  # AAPL
+    return code
 
 
 @mcp.tool(annotations={"readOnlyHint": True})
@@ -946,11 +977,13 @@ async def get_stock_quote(
 ) -> str:
     """查询个股实时行情。
 
-    支持 A 股、港股、美股和加密货币。通过代码精确查询或名称关键词搜索。
+    支持 A 股、港股、美股和加密货币。通过代码查询（推荐）或名称关键词搜索。
+    数据来源：雪球（按代码查询）/ 加密货币（coindesk）。
+    关键词搜索依赖东方财富接口，可能不可用。
 
     Args:
-        symbols: 代码，逗号分隔。A股如 "600519,000001"；港股如 "00700"；美股如 "105.MSFT"
-        keyword: 名称关键词，如 "茅台"、"银行"、"腾讯"
+        symbols: 代码，逗号分隔。A股 "600519,000001"；港股 "00700"；美股 "AAPL,MSFT"
+        keyword: 名称关键词，如 "茅台"（仅 A 股，需东方财富接口可用）
         market: "A"（A股，默认）| "HK"（港股）| "US"（美股）| "crypto"（加密货币）
         limit: 最大返回条数（默认 10，上限 50）
     """
@@ -963,24 +996,19 @@ async def get_stock_quote(
     limit = max(1, min(limit, 50))
 
     try:
-        # 获取行情数据
+        # 加密货币走独立接口
         if market == "crypto":
             cache_key = "crypto_spot"
-            ttl = 60
-            df = _finance_get_cached(cache_key, ttl=ttl)
+            df = _finance_get_cached(cache_key, ttl=60)
             if df is None:
                 df = await _ak_call(ak.crypto_js_spot)
                 if df is not None:
                     _finance_set_cache(cache_key, df)
             if df is None:
                 return json.dumps({"error": "加密货币行情接口暂不可用"})
-            # 搜索
             if symbols:
                 keys = [s.strip().upper() for s in symbols.split(",") if s.strip()]
-                # 加密货币交易品种是交易对（如 BTCUSD），用 contains 模糊匹配
-                mask = df["交易品种"].str.upper().apply(
-                    lambda x: any(k in x for k in keys)
-                )
+                mask = df["交易品种"].str.upper().apply(lambda x: any(k in x for k in keys))
                 df = df[mask]
             elif keyword:
                 df = df[df["交易品种"].str.contains(keyword, case=False, na=False)]
@@ -989,34 +1017,64 @@ async def get_stock_quote(
             return json.dumps({"stocks": records, "count": len(records), "market": "crypto"},
                               ensure_ascii=False, default=str)
 
-        # 股票市场 (A/HK/US)
-        func_map = {"A": ak.stock_zh_a_spot_em, "HK": ak.stock_hk_spot_em, "US": ak.stock_us_spot_em}
-        func = func_map.get(market)
-        if not func:
+        if market not in ("A", "HK", "US"):
             return json.dumps({"error": f"不支持的市场: {market}，可选: A, HK, US, crypto"})
 
+        # 按代码查询 — 雪球逐只查（可靠）
+        if symbols:
+            codes = [s.strip() for s in symbols.split(",") if s.strip()][:limit]
+            records = []
+            for code in codes:
+                xq_sym = _to_xq_symbol(code, market)
+                data = await _xq_spot(xq_sym)
+                if data:
+                    records.append({
+                        "code": code, "name": str(data.get("名称", "")),
+                        "price": _safe_val(data.get("现价")),
+                        "change_pct": _safe_val(data.get("涨幅")),
+                        "change_amount": _safe_val(data.get("涨跌")),
+                        "volume": _safe_val(data.get("成交量")),
+                        "amount": _safe_val(data.get("成交额")),
+                        "high": _safe_val(data.get("最高")),
+                        "low": _safe_val(data.get("最低")),
+                        "open": _safe_val(data.get("今开")),
+                        "prev_close": _safe_val(data.get("昨收")),
+                        "pe_ratio": _safe_val(data.get("市盈率(动)")),
+                        "pb_ratio": _safe_val(data.get("市净率")),
+                        "market_cap": _safe_val(data.get("资产净值/总市值")),
+                    })
+            return json.dumps({"stocks": records, "count": len(records), "market": market},
+                              ensure_ascii=False, default=str)
+
+        # 关键词搜索 — 尝试东方财富 push2（可能不可用）
+        func_map = {"A": ak.stock_zh_a_spot_em, "HK": ak.stock_hk_spot_em, "US": ak.stock_us_spot_em}
         cache_key = f"stock_spot_{market}"
         df = _finance_get_cached(cache_key, ttl=30)
         if df is None:
-            df = await _ak_call(func, timeout=30)
+            df = await _ak_call(func_map[market], timeout=30)
             if df is not None:
                 _finance_set_cache(cache_key, df)
         if df is None:
-            return json.dumps({"error": f"{market} 股行情接口暂不可用，请稍后重试"})
-
-        if symbols:
-            codes = [s.strip() for s in symbols.split(",") if s.strip()]
-            df = df[df["代码"].isin(codes)]
-        elif keyword:
-            df = df[df["名称"].str.contains(keyword, na=False)]
-
-        df = df.head(limit)
+            return json.dumps({"error": f"关键词搜索需要东方财富接口，当前不可用。请改用 symbols 参数直接查询代码"})
+        df = df[df["名称"].str.contains(keyword, na=False)].head(limit)
         records = _df_to_records(df, _SPOT_FIELDS, _SPOT_STR)
         return json.dumps({"stocks": records, "count": len(records), "market": market},
                           ensure_ascii=False, default=str)
     except Exception as e:
         logger.error("get_stock_quote failed: %s", e, exc_info=True)
         return json.dumps({"error": str(e)})
+
+
+_KLINE_FIELDS_TX = {
+    "date": "date", "open": "open", "close": "close",
+    "high": "high", "low": "low", "volume": "amount",
+}
+
+_KLINE_FIELDS_CSINDEX = {
+    "date": "日期", "open": "开盘", "close": "收盘",
+    "high": "最高", "low": "最低", "volume": "成交量",
+    "amount": "成交金额", "change_pct": "涨跌幅",
+}
 
 
 @mcp.tool(annotations={"readOnlyHint": True})
@@ -1029,8 +1087,10 @@ async def get_kline(
 ) -> str:
     """查询历史 K 线数据（OHLCV）。
 
+    A 股使用腾讯数据源，指数使用中证官网，港股/美股/ETF 使用东方财富（可能不可用）。
+
     Args:
-        symbol: 代码。A股 "600519"；港股 "00700"；美股 "105.MSFT"；指数 "000300"；ETF "510050"
+        symbol: 代码。A股 "600519"；港股 "00700"；美股 "AAPL"；指数 "000300"；ETF "510050"
         market: "A"（A股，默认）| "HK"（港股）| "US"（美股）| "index"（A股指数）| "etf"
         period: "daily"（日K，默认）| "weekly"（周K）| "monthly"（月K）
         count: 返回最近 N 条（默认 30，上限 250）
@@ -1046,23 +1106,39 @@ async def get_kline(
     _period_multiplier = {"daily": 2, "weekly": 10, "monthly": 45}
     days_back = count * _period_multiplier.get(period, 2)
     start = (datetime.now() - timedelta(days=days_back)).strftime("%Y%m%d")
+    end = datetime.now().strftime("%Y%m%d")
 
     try:
-        if market == "index":
-            df = await _ak_call(ak.stock_zh_index_daily_em, symbol=symbol, start_date=start, timeout=20)
-            fields = _KLINE_FIELDS_EN
+        df = None
+        fields = _KLINE_FIELDS_CN
+
+        if market == "A":
+            # 腾讯数据源（不走 push2）
+            tx_sym = f"sh{symbol}" if symbol.startswith("6") else f"sz{symbol}"
+            tx_adjust = {"qfq": "qfq", "hfq": "hfq", "": ""}.get(adjust, "qfq")
+            df = await _ak_call(
+                ak.stock_zh_a_hist_tx, symbol=tx_sym, start_date=start, end_date=end,
+                adjust=tx_adjust, timeout=20,
+            )
+            fields = _KLINE_FIELDS_TX
+        elif market == "index":
+            # 中证官网（不走 push2）
+            df = await _ak_call(
+                ak.stock_zh_index_hist_csindex, symbol=symbol,
+                start_date=start, end_date=end, timeout=20,
+            )
+            if df is not None:
+                fields = _KLINE_FIELDS_CSINDEX
+            else:
+                # fallback: 东方财富
+                df = await _ak_call(ak.stock_zh_index_daily_em, symbol=symbol, start_date=start, timeout=20)
+                fields = _KLINE_FIELDS_EN
         elif market == "HK":
             df = await _ak_call(ak.stock_hk_hist, symbol=symbol, period=period, start_date=start, adjust=adjust, timeout=20)
-            fields = _KLINE_FIELDS_CN
         elif market == "US":
             df = await _ak_call(ak.stock_us_hist, symbol=symbol, period=period, start_date=start, adjust=adjust, timeout=20)
-            fields = _KLINE_FIELDS_CN
         elif market == "etf":
             df = await _ak_call(ak.fund_etf_hist_em, symbol=symbol, period=period, start_date=start, adjust=adjust, timeout=20)
-            fields = _KLINE_FIELDS_CN
-        else:  # A
-            df = await _ak_call(ak.stock_zh_a_hist, symbol=symbol, period=period, start_date=start, adjust=adjust, timeout=20)
-            fields = _KLINE_FIELDS_CN
 
         if df is None:
             return json.dumps({"error": f"未找到 {symbol} ({market}) 的数据，请检查代码和市场类型"})
