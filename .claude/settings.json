@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash scripts/utils/check-doc-drift.sh"
+            "command": "cd $(git rev-parse --show-toplevel) && bash scripts/utils/check-doc-drift.sh"
           }
         ]
       }
