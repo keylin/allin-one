@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.models.content import SourceConfig, ContentItem, ContentStatus, MediaItem
 from app.services.collectors.base import BaseCollector
+from app.services.collectors.utils import coerce_config
 from app.services.media_detection import detect_media_for_content
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,7 @@ class PodcastCollector(BaseCollector):
     """Apple Podcasts 采集器"""
 
     async def collect(self, source: SourceConfig, db: Session) -> list[ContentItem]:
-        config = source.config_json or {}
+        config = coerce_config(source.config_json)
 
         feed_url = config.get("feed_url")
         if not feed_url:

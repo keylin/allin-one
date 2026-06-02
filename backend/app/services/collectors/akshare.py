@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.models.content import SourceConfig, ContentItem
 from app.models.finance import FinanceDataPoint
 from app.services.collectors.base import BaseCollector
+from app.services.collectors.utils import coerce_config
 from app.services.collectors.akshare_presets import get_category_for_indicator
 
 logger = logging.getLogger(__name__)
@@ -124,7 +125,7 @@ class AkShareCollector(BaseCollector):
             logger.error("[AkShareCollector] akshare not installed, run: pip install akshare")
             raise ValueError("akshare library not installed")
 
-        config = source.config_json or {}
+        config = coerce_config(source.config_json)
         indicator = config.get("indicator")
         if not indicator:
             raise ValueError(f"No indicator in config for source '{source.name}'")

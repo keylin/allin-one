@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.content import SourceConfig, ContentItem, ContentStatus
 from app.services.collectors.base import BaseCollector
+from app.services.collectors.utils import coerce_config
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ class FileUploadCollector(BaseCollector):
     """
 
     async def collect(self, source: SourceConfig, db: Session) -> list[ContentItem]:
-        config = source.config_json or {}
+        config = coerce_config(source.config_json)
 
         upload_dir = config.get("upload_dir") or os.path.join(settings.DATA_DIR, "uploads", source.id)
         extensions = config.get("extensions")

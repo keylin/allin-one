@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.models.content import SourceConfig, ContentItem, ContentStatus
 from app.services.collectors.base import BaseCollector
+from app.services.collectors.utils import coerce_config
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ class GenericAccountCollector(BaseCollector):
     """
 
     async def collect(self, source: SourceConfig, db: Session) -> list[ContentItem]:
-        config = source.config_json or {}
+        config = coerce_config(source.config_json)
         api_url = config.get("api_url") or source.url
         if not api_url:
             raise ValueError(f"No api_url in config for source '{source.name}'")

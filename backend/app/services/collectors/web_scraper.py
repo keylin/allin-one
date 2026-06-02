@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.content import SourceConfig, ContentItem, ContentStatus
 from app.services.collectors.base import BaseCollector
+from app.services.collectors.utils import coerce_config
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,7 @@ class ScraperCollector(BaseCollector):
         if not source.url:
             raise ValueError(f"No URL configured for source '{source.name}'")
 
-        config = source.config_json or {}
+        config = coerce_config(source.config_json)
         item_selector = config.get("item_selector")
         if not item_selector:
             raise ValueError(f"No item_selector in config for source '{source.name}'")
