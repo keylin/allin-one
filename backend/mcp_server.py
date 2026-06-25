@@ -983,14 +983,51 @@ _SNAPSHOT_INDICES = [
 ]
 
 
-async def _xq_spot(symbol: str) -> dict | None:
-    """通过雪球查询单只标的行情"""
-    import akshare as ak
-    df = await _ak_call(ak.stock_individual_spot_xq, symbol=symbol, timeout=10, retries=1)
-    if df is None:
+# 雪球动态 token：akshare 内置 xq_a_token 已过期（接口返回 error_code 400016），
+# 改为运行时访问 xueqiu.com/hq 获取新鲜 token 并缓存
+_xq_token_cache: dict[str, tuple[float, str]] = {}
+_XQ_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+)
+
+
+def _fetch_xq_token() -> str | None:
+    """访问雪球行情页获取新鲜 xq_a_token（首页 / 不再下发，须用 /hq）"""
+    import requests
+    try:
+        s = requests.Session()
+        s.headers.update({"User-Agent": _XQ_UA})
+        s.get("https://xueqiu.com/hq", timeout=10)
+        return s.cookies.get("xq_a_token")
+    except Exception as e:
+        logger.warning("fetch xueqiu token failed: %s", e)
         return None
-    data = dict(zip(df["item"], df["value"]))
-    return data
+
+
+async def _xq_get_token(force: bool = False, ttl: int = 1800) -> str | None:
+    """带缓存的雪球 token 获取（默认 30 分钟）；获取失败时回退旧 token"""
+    cached = _xq_token_cache.get("token")
+    if not force and cached and time.time() - cached[0] < ttl:
+        return cached[1]
+    token = await asyncio.to_thread(_fetch_xq_token)
+    if token:
+        _xq_token_cache["token"] = (time.time(), token)
+        return token
+    return cached[1] if cached else None
+
+
+async def _xq_spot(symbol: str) -> dict | None:
+    """通过雪球查询单只标的行情（token 失效时刷新一次重试）"""
+    import akshare as ak
+    for attempt in range(2):
+        token = await _xq_get_token(force=(attempt == 1))
+        df = await _ak_call(
+            ak.stock_individual_spot_xq, symbol=symbol, token=token, timeout=10, retries=1
+        )
+        if df is not None:
+            return dict(zip(df["item"], df["value"]))
+    return None
 
 
 @mcp.tool(annotations={"readOnlyHint": True})
