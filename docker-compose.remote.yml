@@ -5,12 +5,20 @@ x-proxy-env: &proxy-env
   HTTPS_PROXY: ${PROXY_URL:-}
   NO_PROXY: localhost,127.0.0.1,rsshub,browserless,postgres
 
+# 容器上游 DNS（覆盖 WSL2 失效的 10.255.255.254 转发器）
+# user-defined bridge 下 /etc/resolv.conf 恒为 127.0.0.11，此处仅改外部查询的上游，
+# 不影响 postgres/rsshub/browserless 等内部服务名解析
+x-dns: &dns
+  - 223.5.5.5      # 阿里 DNS（国内直连，已验证可解析）
+  - 119.29.29.29   # DNSPod 备用
+
 services:
   # PostgreSQL - 主数据库
   postgres:
     image: postgres:17-alpine
     container_name: allin-postgres
     restart: unless-stopped
+    dns: *dns
     command: postgres -c timezone=UTC
     environment:
       POSTGRES_USER: postgres
@@ -32,6 +40,7 @@ services:
     image: diygod/rsshub:latest
     container_name: allin-rsshub
     restart: unless-stopped
+    dns: *dns
     ports:
       - "1200:1200"
     env_file:
@@ -53,6 +62,7 @@ services:
     image: browserless/chrome:latest
     container_name: allin-browserless
     restart: unless-stopped
+    dns: *dns
     deploy:
       resources:
         limits:
@@ -79,6 +89,7 @@ services:
     image: allin-one:local
     container_name: allin-one
     restart: unless-stopped
+    dns: *dns
     ports:
       - "8000:8000"
     volumes:
@@ -126,6 +137,7 @@ services:
     image: allin-one:local
     container_name: allin-worker-pipeline
     restart: unless-stopped
+    dns: *dns
     deploy:
       resources:
         limits:
@@ -168,6 +180,7 @@ services:
     image: allin-one:local
     container_name: allin-mcp
     restart: unless-stopped
+    dns: *dns
     command: ["sh", "-c", "pip install --quiet 'akshare>=1.18.52' 2>/dev/null; exec python mcp_server.py"]
     ports:
       - "8001:8001"
@@ -197,6 +210,7 @@ services:
     image: allin-one:local
     container_name: allin-worker-scheduled
     restart: unless-stopped
+    dns: *dns
     deploy:
       resources:
         limits:
