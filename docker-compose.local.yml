@@ -44,7 +44,7 @@ services:
       NODE_ENV: production
       CACHE_TYPE: memory
       CACHE_EXPIRE: 900
-      PUPPETEER_WS_ENDPOINT: ws://browserless:3000
+      PUPPETEER_WS_ENDPOINT: ws://browserless:3000?token=${BROWSERLESS_TOKEN}
       PROXY_URI: ${PROXY_URL:-}
     depends_on:
       browserless:
@@ -59,7 +59,7 @@ services:
       - allin-dev
 
   browserless:
-    image: docker.m.daocloud.io/browserless/chrome:latest
+    image: ghcr.io/browserless/chromium:latest  # v2（v1 browserless/chrome 已停更）
     container_name: allin-dev-browserless
     restart: unless-stopped
     deploy:
@@ -70,15 +70,13 @@ services:
       - "3001:3000"
     environment:
       TZ: Asia/Shanghai
-      MAX_CONCURRENT_SESSIONS: 3
-      CONNECTION_TIMEOUT: 30000
-      MAX_QUEUE_LENGTH: 5
-      PREBOOT_CHROME: 'false'
-      DEFAULT_BLOCK_ADS: 'true'
-      FUNCTION_ENABLE_INCOGNITO_MODE: 'true'
-      EXIT_ON_HEALTH_FAILURE: 'true'
+      TOKEN: ${BROWSERLESS_TOKEN}      # v2 强制鉴权，所有连接需带 ?token=
+      CONCURRENT: 3                    # v1: MAX_CONCURRENT_SESSIONS
+      TIMEOUT: 30000                   # v1: CONNECTION_TIMEOUT
+      QUEUED: 5                        # v1: MAX_QUEUE_LENGTH
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/"]
+      # $$TOKEN 由容器内 shell 展开（双 $ 防止 compose 提前插值）
+      test: ["CMD-SHELL", "curl -fsS \"http://localhost:3000/pressure?token=$$TOKEN\" || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -114,6 +112,7 @@ services:
       # 覆盖 .env 中的地址，使用 Docker 内部网络
       RSSHUB_URL: http://rsshub:1200
       BROWSERLESS_URL: http://browserless:3000
+      BROWSERLESS_TOKEN: ${BROWSERLESS_TOKEN}
       # macOS Docker bind mount 不传递 inotify 事件，需要轮询
       WATCHFILES_FORCE_POLLING: "true"
       <<: *proxy-env
@@ -172,6 +171,7 @@ services:
       DATABASE_URL: postgresql://allinone:allinone@postgres:5432/allinone
       RSSHUB_URL: http://rsshub:1200
       BROWSERLESS_URL: http://browserless:3000
+      BROWSERLESS_TOKEN: ${BROWSERLESS_TOKEN}
       WATCHFILES_FORCE_POLLING: "true"
       <<: *proxy-env
     depends_on:
@@ -205,6 +205,7 @@ services:
       DATABASE_URL: postgresql://allinone:allinone@postgres:5432/allinone
       RSSHUB_URL: http://rsshub:1200
       BROWSERLESS_URL: http://browserless:3000
+      BROWSERLESS_TOKEN: ${BROWSERLESS_TOKEN}
       WATCHFILES_FORCE_POLLING: "true"
       <<: *proxy-env
     depends_on:

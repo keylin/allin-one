@@ -127,8 +127,11 @@ async def health_check():
 
     # Browserless
     try:
+        from app.core.config import browserless_params
         async with httpx.AsyncClient(timeout=5) as client:
-            resp = await client.get(f"{settings.BROWSERLESS_URL}/pressure")
+            resp = await client.get(
+                f"{settings.BROWSERLESS_URL}/pressure", params=browserless_params()
+            )
             checks["browserless"] = "ok" if resp.status_code < 500 else f"status {resp.status_code}"
     except Exception as e:
         checks["browserless"] = f"unreachable: {type(e).__name__}"

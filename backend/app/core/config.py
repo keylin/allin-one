@@ -15,7 +15,10 @@ class Settings(BaseSettings):
     # External Services
     RSSHUB_URL: str = "http://rsshub:1200"
     BROWSERLESS_URL: str = "http://browserless:3000"
-    CRAWL4AI_CDP_URL: str = "ws://browserless:3000/chromium/playwright"
+    # crawl4ai 用 connect_over_cdp，需 v2 的 CDP 端点 /chromium（非 Playwright 协议端点 /chromium/playwright）
+    CRAWL4AI_CDP_URL: str = "ws://browserless:3000/chromium"
+    # Browserless v2 鉴权 token；留空则不带 token（兼容旧 v1 / 本地无鉴权）
+    BROWSERLESS_TOKEN: str = ""
 
     # Security
     API_KEY: str = ""
@@ -42,6 +45,19 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def browserless_params() -> dict | None:
+    """Browserless v2 REST 调用的鉴权查询参；token 为空时返回 None（不带鉴权）"""
+    return {"token": settings.BROWSERLESS_TOKEN} if settings.BROWSERLESS_TOKEN else None
+
+
+def crawl4ai_cdp_url() -> str:
+    """返回带 token 的 Crawl4AI CDP WebSocket 地址；token 为空时返回原始地址"""
+    url = settings.CRAWL4AI_CDP_URL
+    if settings.BROWSERLESS_TOKEN:
+        url += ("&" if "?" in url else "?") + f"token={settings.BROWSERLESS_TOKEN}"
+    return url
 
 
 @dataclass

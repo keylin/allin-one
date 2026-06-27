@@ -104,13 +104,15 @@ class ScraperCollector(BaseCollector):
 
     async def _fetch_with_browserless(self, url: str, browserless_url: str) -> str:
         """使用 Browserless 渲染页面"""
+        from app.core.config import browserless_params
+
         endpoint = f"{browserless_url.rstrip('/')}/content"
 
         async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
                 endpoint,
-                json={"url": url},
-                params={"waitFor": "networkidle0"},
+                json={"url": url, "gotoOptions": {"waitUntil": "networkidle0"}},
+                params=browserless_params(),
             )
             resp.raise_for_status()
             return resp.text

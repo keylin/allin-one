@@ -155,14 +155,15 @@ def _compare_quality(enriched_text: str, original_text: str) -> dict:
 def _fetch_with_browserless(url: str, browserless_url: str, timeout: int = 60) -> str:
     """使用 Browserless 渲染 JS 页面，返回原始 HTML（由调用方统一提取）"""
     import httpx
+    from app.core.config import browserless_params
 
     endpoint = f"{browserless_url.rstrip('/')}/content"
 
     with httpx.Client(timeout=timeout) as client:
         resp = client.post(
             endpoint,
-            json={"url": url},
-            params={"waitFor": "networkidle0"},
+            json={"url": url, "gotoOptions": {"waitUntil": "networkidle0"}},
+            params=browserless_params(),
         )
         resp.raise_for_status()
         return resp.text
@@ -176,9 +177,9 @@ async def _extract_with_crawl4ai(url: str) -> str | None:
         logger.warning("[crawl4ai] crawl4ai not installed, skipping")
         return None
 
-    from app.core.config import settings
+    from app.core.config import crawl4ai_cdp_url
 
-    browser_config = BrowserConfig(cdp_url=settings.CRAWL4AI_CDP_URL)
+    browser_config = BrowserConfig(cdp_url=crawl4ai_cdp_url())
     run_config = CrawlerRunConfig(
         word_count_threshold=100,
     )
@@ -258,15 +259,15 @@ async def fetch_l3_browserless(url: str) -> tuple[str | None, str | None]:
     """L3: async httpx POST to Browserless -> trafilatura -> (markdown, error)"""
     import httpx
     from bs4 import BeautifulSoup
-    from app.core.config import settings
+    from app.core.config import settings, browserless_params
 
     try:
         endpoint = f"{settings.BROWSERLESS_URL.rstrip('/')}/content"
         async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(
                 endpoint,
-                json={"url": url},
-                params={"waitFor": "networkidle0"},
+                json={"url": url, "gotoOptions": {"waitUntil": "networkidle0"}},
+                params=browserless_params(),
             )
             resp.raise_for_status()
             html = resp.text

@@ -1057,14 +1057,15 @@ services:
   rsshub:
     image: diygod/rsshub:latest
     environment:
-      PUPPETEER_WS_ENDPOINT: ws://browserless:3000
+      PUPPETEER_WS_ENDPOINT: ws://browserless:3000?token=${BROWSERLESS_TOKEN}
     depends_on:
       - browserless
 
-  browserless:
-    image: browserless/chrome:latest
+  browserless:                               # v2（v1 browserless/chrome 已停更）
+    image: ghcr.io/browserless/chromium:latest
     environment:
-      MAX_CONCURRENT_SESSIONS: 3
+      TOKEN: ${BROWSERLESS_TOKEN}            # v2 强制鉴权，连接需带 ?token=
+      CONCURRENT: 3
 
   allin-one:
     build:
@@ -1078,6 +1079,7 @@ services:
       DATABASE_URL: postgresql://allinone:allinone@postgres:5432/allinone
       RSSHUB_URL: http://rsshub:1200
       BROWSERLESS_URL: http://browserless:3000
+      BROWSERLESS_TOKEN: ${BROWSERLESS_TOKEN}
     depends_on:
       postgres:
         condition: service_healthy
@@ -1093,6 +1095,7 @@ services:
       DATABASE_URL: postgresql://allinone:allinone@postgres:5432/allinone
       RSSHUB_URL: http://rsshub:1200
       BROWSERLESS_URL: http://browserless:3000
+      BROWSERLESS_TOKEN: ${BROWSERLESS_TOKEN}
     depends_on:
       postgres:
         condition: service_healthy
@@ -1108,6 +1111,7 @@ services:
       DATABASE_URL: postgresql://allinone:allinone@postgres:5432/allinone
       RSSHUB_URL: http://rsshub:1200
       BROWSERLESS_URL: http://browserless:3000
+      BROWSERLESS_TOKEN: ${BROWSERLESS_TOKEN}
     depends_on:
       postgres:
         condition: service_healthy
