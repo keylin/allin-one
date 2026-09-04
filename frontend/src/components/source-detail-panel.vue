@@ -2,6 +2,7 @@
 import { ref, watch, computed } from 'vue'
 import dayjs from 'dayjs'
 import { getCollectionHistory } from '@/api/sources'
+import { asConfigObject } from '@/utils/config'
 
 const props = defineProps({
   source: { type: Object, default: null },
@@ -90,20 +91,12 @@ function formatInterval(seconds) {
 
 const displayUrl = computed(() => {
   if (props.source?.source_type === 'rss.hub' && props.source?.config_json) {
-    try {
-      const config = JSON.parse(props.source.config_json)
-      return config.rsshub_route ? `RSSHub: ${config.rsshub_route}` : '-'
-    } catch {
-      return '-'
-    }
+    const route = asConfigObject(props.source.config_json).rsshub_route
+    return route ? `RSSHub: ${route}` : '-'
   }
   if (props.source?.source_type === 'podcast.apple' && props.source?.config_json) {
-    try {
-      const config = JSON.parse(props.source.config_json)
-      return config.podcast_name || config.apple_podcast_url || '-'
-    } catch {
-      return '-'
-    }
+    const config = asConfigObject(props.source.config_json)
+    return config.podcast_name || config.apple_podcast_url || '-'
   }
   return props.source?.url || '-'
 })

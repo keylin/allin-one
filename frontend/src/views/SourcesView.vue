@@ -10,6 +10,7 @@ import ContentSubmitModal from '@/components/content-submit-modal.vue'
 import SourceDetailPanel from '@/components/source-detail-panel.vue'
 import DetailDrawer from '@/components/detail-drawer.vue'
 import { importOPML, exportOPML, importFull, exportFull } from '@/api/sources'
+import { asConfigObject } from '@/utils/config'
 
 const route = useRoute()
 const router = useRouter()
@@ -91,20 +92,11 @@ const totalPages = computed(() => Math.max(1, Math.ceil(store.total / store.page
 function getDisplayUrl(source) {
   if (USER_SOURCE_TYPES.has(source.source_type)) return '-'
   if (source.source_type === 'rss.hub' && source.config_json) {
-    try {
-      const config = JSON.parse(source.config_json)
-      return config.rsshub_route || '-'
-    } catch {
-      return '-'
-    }
+    return asConfigObject(source.config_json).rsshub_route || '-'
   }
   if (source.source_type === 'podcast.apple' && source.config_json) {
-    try {
-      const config = JSON.parse(source.config_json)
-      return config.podcast_name || config.apple_podcast_url || '-'
-    } catch {
-      return '-'
-    }
+    const config = asConfigObject(source.config_json)
+    return config.podcast_name || config.apple_podcast_url || '-'
   }
   return source.url || '-'
 }
@@ -243,14 +235,22 @@ async function handleToggleActive(source) {
   togglingId.value = source.id
   try {
     const newState = !source.is_active
-    const res = await store.updateSource(source.id, { is_active: newState })
+    const payload = { is_active: newState }
+    // 启用时同步恢复定时采集，避免出现「已启用但调度禁用」的死状态（用户类型源无调度）
+    const restoreSchedule = newState && !source.schedule_enabled && !isUserSource(source)
+    if (restoreSchedule) payload.schedule_enabled = true
+    const res = await store.updateSource(source.id, payload)
     if (res.code === 0) {
-      toast.success(newState ? '已启用' : '已停用', { title: source.name })
+      toast.success(newState ? (restoreSchedule ? '已启用，定时采集已恢复' : '已启用') : '已停用', { title: source.name })
       fetchWithFilters()
       if (selectedSource.value?.id === source.id) {
-        selectedSource.value = { ...selectedSource.value, is_active: newState }
+        selectedSource.value = { ...selectedSource.value, ...payload }
       }
+    } else {
+      toast.error(res.message || '操作失败', { title: source.name })
     }
+  } catch {
+    toast.error('操作失败，请重试', { title: source.name })
   } finally {
     togglingId.value = null
   }

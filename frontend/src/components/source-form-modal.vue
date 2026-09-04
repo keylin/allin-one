@@ -1,7 +1,8 @@
 <script setup>
-import { ref, computed, watch, toRef, onMounted } from 'vue'
+import { ref, computed, watch, toRef, onMounted, nextTick } from 'vue'
 import { listTemplates } from '@/api/pipeline-templates'
 import { useScrollLock } from '@/composables/useScrollLock'
+import { asConfigObject } from '@/utils/config'
 import FinancePresetPicker from '@/components/finance-preset-picker.vue'
 import FinanceAlertConfig from '@/components/finance-alert-config.vue'
 
@@ -89,11 +90,10 @@ function getDefaultConfig(sourceType) {
   }
 }
 
-function deserializeConfig(jsonStr, sourceType) {
+function deserializeConfig(cfg, sourceType) {
   const defaults = getDefaultConfig(sourceType)
   try {
-    const parsed = JSON.parse(jsonStr || '{}')
-    const merged = { ...defaults, ...parsed }
+    const merged = { ...defaults, ...asConfigObject(cfg) }
     // 数组 → 逗号分隔字符串 (用于表单显示)
     if (Array.isArray(merged.id_fields)) {
       merged.id_fields = merged.id_fields.join(', ')
@@ -155,7 +155,8 @@ function serializeConfig() {
       threshold: Number(a.threshold),
     }))
   }
-  return Object.keys(cfg).length ? JSON.stringify(cfg) : null
+  // config_json 为 JSONB，直接提交对象
+  return Object.keys(cfg).length ? cfg : null
 }
 
 // 有结构化配置的类型
@@ -164,9 +165,13 @@ const hasStructuredConfig = computed(() => ['rss.hub', 'rss.standard', 'podcast.
 // 无额外配置的类型
 const noConfigTypes = ['file.upload', 'user.note', 'system.notification']
 
+// 编辑加载期间抑制 source_type watcher，避免其把已反序列化的配置重置为默认值
+let loadingSource = false
+
 watch(() => props.visible, async (val) => {
   if (val) {
     if (props.source) {
+      loadingSource = true
       form.value = {
         ...getDefaultForm(), ...props.source,
         pipeline_template_id: props.source.pipeline_template_id || '',
@@ -177,11 +182,9 @@ watch(() => props.visible, async (val) => {
       if (props.source.source_type === 'api.akshare' && configForm.value.indicator) {
         aksharePresetSelected.value = true
         // 恢复 alerts
-        try {
-          const parsed = JSON.parse(props.source.config_json || '{}')
-          akshareAlerts.value = parsed.alerts || []
-        } catch { akshareAlerts.value = [] }
+        akshareAlerts.value = asConfigObject(props.source.config_json).alerts || []
       }
+      nextTick(() => { loadingSource = false })
     } else {
       form.value = getDefaultForm()
       configForm.value = getDefaultConfig(form.value.source_type)
@@ -197,6 +200,7 @@ watch(() => props.visible, async (val) => {
 })
 
 watch(() => form.value.source_type, (newType) => {
+  if (loadingSource) return
   configForm.value = getDefaultConfig(newType)
   // 清理 akshare 状态
   aksharePresetSelected.value = false
