@@ -45,6 +45,9 @@ cryptography>=42.0.0
 
 # MCP Server
 fastmcp>=2.0.0
+# mcp_server.py 使用 mcp v1 内置 FastMCP（mcp.server.fastmcp）；mcp 2.x 已改名 MCPServer，
+# 迁移前锁定 v1（旧镜像验证过的组合: mcp 1.29.1 + fastmcp 3.4.7）
+mcp>=1.9,<2
 
 # Utilities
 python-multipart>=0.0.6
