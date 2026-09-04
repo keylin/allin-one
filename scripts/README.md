@@ -13,7 +13,8 @@ scripts/
 │   ├── rehash_title_dedup.py    # 重算 ContentItem title_hash
 │   └── sync-data.sh             # 本地到远程数据同步
 ├── verify/       # Validation and verification scripts
-│   └── timezone/ # Time zone related verification scripts
+│   ├── timezone/       # Time zone related verification scripts
+│   └── financial_data/ # 蚂蚁 financial-data API 探针 + 新旧数据源对拍
 ├── utils/        # Reusable utility scripts
 │   └── logs.sh                  # 远程服务器日志查看工具
 ├── apple-books-sync.py          # Apple Books 同步脚本
@@ -45,6 +46,8 @@ Temporary scripts for validating specific features or bug fixes.
 - **Purpose**: One-time or regression testing
 - **Lifecycle**: May be deleted after validation or kept for regression tests
 - **Example**: `verify/timezone/verify_timezone.py` - validates timezone boundary calculations
+- **Example**: `verify/financial_data/probe_api.py` - Phase 0 探针，验证蚂蚁 financial-data API 的 symbol 格式/字段单位/宏观 indicator_code，切换主数据源前必须先跑通
+- **Example**: `verify/financial_data/verify_parity.py` - 新旧金融数据源（蚂蚁 vs akshare/雪球）数值对拍，宏观指标偏差 <1% 才允许固化进 seed
 
 ### Utility Scripts (`utils/`)
 Reusable helper scripts for development or maintenance.
@@ -74,6 +77,10 @@ For purely temporary files (drafts, test data, one-off experiments), use the `.t
 ```bash
 # Run timezone verification
 python3 scripts/verify/timezone/verify_timezone.py
+
+# Run financial data source probe/parity checks (需 FINANCIAL_DATA_API_KEY)
+python3 scripts/verify/financial_data/probe_api.py
+python3 scripts/verify/financial_data/verify_parity.py
 
 # Run database migration (from project root)
 python3 scripts/migration/migrate_sqlite_to_pg.py

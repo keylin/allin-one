@@ -521,8 +521,8 @@ async def cleanup_records():
             f"Protected records per source: {MIN_KEEP_PER_SOURCE}"
         )
 
-        # 🆕 大量删除警告
-        if total_coll_deleted > 100:
+        # 大量删除警告（正常每日清理量约 850 条，阈值需明显高于日常水位）
+        if total_coll_deleted > 5000:
             logger.warning(
                 f"Large cleanup detected: {total_coll_deleted} collection records deleted. "
                 f"Please check retention settings."

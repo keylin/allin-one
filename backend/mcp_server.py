@@ -40,6 +40,12 @@ from app.models.content import (
     get_source_category,
 )
 from app.models.pipeline import PipelineTemplate
+from app.services.financial_data_client import (
+    FinancialDataClient,
+    get_financial_client,
+    tool_enabled,
+)
+from app.services.financial_symbols import a_share_suffix, from_fd_symbol, to_fd_symbol
 from app.services.source_cleanup import cascade_delete_source
 from app.services.source_service import (
     validate_source_config,
@@ -173,11 +179,19 @@ def list_content(
     keyword: str = "",
     status: str = "",
     favorites_only: bool = False,
+    unread_only: bool = False,
     limit: int = 20,
+    offset: int = 0,
 ) -> str:
     """Search and list content items from your information feed.
     Supports filtering by date range, source, keyword, and favorites.
     Returns summaries — use get_content_detail for full text.
+
+    Pagination: results are ordered by collected_at desc. Use offset+limit to
+    page through large result sets (total_count and has_more are returned).
+    For incremental consumption, prefer unread_only=True + mark_read() over
+    offset paging — marking read shrinks the unread set, so mixing offset with
+    mark_read causes the page window to drift. Do not combine the two.
 
     Args:
         time_range: Shortcut "1d/3d/7d/30d", overrides start/end_date.
@@ -187,9 +201,13 @@ def list_content(
         keyword: Search in title.
         status: Filter by content status ("analyzed", "ready", "pending", "processing", "failed"). Default: show analyzed + ready.
         favorites_only: Only return favorited content.
+        unread_only: Only return unread items (view_count == 0). Same read state
+            as the web UI. Combine with mark_read() to walk the feed exactly once.
         limit: Number of items to return (default 20, max 50).
+        offset: Number of items to skip for pagination (default 0).
     """
     limit = max(1, min(limit, 50))
+    offset = max(0, offset)
 
     try:
         with get_db() as db:
@@ -239,8 +257,19 @@ def list_content(
             if favorites_only:
                 query = query.filter(ContentItem.is_favorited == True)  # noqa: E712
 
+            # Unread (view_count == 0 or NULL) — same read state as the web UI
+            if unread_only:
+                query = query.filter(
+                    (ContentItem.view_count == 0) | (ContentItem.view_count.is_(None))
+                )
+
             total_count = query.count()
-            items = query.order_by(ContentItem.collected_at.desc()).limit(limit).all()
+            items = (
+                query.order_by(ContentItem.collected_at.desc())
+                .offset(offset)
+                .limit(limit)
+                .all()
+            )
 
             result_items = []
             for item in items:
@@ -255,10 +284,17 @@ def list_content(
                     "sentiment": analysis["sentiment"],
                     "url": item.url,
                     "is_favorited": item.is_favorited,
+                    "is_read": bool(item.view_count and item.view_count > 0),
                 })
 
             return json.dumps(
-                {"items": result_items, "total_count": total_count},
+                {
+                    "items": result_items,
+                    "total_count": total_count,
+                    "offset": offset,
+                    "returned": len(result_items),
+                    "has_more": offset + len(result_items) < total_count,
+                },
                 ensure_ascii=False,
                 default=str,
             )
@@ -437,6 +473,55 @@ def toggle_favorite(
             return json.dumps(result, ensure_ascii=False)
     except Exception as e:
         logger.error("toggle_favorite failed: %s", e, exc_info=True)
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True})
+def mark_read(content_ids: list[str]) -> str:
+    """Mark content items as read. Batch, idempotent.
+
+    Sets view_count=1 and last_viewed_at for items currently unread
+    (view_count == 0 or NULL); items already read are left unchanged. This is the
+    same read state used by list_content(unread_only=True) and the web UI's
+    read/unread filter — so after marking, the items drop out of future unread
+    queries. Intended flow: list_content(unread_only=True) → analyze → mark_read
+    the batch → repeat until empty, walking the feed exactly once.
+
+    Args:
+        content_ids: List of content item IDs to mark as read.
+    """
+    if not content_ids:
+        return json.dumps({"error": "content_ids is empty"})
+
+    try:
+        with get_db() as db:
+            items = db.query(ContentItem).filter(ContentItem.id.in_(content_ids)).all()
+            found_ids = {item.id for item in items}
+
+            now = utcnow()
+            marked_ids = []
+            already_read_ids = []
+            for item in items:
+                if not item.view_count:  # 0 or None → unread
+                    item.view_count = 1
+                    item.last_viewed_at = now
+                    marked_ids.append(item.id)
+                else:
+                    already_read_ids.append(item.id)
+
+            db.commit()
+
+            result = {
+                "marked_read_count": len(marked_ids),
+                "marked_read_ids": marked_ids,
+                "already_read_ids": already_read_ids,
+            }
+            not_found = [cid for cid in content_ids if cid not in found_ids]
+            if not_found:
+                result["not_found_ids"] = not_found
+            return json.dumps(result, ensure_ascii=False)
+    except Exception as e:
+        logger.error("mark_read failed: %s", e, exc_info=True)
         return json.dumps({"error": str(e)})
 
 
@@ -889,6 +974,17 @@ _MACRO_MAP: dict[str, tuple] = {
     ),
 }
 
+# 蚂蚁宏观指标 seed（探针经 macro_recall + macro_query 数值验证，口径与 _MACRO_MAP 一致）
+# (indicator_code, 每条数据覆盖天数——用于按 count 推算 start_date)
+# cpi/shibor 不在此表：蚂蚁无全国 CPI 月率口径、无 Shibor 定盘利率，无限期保持 akshare
+_MACRO_FD_SEED: dict[str, tuple[str, int, str]] = {
+    # (indicator_code, 每条数据覆盖天数, 精确口径名)
+    "ppi": ("110002644", 31, "工业生产者出厂价格指数（上年同月=100，月度）"),
+    "pmi": ("110166523", 31, "制造业采购经理指数（季调，月度）"),
+    "gdp": ("110000001", 92, "GDP 现价累计值（季度，亿元）"),
+    "m2":  ("110111410", 31, "M2 期末值（月度，亿元）"),
+}
+
 
 # --- 加密货币 CoinGecko ---
 
@@ -968,7 +1064,8 @@ async def _crypto_quote(symbols: str, keyword: str, limit: int) -> str:
 
 
 _SNAPSHOT_INDICES = [
-    # (雪球 symbol, 代码, 市场)
+    # (雪球 symbol, 代码, 市场, 名称)；蚂蚁 symbol 由 to_fd_symbol(code, "index") 派生，
+    # 唯一数据源是 financial_symbols.INDEX_FD_SYMBOLS
     ("SH000001", "000001", "A", "上证指数"),
     ("SZ399001", "399001", "A", "深证成指"),
     ("SZ399006", "399006", "A", "创业板指"),
@@ -981,6 +1078,51 @@ _SNAPSHOT_INDICES = [
     (".DJI", "DJI", "US", "道琼斯"),
     (".IXIC", "IXIC", "US", "纳斯达克"),
 ]
+
+
+def _get_fd_client(tool: str) -> "FinancialDataClient | None":
+    """按工具级开关获取主源 client；关闭/未配置/冷却中返回 None（调用方走 legacy）"""
+    return get_financial_client() if tool_enabled(tool) else None
+
+
+def _fd_price(row: dict) -> float | str | None:
+    """行情价格 coalesce：盘中 close 可能为 None（港股实测）"""
+    for key in ("last", "close", "previous_close"):
+        val = row.get(key)
+        if val is not None:
+            return _safe_val(val)
+    return None
+
+
+def _fd_spot_record(code: str, row: dict) -> dict:
+    """蚂蚁 basic(+derived) 快照行 → 既有行情契约字段"""
+    rec = {
+        "code": code, "name": str(row.get("name") or ""),
+        "price": _fd_price(row),
+        "change_pct": _safe_val(row.get("pct_chg")),
+        "change_amount": _safe_val(row.get("price_change")),
+        "volume": _safe_val(row.get("volume")),
+        "amount": _safe_val(row.get("amount")),
+        "high": _safe_val(row.get("high")),
+        "low": _safe_val(row.get("low")),
+        "open": _safe_val(row.get("open")),
+        "prev_close": _safe_val(row.get("previous_close")),
+    }
+    if "pe_ttm" in row:
+        turnover = _safe_val(row.get("turnover_rate"))
+        rec.update({
+            "pe_ratio": _safe_val(row.get("pe_ttm")),
+            "pb_ratio": _safe_val(row.get("pb")),
+            "market_cap": _safe_val(row.get("total_mv")),
+            # 蚂蚁换手率是小数（0.0036=0.36%），对齐既有百分比口径
+            "turnover_rate": round(turnover * 100, 4) if turnover is not None else None,
+            "pe_lyr": _safe_val(row.get("pe_lyr")),
+            "pe_fwd": _safe_val(row.get("pe_fwd")),
+        })
+    # 廉价合理性断言：拦截静默单位错位
+    if rec["change_pct"] is not None and abs(rec["change_pct"]) > 30:
+        logger.warning("financial_data suspicious pct_chg=%s for %s", rec["change_pct"], code)
+    return rec
 
 
 # 雪球动态 token：akshare 内置 xq_a_token 已过期（接口返回 error_code 400016），
@@ -1036,7 +1178,8 @@ async def get_market_snapshot() -> str:
 
     返回 A 股主要指数（上证、深证、创业板、沪深300、中证500、科创50）、
     港股指数（恒生、国企、恒生科技）和美股指数（道琼斯、纳斯达克）。
-    非交易时段返回最近收盘数据。数据来源：雪球。
+    非交易时段返回最近收盘数据。主数据源：蚂蚁 financial-data，降级：雪球。
+    响应含 data_source 字段：financial_data=主源 | legacy=降级链 | mixed=批量中部分标的降级。
     """
     cache_key = "market_snapshot"
     cached = _finance_get_cached(cache_key, ttl=30)
@@ -1044,9 +1187,31 @@ async def get_market_snapshot() -> str:
         return cached  # 缓存的是 JSON 字符串
 
     results: list[dict] = []
+    fd_hit = legacy_hit = 0
+
+    # 主路径：一次批量拿全部 11 个指数（任何异常都降级，不外抛破坏 JSON 契约）
+    fd = _get_fd_client("snapshot")
+    snap: dict[str, dict] = {}
+    if fd is not None:
+        try:
+            snap = await fd.basic_snapshot(
+                [to_fd_symbol(code, "index") for _, code, _, _ in _SNAPSHOT_INDICES])
+        except Exception as e:
+            logger.warning("get_market_snapshot fallback to legacy: %s", e)
+
     for xq_sym, code, mkt, name in _SNAPSHOT_INDICES:
+        row = snap.get(to_fd_symbol(code, "index") or "")
+        if row is not None:
+            rec = _fd_spot_record(code, row)
+            rec["market"] = mkt
+            rec["name"] = rec["name"] or name
+            results.append(rec)
+            fd_hit += 1
+            continue
+        # 逐条降级：主源缺哪个指数补哪个
         data = await _xq_spot(xq_sym)
         if data:
+            legacy_hit += 1
             results.append({
                 "code": code, "name": data.get("名称", name), "market": mkt,
                 "price": _safe_val(data.get("现价")),
@@ -1063,7 +1228,13 @@ async def get_market_snapshot() -> str:
     if not results:
         return json.dumps({"error": "行情接口暂不可用，请稍后重试"})
 
-    result_json = json.dumps({"indices": results, "count": len(results)}, ensure_ascii=False, default=str)
+    data_source = ("financial_data" if not legacy_hit else "mixed") if fd_hit else "legacy"
+    if legacy_hit and fd is not None:
+        logger.info("get_market_snapshot degraded: fd=%d legacy=%d", fd_hit, legacy_hit)
+    result_json = json.dumps(
+        {"indices": results, "count": len(results), "data_source": data_source},
+        ensure_ascii=False, default=str,
+    )
     _finance_set_cache(cache_key, result_json)
     return result_json
 
@@ -1072,28 +1243,11 @@ _XQ_PREFIX = {"A": {"SH": "6", "SZ": "0,3"}, "HK": {}, "US": {}}
 
 
 def _to_xq_symbol(code: str, market: str) -> str:
-    """将代码转换为雪球 symbol 格式
-
-    交易所映射规则:
-      SH: 6xx(主板) 688(科创板) 5xx(ETF/基金,除159) 9xx(B股) 11x(可转债)
-      SZ: 0xx(主板) 002(中小板) 3xx(创业板) 159(ETF) 12x(可转债)
-      BJ: 4xx 8xx 920(北交所)
-    """
+    """将代码转换为雪球 symbol 格式（交易所判定复用 financial_symbols.a_share_suffix，
+    与蚂蚁 symbol 映射共享同一份规则，避免两处漂移）"""
     if market == "A":
-        if code.startswith("159"):
-            return f"SZ{code}"  # 深市 ETF
-        if code[0] in "569":
-            return f"SH{code}"  # 沪市股票/ETF/B股
-        if code[0] in "48":
-            return f"BJ{code}"  # 北交所
-        if code[:3] in ("110", "113"):
-            return f"SH{code}"  # 沪市可转债
-        return f"SZ{code}"      # 深市股票/创业板/可转债
-    if market == "HK":
-        return code  # 00700
-    if market == "US":
-        return code  # AAPL
-    return code
+        return f"{a_share_suffix(code)}{code}"
+    return code  # HK: 00700 / US: AAPL 原样
 
 
 @mcp.tool(annotations={"readOnlyHint": True})
@@ -1106,12 +1260,14 @@ async def get_stock_quote(
     """查询个股实时行情。
 
     支持 A 股、港股、美股和加密货币。通过代码查询（推荐）或名称关键词搜索。
-    数据来源：雪球（按代码查询）/ 加密货币（coindesk）。
-    关键词搜索依赖东方财富接口，可能不可用。
+    主数据源：蚂蚁 financial-data（行情+估值一次拿全），降级：雪球/东方财富。
+    加密货币走 CoinGecko。
+    响应含 data_source 字段：financial_data=主源 | legacy=降级链 | mixed=批量中部分标的降级。
 
     Args:
         symbols: 代码，逗号分隔。A股 "600519,000001"；港股 "00700"；美股 "AAPL,MSFT"
-        keyword: 名称关键词，如 "茅台"（仅 A 股，需东方财富接口可用）
+        keyword: 名称关键词，如 "茅台"、"Apple"。支持 A/HK/US 三市场（实体识别解析），
+            主源不可用时自动降级旧接口（仅 A 股，依赖东方财富）
         market: "A"（A股，默认）| "HK"（港股）| "US"（美股）| "crypto"（加密货币）
         limit: 最大返回条数（默认 10，上限 50）
     """
@@ -1131,14 +1287,38 @@ async def get_stock_quote(
         if market not in ("A", "HK", "US"):
             return json.dumps({"error": f"不支持的市场: {market}，可选: A, HK, US, crypto"})
 
-        # 按代码查询 — 雪球逐只查（可靠）
+        fd = _get_fd_client("quote")
+
+        # 按代码查询 — 主路径：蚂蚁批量（行情+估值一次往返），按 symbol 部分降级雪球
         if symbols:
             codes = [s.strip() for s in symbols.split(",") if s.strip()][:limit]
+            fd_map: dict[str, str] = {}
+            quotes: dict[str, dict] = {}
+            if fd is not None:
+                for code in codes:
+                    fd_sym = to_fd_symbol(code, market)
+                    if fd_sym is None and market == "US":
+                        fd_sym = await fd.resolve_us_symbol(code)
+                    if fd_sym:
+                        fd_map[code] = fd_sym
+                if fd_map:
+                    try:
+                        quotes = await fd.quote_with_valuation(list(fd_map.values()))
+                    except Exception as e:
+                        logger.warning("get_stock_quote fallback to legacy: %s", e)
+
             records = []
+            fd_hit = legacy_hit = 0
             for code in codes:
-                xq_sym = _to_xq_symbol(code, market)
-                data = await _xq_spot(xq_sym)
+                row = quotes.get(fd_map.get(code, ""))
+                if row is not None:
+                    records.append(_fd_spot_record(code, row))
+                    fd_hit += 1
+                    continue
+                # 逐只降级雪球
+                data = await _xq_spot(_to_xq_symbol(code, market))
                 if data:
+                    legacy_hit += 1
                     records.append({
                         "code": code, "name": str(data.get("名称", "")),
                         "price": _safe_val(data.get("现价")),
@@ -1154,10 +1334,36 @@ async def get_stock_quote(
                         "pb_ratio": _safe_val(data.get("市净率")),
                         "market_cap": _safe_val(data.get("资产净值/总市值")),
                     })
-            return json.dumps({"stocks": records, "count": len(records), "market": market},
-                              ensure_ascii=False, default=str)
+            # 统一 schema：mixed 时主源/降级记录的键集合保持一致（缺失显式 None）
+            for rec in records:
+                for k in ("pe_ratio", "pb_ratio", "market_cap", "turnover_rate", "pe_lyr", "pe_fwd"):
+                    rec.setdefault(k, None)
+            data_source = ("financial_data" if not legacy_hit else "mixed") if fd_hit else "legacy"
+            if legacy_hit and fd is not None:
+                logger.info("get_stock_quote degraded: fd=%d legacy=%d", fd_hit, legacy_hit)
+            return json.dumps(
+                {"stocks": records, "count": len(records), "market": market, "data_source": data_source},
+                ensure_ascii=False, default=str)
 
-        # 关键词搜索 — 尝试东方财富 push2（可能不可用）
+        # 关键词搜索 — 主路径：entity_recognition 解析名称再批量查行情
+        if fd is not None:
+            try:
+                entities = await fd.recognize(keyword, asset_type="股票")
+                suffix_ok = {"A": (".SH", ".SZ", ".BJ"), "HK": (".HK",), "US": (".O", ".N", ".A")}[market]
+                syms = [e["symbol"] for e in entities
+                        if str(e.get("symbol", "")).endswith(suffix_ok)][:limit]
+                if syms:
+                    quotes = await fd.quote_with_valuation(syms)
+                    records = [_fd_spot_record(from_fd_symbol(s), quotes[s]) for s in syms if s in quotes]
+                    if records:
+                        return json.dumps(
+                            {"stocks": records, "count": len(records), "market": market,
+                             "data_source": "financial_data"},
+                            ensure_ascii=False, default=str)
+            except Exception as e:
+                logger.warning("get_stock_quote keyword fallback to legacy: %s", e)
+
+        # 降级：东方财富 push2 全表过滤（可能不可用）
         func_map = {"A": ak.stock_zh_a_spot_em, "HK": ak.stock_hk_spot_em, "US": ak.stock_us_spot_em}
         cache_key = f"stock_spot_{market}"
         df = _finance_get_cached(cache_key, ttl=30)
@@ -1169,8 +1375,9 @@ async def get_stock_quote(
             return json.dumps({"error": f"关键词搜索需要东方财富接口，当前不可用。请改用 symbols 参数直接查询代码"})
         df = df[df["名称"].str.contains(keyword, na=False)].head(limit)
         records = _df_to_records(df, _SPOT_FIELDS, _SPOT_STR)
-        return json.dumps({"stocks": records, "count": len(records), "market": market},
-                          ensure_ascii=False, default=str)
+        return json.dumps(
+            {"stocks": records, "count": len(records), "market": market, "data_source": "legacy"},
+            ensure_ascii=False, default=str)
     except Exception as e:
         logger.error("get_stock_quote failed: %s", e, exc_info=True)
         return json.dumps({"error": str(e)})
@@ -1198,7 +1405,10 @@ async def get_kline(
 ) -> str:
     """查询历史 K 线数据（OHLCV）。
 
-    A 股使用腾讯数据源，指数使用中证官网，港股/美股/ETF 使用东方财富（可能不可用）。
+    主数据源：蚂蚁 financial-data（A/HK/US/指数/ETF 全覆盖）。
+    降级：A股/ETF 腾讯，指数中证官网，港股/美股新浪。
+    后复权（hfq）主源不支持，自动走降级路径；港股/美股主源仅不复权。
+    响应含 data_source 字段：financial_data=主源 | legacy=降级链 | mixed=批量中部分标的降级。
 
     Args:
         symbol: 代码。A股 "600519"；港股 "00700"；美股 "AAPL"；指数 "000300"；ETF "510050"
@@ -1214,6 +1424,63 @@ async def get_kline(
         return json.dumps({"error": f"market 须为 {'/'.join(valid_markets)}，收到: {market}"})
 
     count = max(1, min(count, 250))
+
+    # 主路径：蚂蚁 kline-batch。以下组合跳过主源、优先 legacy：
+    # - hfq 后复权（主源不支持，仅腾讯有）
+    # - 港/美股 + qfq（主源仅不复权，新浪支持 qfq）；legacy 失败后回主源不复权兜底
+    fd = _get_fd_client("kline")
+    fd_period = {"daily": "P_Day1", "weekly": "P_Week1", "monthly": "P_Month1"}.get(period)
+    fd_first = (
+        fd is not None and fd_period is not None and adjust != "hfq"
+        and not (market in ("HK", "US") and adjust == "qfq")
+    )
+
+    async def _fd_kline() -> tuple[list[dict], str | None] | None:
+        """主源 K 线，返回 (records, note)；不可用返回 None（任何异常都降级，不外抛）"""
+        if fd is None or fd_period is None:
+            return None
+        try:
+            fd_sym = to_fd_symbol(symbol, market)
+            if fd_sym is None and market == "US":
+                fd_sym = await fd.resolve_us_symbol(symbol)
+            if fd_sym is None:
+                return None
+            split = "S_Before" if (market in ("A", "etf") and adjust == "qfq") else "S_Unsplit"
+            rows = await fd.kline(fd_sym, fd_period, split, count)
+        except Exception as e:
+            logger.warning("get_kline fallback to legacy: %s", e)
+            return None
+        if not rows:
+            return None
+        records = [{
+            "date": str(r.get("date") or "")[:10],  # 归一化 YYYY-MM-DD（美股带 12:00:00）
+            "open": _safe_val(r.get("open")),
+            "close": _safe_val(r.get("close")),
+            "high": _safe_val(r.get("high")),
+            "low": _safe_val(r.get("low")),
+            "volume": _safe_val(r.get("volume")),
+            "amount": _safe_val(r.get("amount")),
+        } for r in rows]
+        note = None
+        if market in ("HK", "US") and adjust in ("qfq", "hfq"):
+            note = "主数据源港股/美股仅提供不复权数据，本结果为不复权口径"
+        return records, note
+
+    def _fd_payload(data: list[dict], note: str | None) -> str:
+        # adjust 恒回显请求值（与 legacy 契约一致）；实际口径差异通过 note 传达
+        payload = {
+            "symbol": symbol, "market": market, "period": period,
+            "adjust": "N/A" if market == "index" else adjust,
+            "data": data, "count": len(data), "data_source": "financial_data",
+        }
+        if note:
+            payload["note"] = note
+        return json.dumps(payload, ensure_ascii=False, default=str)
+
+    if fd_first:
+        fd_result = await _fd_kline()
+        if fd_result is not None:
+            return _fd_payload(*fd_result)
     _period_multiplier = {"daily": 2, "weekly": 10, "monthly": 45}
     days_back = count * _period_multiplier.get(period, 2)
     start = (datetime.now() - timedelta(days=days_back)).strftime("%Y%m%d")
@@ -1264,6 +1531,14 @@ async def get_kline(
             fields = _KLINE_FIELDS_TX
 
         if df is None:
+            # legacy 也失败 → 主源不复权兜底（覆盖 hfq / 港美股 qfq 先走 legacy 的场景）
+            if fd is not None and fd_period is not None and not fd_first:
+                fd_result = await _fd_kline()
+                if fd_result is not None:
+                    data, note = fd_result
+                    if adjust in ("qfq", "hfq"):
+                        note = f"复权数据源不可用，本结果为主数据源不复权口径（请求 adjust={adjust}）"
+                    return _fd_payload(data, note)
             return json.dumps({"error": f"未找到 {symbol} ({market}) 的数据，请检查代码和市场类型"})
 
         df = df.tail(count)
@@ -1272,7 +1547,7 @@ async def get_kline(
         return json.dumps({
             "symbol": symbol, "market": market, "period": period,
             "adjust": adjust if market not in ("index",) else "N/A",
-            "data": data, "count": len(data),
+            "data": data, "count": len(data), "data_source": "legacy",
         }, ensure_ascii=False, default=str)
     except Exception as e:
         logger.error("get_kline failed: %s", e, exc_info=True)
@@ -1285,6 +1560,10 @@ async def get_macro_indicator(
     count: int = 12,
 ) -> str:
     """查询中国宏观经济指标最近数据。
+
+    ppi/pmi/gdp/m2 主数据源为蚂蚁 financial-data（仅单一核心序列，见响应 series 字段；
+    不含 legacy 口径下的分项/同比副字段），cpi/shibor 走 akshare（主源无同口径数据）。
+    响应含 data_source 字段：financial_data=主源 | legacy=降级链 | mixed=批量中部分标的降级。
 
     Args:
         indicator: 指标名 — cpi | ppi | pmi | gdp | m2 | shibor
@@ -1299,6 +1578,32 @@ async def get_macro_indicator(
 
     func_name, params, date_field, value_field, label = _MACRO_MAP[key]
     count = max(1, min(count, 120))
+
+    # 主路径：蚂蚁 macro_query（仅口径已验证的指标）
+    fd = _get_fd_client("macro")
+    if fd is not None and key in _MACRO_FD_SEED:
+        code, days_per_point, series = _MACRO_FD_SEED[key]
+        try:
+            start = utcnow() - timedelta(days=count * days_per_point + 45)
+            unit, rows = await fd.macro_query(code, start)
+            if rows:
+                data = [{
+                    "date": str(r.get("end_date") or "")[:10],
+                    "value": _safe_val(r.get("indicator_value")),
+                    "disclosure_date": str(r.get("disclosure_date") or "")[:10] or None,
+                } for r in rows[-count:]]
+                result = {
+                    "indicator": key, "label": label,
+                    "series": series,  # 精确口径；主源仅单一核心序列，无 legacy 的分项副字段
+                    "value_field": "value",
+                    "data": data, "count": len(data),
+                    "data_source": "financial_data",
+                }
+                if unit:
+                    result["unit"] = unit
+                return json.dumps(result, ensure_ascii=False, default=str)
+        except Exception as e:
+            logger.warning("get_macro_indicator fallback to legacy: %s", e)
 
     try:
         cache_key = f"macro_{key}"
@@ -1341,6 +1646,7 @@ async def get_macro_indicator(
             "indicator": key, "label": label,
             "value_field": value_field,
             "data": data, "count": len(data),
+            "data_source": "legacy",
         }, ensure_ascii=False, default=str)
     except Exception as e:
         logger.error("get_macro_indicator failed: %s", e, exc_info=True)

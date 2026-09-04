@@ -1242,28 +1242,29 @@ docker compose exec -T postgres psql -U allinone allinone < data/backups/backup_
 
 ### 10.2 工具清单
 
-共 13 个工具，按读写属性分类：
+共 14 个工具，按读写属性分类：
 
 **只读工具 (readOnlyHint=True)**
 
 | 工具名 | 功能 | 关键参数 |
 |--------|------|----------|
-| `list_content` | 搜索内容列表 | time_range / start_date / end_date / source_name / keyword / status / favorites_only / limit |
+| `list_content` | 搜索内容列表（支持 offset 分页与未读过滤） | time_range / start_date / end_date / source_name / keyword / status / favorites_only / unread_only / limit / offset |
 | `get_content_detail` | 获取内容全文及 AI 分析 | content_id |
 | `get_sources` | 列出所有数据源及状态 | status / keyword |
 | `get_favorites_summary` | 收藏统计（按源分布、按月趋势、最近列表） | time_range (7d/30d/90d/all) |
-| `get_market_snapshot` | 主要市场指数实时概览（A 股六大指数 + 恒生指数） | — |
+| `get_market_snapshot` | 11 个主要指数实时概览（A股六大 + 恒生系三个 + 道指/纳指） | — |
 | `get_stock_quote` | 个股实时行情查询 | symbols / keyword / market (A/HK/US/crypto) / limit |
 | `get_kline` | 历史 K 线数据 | symbol / market (A/HK/US/index/etf) / period (daily/weekly/monthly) / count / adjust |
 | `get_macro_indicator` | 中国宏观经济指标 | indicator (cpi/ppi/pmi/gdp/m2/shibor) / count |
 
-金融数据工具通过 akshare 库获取数据，带内存缓存（TTL 按工具类型区分）和超时保护（15 秒），不写入本地数据库。
+金融数据工具以蚂蚁 financial-data API 为主数据源，akshare/雪球/腾讯/新浪为降级路径（crypto 走 CoinGecko），带内存缓存（TTL 按工具类型区分）和超时保护，不写入本地数据库。响应含 `data_source` 字段标识实际来源。详见 §10.5。
 
 **写操作工具 (readOnlyHint=False)**
 
 | 工具名 | destructiveHint | idempotentHint | 功能 |
 |--------|----------------|----------------|------|
 | `toggle_favorite` | False | False | 批量收藏/取消收藏内容 |
+| `mark_read` | False | True | 批量标记内容已读（与 Web UI 共用 view_count 读态） |
 | `create_source` | False | False | 创建数据源（支持 URL 自动推导 source_type） |
 | `update_source` | False | True | 更新数据源配置 |
 | `delete_source` | True | False | 删除数据源（cascade 参数控制是否级联删除内容） |
@@ -1282,3 +1283,48 @@ MCP 写操作调用 `app/services/source_service.py` 中的共享校验函数，
 - `validate_source_config(source_type, url, config_json)` — 校验各类型必填配置
 - `validate_source_name_unique(name, db, exclude_id)` — 校验名称唯一性
 - `validate_template_exists(pipeline_template_id, db)` — 校验模板存在性
+
+### 10.5 金融数据源架构
+
+> 定稿于 2026-09-04（g-design：architect-designer 方案 + product-reviewer 有条件通过后精简）
+
+#### 分层
+
+```
+@mcp.tool 工具函数 (mcp_server.py)          ← 契约层：参数校验 + 输出 JSON 组装，签名与既有键名不可变
+        │
+        ├─ 主路径 ─→ app/services/financial_data_client.py   ← 蚂蚁 financial-data API 适配
+        │                 └─ app/services/financial_symbols.py ← 纯函数 symbol 映射（可单测无网络）
+        │
+        └─ 降级 ──→ 既有 _xq_spot / _ak_call 路径（雪球/腾讯/新浪/akshare，原地保留）
+```
+
+工具函数内不出现 HTTP 调用或 `.SH/.O` 后缀字符串；所有蚂蚁 API 细节封闭在 client 内。crypto 路径（CoinGecko）不变。
+
+#### 主数据源：蚂蚁 financial-data API
+
+- 端点：`POST {FINANCIAL_DATA_BASE_URL}/api/v1/common_query`，headers `X-API-Key` + `X-API-Version`
+- 固定场景直接 `mode=data` + 已知 url：`/api/v1/quote/basic-snapshot`（行情快照，支持多 symbol 批量）、`/api/v1/quote/derived-snapshot`（估值）、`/api/v1/quote/kline-batch`（K 线）
+- 宏观走 `mode=macro_query` + 静态 seed 表（`_MACRO_FD_SEED`，indicator_code 由探针经 macro_recall 一次性解析并对拍验证后固化）；seed 未覆盖的指标（cpi/shibor，蚂蚁无同口径数据）无限期走 akshare legacy，运行时不做召回
+- 响应解析：严格按 `meta.fields` 动态映射（`dict(zip(fields, row))`），禁止固定下标；`SUCCESS` 不代表有数据，`FAILED` 也检查可用子结果
+- symbol 格式：A股 `600519.SH/.SZ/.BJ`（复用既有交易所判定规则改前缀为后缀）；港股 `zfill(5).HK`；美股需 `.O/.N/.A` 后缀——静态表（高频 ticker）→ 进程缓存 → entity_recognition 兜底 → 降级 legacy；指数用静态表 `_INDEX_SYMBOLS`（注意 `000001` 指数 SH / 平安银行 SZ 同码歧义，快照与个股走不同映射表），部署前由探针脚本一次性验证，不做运行时推断
+
+#### 稳定性设计（个人项目量级，刻意轻量）
+
+- **错误分类**：`classify_error(exc) → "retryable" | "fatal" | "quota"` 纯函数。retryable（超时/5xx/连接错误）重试 ≤2 次（退避 + jitter，单工具调用总预算 ≤12s）；fatal/quota 不重试直接降级
+- **主源冷却**：不引入熔断状态机——记录最近主源失败时间戳，quota/连续失败后 N 秒内跳过主源直接走 legacy
+- **降级链**：主源 → legacy（按 symbol 部分降级：批量查询中失败的标的单独回退补齐，不拖垮全批）→ 报错。响应 `data_source` 取值：`financial_data` / `legacy` / `mixed`
+- **缓存**：单层落在 client（工具层不再叠加，避免双层 TTL 掩盖故障）。TTL：行情快照 30s、估值 300s、K 线 300s、宏观 3600s、entity/symbol 解析 7d。例外：`get_market_snapshot` 保留既有的工具层 JSON 缓存（30s，与 client 层同 TTL），使降级后的 legacy 结果也能被缓存
+- **总预算**：单次主源请求（含重试）硬上限 12s（`asyncio.wait_for`），超时按可重试失败计入冷却
+- **契约保护**：K 线日期归一化 `YYYY-MM-DD`；`hfq`（后复权）与港/美股复权请求蚂蚁不支持 → 降级 legacy，绝不静默换复权口径；跨市场混合来源时响应加 note 提示复权口径差异；宏观 `label` 取静态表保证中文标签字面量不变
+
+#### 配置与回退
+
+`FINANCIAL_DATA_ENABLED` / `FINANCIAL_DATA_API_KEY` / `FINANCIAL_DATA_BASE_URL` / `FINANCIAL_DATA_API_VERSION` / `FINANCIAL_DATA_TIMEOUT` / `FINANCIAL_DATA_TOOLS`（逗号分隔的工具级开关）。key 走环境变量（基础设施密钥，与 `BROWSERLESS_TOKEN` 同类，不走 system_settings+Fernet）。回退 = `ENABLED=false`（或从 `FINANCIAL_DATA_TOOLS` 移除单个工具）+ 重启 allin-mcp，无需构建。key 留空时自动全量降级，功能不受影响。
+
+#### 质量门禁
+
+1. **Phase 0 探针**（`scripts/verify/financial_data/probe_api.py`）：切换前验证 symbol 格式、字段单位（pct_chg %/小数、volume 股/手、market_cap 元/亿元、m2 亿/万亿）、宏观 indicator_code、批量入参上限、配额政策——未完成不开工
+2. **宏观口径对拍**（`verify_parity.py`）：新旧源近 12 期数值偏差 <1% 才允许该指标进 seed；不达标的指标无限期保持 akshare（按指标粒度灰度）
+3. **端到端冒烟**：每个工具切换后用真实投研 skill（如 investment-research）跑一次分析任务，验证下游消费正常
+4. client 内保留廉价合理性断言（`abs(pct_chg)>30`、`price<=0` 打 WARNING 不改数据），拦截静默单位错位

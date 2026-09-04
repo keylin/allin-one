@@ -216,7 +216,7 @@ async def _push_report(content: str, title: str):
         smtp_password = db.get(SystemSetting, "smtp_password")
         notify_email = db.get(SystemSetting, "notify_email")
 
-        if all([smtp_host, smtp_user, smtp_password, notify_email]):
+        if all(s and s.value for s in [smtp_host, smtp_user, smtp_password, notify_email]):
             try:
                 from app.services.publishers.email import publish_email
                 smtp_port = db.get(SystemSetting, "smtp_port")

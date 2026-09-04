@@ -193,6 +193,9 @@ services:
       DB_POOL_SIZE: 3
       DB_MAX_OVERFLOW: 2
       MCP_TRANSPORT: http
+      FINANCIAL_DATA_API_KEY: ${FINANCIAL_DATA_API_KEY:-}
+      FINANCIAL_DATA_ENABLED: ${FINANCIAL_DATA_ENABLED:-true}
+      FINANCIAL_DATA_TOOLS: ${FINANCIAL_DATA_TOOLS:-all}
     depends_on:
       postgres:
         condition: service_healthy

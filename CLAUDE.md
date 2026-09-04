@@ -94,6 +94,7 @@ vim scripts/utils/cleanup_data.py
 - 凭证加密: `platform_credentials.credential_data` 使用 Fernet 对称加密 (`CREDENTIAL_ENCRYPTION_KEY` 环境变量)，未配置时透传明文，兼容历史数据
 - DB 连接池: `DB_POOL_SIZE`（默认 10）/ `DB_MAX_OVERFLOW`（默认 5）环境变量控制，各容器独立配置
 - LLM API Key 加密存储: `system_settings` 中 `api_key/token/password/secret` 关键词的键值与 `credential_data` 同套 Fernet 加密；`GET /api/settings` 返回解密后掩码（显示末 4 位原始字符）
+- MCP 金融数据源: 蚂蚁 financial-data API 为主源（`FINANCIAL_DATA_*` 环境变量，key 走基础设施密钥模式，不经 system_settings+Fernet），akshare/雪球为降级路径；`FINANCIAL_DATA_ENABLED=false` 或留空 API key 即一键全量回退，详见 `docs/system_design.md` §10.5
 
 ## 文档导航
 

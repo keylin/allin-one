@@ -29,6 +29,17 @@ class Settings(BaseSettings):
     DB_POOL_SIZE: int = 10
     DB_MAX_OVERFLOW: int = 5
 
+    # Financial Data（蚂蚁 financial-data API，MCP 金融工具主数据源）
+    # key 留空时自动全量降级到 akshare/雪球，功能不受影响
+    FINANCIAL_DATA_ENABLED: bool = True
+    FINANCIAL_DATA_API_KEY: str = ""
+    FINANCIAL_DATA_BASE_URL: str = "https://dfdatamcpnexus-prod.antgroup-inc.cn"
+    FINANCIAL_DATA_API_VERSION: str = "1.6.0"
+    FINANCIAL_DATA_TIMEOUT: float = 8.0
+    FINANCIAL_DATA_MAX_RETRIES: int = 2
+    # 工具级开关，逗号分隔: snapshot,quote,kline,macro；"all" 或空 = 全开
+    FINANCIAL_DATA_TOOLS: str = "all"
+
     # Application
     LOG_LEVEL: str = "INFO"
 
