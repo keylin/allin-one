@@ -364,15 +364,18 @@ const sectionClass = 'space-y-4 p-4 bg-slate-50/50 rounded-xl border border-slat
         <div v-else-if="form.source_type === 'podcast.apple'" :class="sectionClass">
           <h4 class="text-sm font-semibold text-slate-800">Apple Podcasts 配置</h4>
           <div>
-            <label :class="labelClass">Apple Podcasts URL *</label>
+            <label :class="labelClass">Apple Podcasts URL {{ configForm.feed_url ? '' : '*' }}</label>
             <input
               v-model="configForm.apple_podcast_url"
               type="text"
               :class="inputClass"
               placeholder="https://podcasts.apple.com/cn/podcast/硬地骇客/id1678465783"
-              required
+              :required="!configForm.feed_url"
             />
-            <p class="mt-1 text-xs text-slate-400">
+            <p v-if="configForm.feed_url" class="mt-1 text-xs text-slate-400 truncate">
+              已解析订阅源: {{ configForm.feed_url }}，此项可留空
+            </p>
+            <p v-else class="mt-1 text-xs text-slate-400">
               粘贴 Apple Podcasts 链接，系统会自动解析播客 RSS 订阅源
             </p>
           </div>
