@@ -39,9 +39,12 @@ const showFavoritesOnly = ref(route.query.favorites === '1')
 const showUnreadOnly = ref(route.query.unread !== '0')
 const sourceOptions = ref([])
 const showSourceDropdown = ref(false)
-// 来源分组（浏览端过滤器预设，存于 system_settings）
+// 来源分组（存于 system_settings）与「泳道」——泳道是一级导航态，
+// 与 filterSources（二级来源筛选）彻底解耦，切泳道不会把整组来源灌进筛选条
 const SOURCE_GROUPS_KEY = 'feed.source_groups'
+const LANE_LS_KEY = 'feed.active_lane'
 const sourceGroups = ref([])
+const activeLane = ref(route.query.lane || localStorage.getItem(LANE_LS_KEY) || '')
 let searchTimer = null
 
 // 标签筛选
@@ -245,6 +248,11 @@ async function loadSourceGroups() {
       sourceGroups.value = parsed.filter(g => g && g.name && Array.isArray(g.source_ids))
     }
   } catch (_) { /* 分组为可选功能，读取失败不影响筛选 */ }
+  // 泳道已不存在（分组被删或改名）则先回落到全部，避免筛出空列表
+  if (activeLane.value && !sourceGroups.value.some(g => g.name === activeLane.value)) {
+    activeLane.value = ''
+    try { localStorage.removeItem(LANE_LS_KEY) } catch (_) { /* ignore */ }
+  }
 }
 
 async function persistSourceGroups() {
@@ -257,22 +265,52 @@ async function persistSourceGroups() {
   }
 }
 
-// 当前勾选恰好等于某个分组时，高亮该分组
-const activeGroupName = computed(() => {
-  if (!filterSources.value.length) return ''
-  const cur = [...filterSources.value].sort().join(',')
-  const hit = sourceGroups.value.find(g => [...g.source_ids].map(String).sort().join(',') === cur)
-  return hit ? hit.name : ''
+// 泳道选项：固定「全部」+ 已配置的分组
+const laneOptions = computed(() => [
+  { name: '', label: '全部' },
+  ...sourceGroups.value.map(g => ({ name: g.name, label: g.name })),
+])
+
+// 当前泳道包含的来源 id（剔除已删除的源）；泳道为「全部」时返回 null
+const laneSourceIds = computed(() => {
+  if (!activeLane.value) return null
+  const g = sourceGroups.value.find(x => x.name === activeLane.value)
+  if (!g) return null
+  const known = new Set(sourceOptions.value.map(s => String(s.id)))
+  const ids = g.source_ids.map(String).filter(id => known.has(id))
+  return ids.length ? ids : null
 })
 
-function applySourceGroup(group) {
-  // 再次点击已激活的分组则取消，回到全部来源
-  if (activeGroupName.value === group.name) {
-    filterSources.value = []
-    return
+// 来源下拉只列当前泳道内的源——在「浏览」里筛来源不该看到 55 个情报源
+const visibleSourceOptions = computed(() => {
+  const ids = laneSourceIds.value
+  if (!ids) return sourceOptions.value
+  const set = new Set(ids)
+  return sourceOptions.value.filter(s => set.has(String(s.id)))
+})
+
+// 实际请求用的来源集合：泳道 ∩ 手选来源
+function effectiveSourceIds() {
+  const lane = laneSourceIds.value
+  const picked = filterSources.value
+  if (!lane) return picked.length ? picked : null
+  if (!picked.length) return lane
+  const set = new Set(lane)
+  const both = picked.filter(id => set.has(String(id)))
+  return both.length ? both : lane
+}
+
+function switchLane(name) {
+  if (activeLane.value === name) return
+  activeLane.value = name
+  try { localStorage.setItem(LANE_LS_KEY, name) } catch (_) { /* 隐私模式下忽略 */ }
+  // 手选的来源若不属于新泳道则丢弃，避免筛出空列表
+  const ids = laneSourceIds.value
+  if (ids && filterSources.value.length) {
+    const set = new Set(ids)
+    filterSources.value = filterSources.value.filter(id => set.has(String(id)))
   }
-  const known = new Set(sourceOptions.value.map(s => String(s.id)))
-  filterSources.value = group.source_ids.map(String).filter(id => known.has(id))
+  // 不在此处 fetch：activeLane 已并入筛选 watch，避免同 tick 内触发两次请求
 }
 
 async function saveCurrentAsGroup() {
@@ -280,7 +318,7 @@ async function saveCurrentAsGroup() {
     toastError('请先勾选来源，再存为分组')
     return
   }
-  const name = (window.prompt('分组名称', activeGroupName.value || '') || '').trim()
+  const name = (window.prompt('分组名称', activeLane.value || '') || '').trim()
   if (!name) return
   const ids = [...filterSources.value]
   const idx = sourceGroups.value.findIndex(g => g.name === name)
@@ -293,9 +331,18 @@ async function saveCurrentAsGroup() {
 }
 
 async function removeSourceGroup(name) {
+  const g = sourceGroups.value.find(x => x.name === name)
+  if (!g) return
+  // 破坏性且无法撤销：分组是人工维护的来源清单，删掉要逐个重选，必须二次确认
+  if (!confirm(`删除分组「${name}」？其中 ${g.source_ids.length} 个来源的选择会丢失，需要重新逐个勾选。`)) return
   const backup = sourceGroups.value
-  sourceGroups.value = sourceGroups.value.filter(g => g.name !== name)
-  if (!(await persistSourceGroups())) sourceGroups.value = backup
+  sourceGroups.value = sourceGroups.value.filter(x => x.name !== name)
+  if (!(await persistSourceGroups())) {
+    sourceGroups.value = backup
+    return
+  }
+  if (activeLane.value === name) switchLane('')
+  toastSuccess(`已删除分组「${name}」`)
 }
 
 // 选中项在列表中的 index
@@ -309,6 +356,7 @@ function syncQueryParams() {
   const query = {}
   if (searchQuery.value) query.q = searchQuery.value
   if (filterSources.value.length) query.source_id = filterSources.value.join(',')
+  if (activeLane.value) query.lane = activeLane.value
   if (filterStatus.value) query.status = filterStatus.value
   if (activeMediaType.value === 'video') query.has_video = '1'
   if (activeMediaType.value === 'audio') query.has_audio = '1'
@@ -341,7 +389,8 @@ async function fetchItems(reset = false) {
     if (activeMediaType.value === 'audio') params.has_audio = true
     if (activeMediaType.value === 'ebook') params.has_ebook = true
     if (searchQuery.value.trim()) params.q = searchQuery.value.trim()
-    if (filterSources.value.length) params.source_id = filterSources.value.join(',')
+    const srcIds = effectiveSourceIds()
+    if (srcIds) params.source_id = srcIds.join(',')
     if (filterStatus.value) params.status = filterStatus.value
     if (showFavoritesOnly.value) params.is_favorited = true
     if (showUnreadOnly.value) params.is_unread = true
@@ -399,7 +448,7 @@ watch(searchQuery, () => {
 })
 
 // 筛选联动
-watch([filterSources, filterStatus, showFavoritesOnly, showUnreadOnly, dateRange, filterTag], () => {
+watch([activeLane, filterSources, filterStatus, showFavoritesOnly, showUnreadOnly, dateRange, filterTag], () => {
   fetchItems(true)
 })
 
@@ -597,7 +646,8 @@ async function handleMarkAllRead() {
   markingAllRead.value = true
   try {
     const params = {}
-    if (filterSources.value.length) params.source_id = filterSources.value.join(',')
+    const srcIds = effectiveSourceIds()
+    if (srcIds) params.source_id = srcIds.join(',')
     if (filterStatus.value) params.status = filterStatus.value
     if (activeMediaType.value === 'video') params.has_video = true
     if (activeMediaType.value === 'audio') params.has_audio = true
@@ -817,14 +867,17 @@ const pullOffset = computed(() => {
 })
 
 onMounted(async () => {
-  fetchItems(true)
+  // 带泳道进来时先等分组与来源到位再取，否则会先闪一屏全量内容再跳变
+  const deferFirstFetch = !!activeLane.value
+  if (!deferFirstFetch) fetchItems(true)
   loadStats()
   startStatsPolling()
   try {
     const res = await listSourceOptions()
     if (res.code === 0) sourceOptions.value = res.data
   } catch (_) { /* ignore */ }
-  loadSourceGroups()
+  await loadSourceGroups()
+  if (deferFirstFetch) fetchItems(true)
   document.addEventListener('keydown', handleKeydown)
   document.addEventListener('click', handleClickOutside)
 })
@@ -944,32 +997,20 @@ onUnmounted(() => {
                     class="absolute right-0 top-full mt-1 w-56 bg-white rounded-xl shadow-lg border border-slate-200 py-1 z-30 max-h-64 overflow-y-auto"
                     @click.stop
                   >
-                    <div v-if="sourceGroups.length" class="px-3 py-2 border-b border-slate-100">
-                      <div class="text-[10px] font-medium text-slate-400 mb-1.5">分组</div>
-                      <div class="flex flex-wrap gap-1">
-                        <span
-                          v-for="g in sourceGroups"
-                          :key="g.name"
-                          class="group/grp inline-flex items-center rounded-md border text-xs transition-colors"
-                          :class="activeGroupName === g.name
-                            ? 'text-indigo-700 bg-indigo-50 border-indigo-200'
-                            : 'text-slate-600 bg-slate-50 border-slate-200 hover:border-slate-300'"
-                        >
-                          <button class="px-2 py-0.5" @click="applySourceGroup(g)">{{ g.name }}</button>
-                          <button
-                            class="pr-1.5 text-slate-300 hover:text-rose-500 opacity-0 group-hover/grp:opacity-100 transition-opacity"
-                            title="删除分组"
-                            @click.stop="removeSourceGroup(g.name)"
-                          >&times;</button>
-                        </span>
-                      </div>
+                    <div v-if="activeLane" class="px-3 py-2 border-b border-slate-100 flex items-center justify-between gap-2">
+                      <span class="text-xs text-slate-500 truncate">在「{{ activeLane }}」内筛选</span>
+                      <button
+                        class="text-xs text-slate-400 hover:text-rose-500 shrink-0"
+                        title="删除该分组"
+                        @click.stop="removeSourceGroup(activeLane)"
+                      >删除分组</button>
                     </div>
                     <div v-if="filterSources.length" class="px-3 py-1.5 border-b border-slate-100 flex items-center justify-between gap-2">
                       <button @click="clearSources" class="text-xs text-indigo-600 hover:text-indigo-800">清除所有来源</button>
                       <button @click="saveCurrentAsGroup" class="text-xs text-slate-500 hover:text-slate-700 shrink-0">存为分组</button>
                     </div>
                     <label
-                      v-for="s in sourceOptions"
+                      v-for="s in visibleSourceOptions"
                       :key="s.id"
                       class="flex items-center gap-2 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 cursor-pointer transition-colors"
                     >
@@ -981,7 +1022,7 @@ onUnmounted(() => {
                       />
                       <span class="truncate">{{ s.name }}</span>
                     </label>
-                    <div v-if="!sourceOptions.length" class="px-3 py-3 text-xs text-slate-400 text-center">暂无来源</div>
+                    <div v-if="!visibleSourceOptions.length" class="px-3 py-3 text-xs text-slate-400 text-center">暂无来源</div>
                   </div>
                 </Transition>
               </div>
@@ -1122,13 +1163,24 @@ onUnmounted(() => {
               搜索:{{ searchQuery.trim() }}
               <button @click="clearSearch" class="ml-0.5 hover:text-indigo-900 transition-colors">&times;</button>
             </span>
+            <!-- 来源 chip：超过 3 个折叠，避免整屏刷满 -->
+            <template v-if="activeSourceNames.length <= 3">
+              <span
+                v-for="(name, i) in activeSourceNames"
+                :key="'src-' + i"
+                class="inline-flex items-center gap-1 px-2.5 py-1 bg-indigo-100 text-indigo-700 text-xs font-medium rounded-full shadow-sm border border-indigo-200/50"
+              >
+                {{ name }}
+                <button @click="toggleSourceFilter(filterSources[i])" class="ml-0.5 hover:text-indigo-900 transition-colors">&times;</button>
+              </span>
+            </template>
             <span
-              v-for="(name, i) in activeSourceNames"
-              :key="'src-' + i"
+              v-else
               class="inline-flex items-center gap-1 px-2.5 py-1 bg-indigo-100 text-indigo-700 text-xs font-medium rounded-full shadow-sm border border-indigo-200/50"
+              :title="activeSourceNames.join('、')"
             >
-              {{ name }}
-              <button @click="toggleSourceFilter(filterSources[i])" class="ml-0.5 hover:text-indigo-900 transition-colors">&times;</button>
+              来源 {{ activeSourceNames.length }} 个
+              <button @click="clearSources" class="ml-0.5 hover:text-indigo-900 transition-colors">&times;</button>
             </span>
             <span
               v-if="dateRange"
@@ -1167,19 +1219,40 @@ onUnmounted(() => {
             </button>
           </div>
 
-          <!-- 媒体类型 Tab（桌面端） -->
-          <div class="flex items-center gap-0.5 bg-slate-100 rounded-xl p-0.5 overflow-x-auto scrollbar-hide">
-            <button
-              v-for="mt in mediaTypes"
-              :key="mt.value"
-              class="px-3 py-1 text-xs font-medium rounded-lg transition-all duration-200 whitespace-nowrap shrink-0"
-              :class="activeMediaType === mt.value
-                ? 'bg-white text-slate-900 shadow-sm'
-                : 'text-slate-500 hover:text-slate-700'"
-              @click="switchMediaType(mt.value)"
+          <!-- 泳道 + 媒体类型（同一行，移动端可横滑） -->
+          <div class="flex items-center gap-2 overflow-x-auto scrollbar-hide">
+            <!-- 泳道切换：一级入口，仅在配置了分组时出现 -->
+            <div
+              v-if="sourceGroups.length"
+              class="flex items-center gap-0.5 bg-slate-100 rounded-xl p-0.5 shrink-0"
             >
-              {{ mt.label }}
-            </button>
+              <button
+                v-for="ln in laneOptions"
+                :key="ln.name || '__all__'"
+                class="px-3 py-1 text-xs font-medium rounded-lg transition-all duration-200 whitespace-nowrap"
+                :class="activeLane === ln.name
+                  ? 'bg-white text-slate-900 shadow-sm'
+                  : 'text-slate-500 hover:text-slate-700'"
+                @click="switchLane(ln.name)"
+              >
+                {{ ln.label }}
+              </button>
+            </div>
+
+            <!-- 媒体类型 Tab（桌面端） -->
+            <div class="flex items-center gap-0.5 bg-slate-100 rounded-xl p-0.5 shrink-0">
+              <button
+                v-for="mt in mediaTypes"
+                :key="mt.value"
+                class="px-3 py-1 text-xs font-medium rounded-lg transition-all duration-200 whitespace-nowrap shrink-0"
+                :class="activeMediaType === mt.value
+                  ? 'bg-white text-slate-900 shadow-sm'
+                  : 'text-slate-500 hover:text-slate-700'"
+                @click="switchMediaType(mt.value)"
+              >
+                {{ mt.label }}
+              </button>
+            </div>
           </div>
 
           <!-- 阅读进度条（内嵌在 sticky header 底部） -->
@@ -1234,10 +1307,10 @@ onUnmounted(() => {
               </svg>
             </div>
             <p class="text-base text-slate-600 font-medium mb-1">
-              {{ hasActiveFilters ? '没有找到匹配的内容' : '暂无内容' }}
+              {{ hasActiveFilters ? '没有找到匹配的内容' : (activeLane ? `「${activeLane}」里暂无内容` : '暂无内容') }}
             </p>
             <p class="text-sm text-slate-400">
-              {{ hasActiveFilters ? '试试调整筛选条件' : '添加数据源后内容会自动出现在这里' }}
+              {{ hasActiveFilters ? '试试调整筛选条件' : (activeLane ? '切到「全部」看看其他来源' : '添加数据源后内容会自动出现在这里') }}
             </p>
           </div>
 
