@@ -49,7 +49,6 @@ const showFavoritesOnly = bind('favorited', c => c.favorited === true, v => (v ?
 const showUnreadOnly = bind('unread', c => c.unread === true, v => (v ? true : null))
 
 const sourceOptions = computed(() => cf.sourceOptions)
-const showSourceDropdown = ref(false)
 const showFilterSheet = ref(false)
 let searchTimer = null
 
@@ -72,9 +71,6 @@ function toggleDensity() {
 
 // 快捷键帮助浮层
 const showShortcutHelp = ref(false)
-
-// 移动端搜索栏
-const showMobileSearch = ref(false)
 
 // 新内容到达提醒
 const newContentCount = ref(0)
@@ -191,6 +187,15 @@ const { markAsRead, reset: resetAutoRead } = useAutoRead({
 const hasActiveFilters = computed(() => cf.dirty)
 function isOverridden(key) {
   return Object.prototype.hasOwnProperty.call(cf.overrides, key)
+}
+
+// 「筛选」弹层承载的维度。搜索(q)不算——它在工具栏上自带清除按钮
+const NARROW_KEYS = ['source_ids', 'date_range', 'status', 'unread']
+const narrowCount = computed(() => NARROW_KEYS.filter(isOverridden).length)
+
+// 这四维都在下面的筛选联动 watch 里，清完会自动重新拉列表
+function clearNarrowFilters() {
+  cf.clearOverrides(NARROW_KEYS)
 }
 
 const activeSourceNames = computed(() => {
@@ -657,7 +662,7 @@ function scrollCardIntoView(index) {
 }
 
 function handleClickOutside() {
-  showSourceDropdown.value = false
+  showFilterSheet.value = false
 }
 
 // 加载统计数据
@@ -800,14 +805,222 @@ onUnmounted(() => {
           } : undefined"
         >
         <div class="relative px-3 md:px-4 pt-2 md:pt-3 pb-1.5 md:pb-2 space-y-1.5 md:space-y-2 sticky top-0 bg-white z-10 border-b border-slate-100">
-          <!-- 行 1 · 导航层：当前在看哪个范围。过滤器是一级入口，故置顶 -->
+          <!-- 行 1 · 工具栏：搜索 + 筛选入口 + 视图偏好。
+               次要筛选维度（来源/时间/状态/未读）全部收进「筛选」弹层——
+               左栏只有 480px，平铺控件会把 flex-1 的搜索框挤到 0 宽，
+               其绝对定位的放大镜图标就压到相邻按钮上。 -->
+          <div class="flex items-center gap-1.5">
+            <!-- 搜索框：移动端与 PC 同构，不再折叠成图标按钮 -->
+            <div class="relative flex-1 min-w-0">
+              <svg class="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+              </svg>
+              <input
+                v-model="searchQuery"
+                type="text"
+                placeholder="搜索标题..."
+                class="w-full bg-slate-50 rounded-lg pl-8 pr-7 py-2 text-sm text-slate-700 placeholder-slate-400 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all"
+              />
+              <button
+                v-if="searchQuery"
+                class="absolute right-1.5 top-1/2 -translate-y-1/2 w-5 h-5 rounded text-slate-400 hover:text-slate-600 flex items-center justify-center"
+                title="清除搜索"
+                @click="clearSearch"
+              >
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <!-- 筛选：桌面端下拉、移动端底部抽屉 -->
+            <div class="relative shrink-0">
+              <button
+                class="flex items-center gap-1 px-2.5 py-2 text-xs font-medium rounded-lg border transition-all duration-200"
+                :class="narrowCount || showFilterSheet
+                  ? 'text-indigo-700 bg-indigo-50 border-indigo-200'
+                  : 'text-slate-600 bg-slate-50 border-slate-200 hover:border-slate-300'"
+                title="筛选"
+                @click.stop="showFilterSheet = !showFilterSheet"
+              >
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M12 3c2.755 0 5.455.232 8.083.678.533.09.917.556.917 1.096v1.044a2.25 2.25 0 01-.659 1.591l-5.432 5.432a2.25 2.25 0 00-.659 1.591v2.927a2.25 2.25 0 01-1.244 2.013L9.75 21v-6.568a2.25 2.25 0 00-.659-1.591L3.659 7.409A2.25 2.25 0 013 5.818V4.774c0-.54.384-1.006.917-1.096A48.32 48.32 0 0112 3z" />
+                </svg>
+                <span>筛选</span>
+                <span
+                  v-if="narrowCount"
+                  class="inline-flex items-center justify-center min-w-[1.1rem] h-4 px-1 text-[10px] font-medium rounded-full bg-indigo-100 text-indigo-700"
+                >{{ narrowCount }}</span>
+              </button>
+
+              <!-- 遮罩与弹层是两个脱离文档流的兄弟节点，不套公共 wrapper：
+                   wrapper 会成为工具栏的 flex 项，展开时凭空多一个 gap 推走排序 -->
+              <Transition
+                enter-active-class="transition-opacity duration-150 ease-out"
+                enter-from-class="opacity-0"
+                leave-active-class="transition-opacity duration-100 ease-in"
+                leave-to-class="opacity-0"
+              >
+                <div
+                  v-if="showFilterSheet"
+                  class="md:hidden fixed inset-0 bg-slate-900/30 z-40"
+                  @click="showFilterSheet = false"
+                ></div>
+              </Transition>
+              <Transition
+                enter-active-class="transition-all duration-150 ease-out"
+                enter-from-class="opacity-0 translate-y-2 md:translate-y-0 md:scale-95"
+                leave-active-class="transition-all duration-100 ease-in"
+                leave-to-class="opacity-0 translate-y-2 md:translate-y-0 md:scale-95"
+              >
+                  <div
+                    v-if="showFilterSheet"
+                    class="fixed inset-x-0 bottom-0 z-50 max-h-[72vh] rounded-t-2xl border-t
+                           md:absolute md:inset-x-auto md:bottom-auto md:right-0 md:top-full md:z-30 md:mt-1.5
+                           md:w-72 md:rounded-xl md:border
+                           bg-white border-slate-200 shadow-xl flex flex-col"
+                    @click.stop
+                  >
+                    <div class="md:hidden pt-2 pb-1 flex justify-center shrink-0">
+                      <div class="w-9 h-1 rounded-full bg-slate-300"></div>
+                    </div>
+
+                    <div class="px-3 py-2.5 space-y-3 overflow-y-auto min-h-0">
+                      <!-- 来源：本页的临时收窄工具，不预勾选过滤器自身的来源 -->
+                      <div>
+                        <div class="flex items-center justify-between mb-1.5">
+                          <span class="text-xs font-medium text-slate-500">来源</span>
+                          <button
+                            v-if="filterSources.length"
+                            class="text-xs text-indigo-600 hover:text-indigo-800"
+                            @click="clearSources"
+                          >清除</button>
+                        </div>
+                        <div class="max-h-40 overflow-y-auto rounded-lg border border-slate-200">
+                          <label
+                            v-for="s in sourceOptions"
+                            :key="s.id"
+                            class="flex items-center gap-2 px-2.5 py-2 md:py-1.5 text-sm text-slate-700 hover:bg-slate-50 cursor-pointer transition-colors"
+                          >
+                            <input
+                              type="checkbox"
+                              :checked="filterSources.includes(String(s.id))"
+                              class="w-3.5 h-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500/20 shrink-0"
+                              @change="toggleSourceFilter(s.id)"
+                            />
+                            <span class="truncate">{{ s.name }}</span>
+                          </label>
+                          <div v-if="!sourceOptions.length" class="px-3 py-3 text-xs text-slate-400 text-center">暂无来源</div>
+                        </div>
+                      </div>
+
+                      <!-- 时间 -->
+                      <div>
+                        <span class="block text-xs font-medium text-slate-500 mb-1.5">时间</span>
+                        <div class="flex flex-wrap gap-1">
+                          <button
+                            v-for="dr in dateRangeOptions"
+                            :key="dr.value"
+                            class="px-2.5 py-1.5 text-xs rounded-lg border transition-all duration-200"
+                            :class="dateRange === dr.value
+                              ? 'text-indigo-700 bg-indigo-50 border-indigo-200 font-medium'
+                              : 'text-slate-600 bg-white border-slate-200 hover:border-slate-300'"
+                            @click="dateRange = dr.value"
+                          >{{ dr.label }}</button>
+                        </div>
+                      </div>
+
+                      <!-- 状态 -->
+                      <div>
+                        <span class="block text-xs font-medium text-slate-500 mb-1.5">状态</span>
+                        <div class="flex flex-wrap gap-1">
+                          <button
+                            v-for="st in statusOptions"
+                            :key="st.value"
+                            class="px-2.5 py-1.5 text-xs rounded-lg border transition-all duration-200"
+                            :class="filterStatus === st.value
+                              ? 'text-indigo-700 bg-indigo-50 border-indigo-200 font-medium'
+                              : 'text-slate-600 bg-white border-slate-200 hover:border-slate-300'"
+                            @click="filterStatus = st.value"
+                          >{{ st.label }}</button>
+                        </div>
+                      </div>
+
+                      <!-- 只看未读 -->
+                      <button class="w-full flex items-center justify-between py-1" @click="toggleUnread">
+                        <span class="text-xs font-medium text-slate-500">只看未读</span>
+                        <span
+                          class="relative w-9 h-5 rounded-full transition-colors duration-200 shrink-0"
+                          :class="showUnreadOnly ? 'bg-indigo-500' : 'bg-slate-200'"
+                        >
+                          <span
+                            class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow-sm transition-transform duration-200"
+                            :class="showUnreadOnly ? 'translate-x-4' : 'translate-x-0'"
+                          ></span>
+                        </span>
+                      </button>
+                    </div>
+
+                    <div class="shrink-0 flex items-center justify-between gap-2 px-3 pt-2 border-t border-slate-100
+                                pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))] md:pb-2">
+                      <button
+                        class="text-xs text-slate-500 hover:text-slate-700 disabled:opacity-40"
+                        :disabled="!narrowCount"
+                        @click="clearNarrowFilters"
+                      >清除筛选</button>
+                      <button
+                        class="md:hidden px-4 py-1.5 text-xs font-medium text-white bg-indigo-600 rounded-lg active:bg-indigo-700 transition-colors"
+                        @click="showFilterSheet = false"
+                      >完成</button>
+                    </div>
+                  </div>
+              </Transition>
+            </div>
+
+            <!-- 排序：视图偏好，与筛选正交，故留在工具栏 -->
+            <select
+              :value="sortBy"
+              @change="switchSort($event.target.value)"
+              class="shrink-0 bg-slate-50 text-xs text-slate-600 rounded-lg px-2 py-2 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all appearance-none cursor-pointer"
+            >
+              <option v-for="sort in sortOptions" :key="sort.value" :value="sort.value">{{ sort.label }}</option>
+            </select>
+
+            <!-- 密度切换（移动端隐藏） -->
+            <button
+              class="hidden md:inline-flex md:p-2 shrink-0 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-all"
+              :title="densityMode === 'compact' ? '切换舒适模式' : '切换紧凑模式'"
+              @click="toggleDensity"
+            >
+              <svg v-if="densityMode === 'compact'" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5M3.75 17.25h16.5" />
+              </svg>
+              <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 5.25h16.5m-16.5 4.5h16.5m-16.5 4.5h16.5m-16.5 4.5h16.5" />
+              </svg>
+            </button>
+            <!-- 快捷键帮助（移动端隐藏） -->
+            <button
+              class="hidden md:inline-flex md:p-2 shrink-0 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-all"
+              title="快捷键 (?)"
+              @click="showShortcutHelp = !showShortcutHelp"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9 5.25h.008v.008H12v-.008z" />
+              </svg>
+            </button>
+          </div>
+
+          <!-- 行 2 · 导航层：当前在看哪个范围。过滤器快捷方式横向滚动，
+               「全部已读」作用于当前过滤器范围，故与之同行、固定在右侧 -->
           <div class="flex items-center gap-2">
-            <div class="flex-1 min-w-0 overflow-x-auto scrollbar-hide">
+            <div class="relative flex-1 min-w-0">
+              <div class="overflow-x-auto scrollbar-hide">
               <div class="inline-flex items-center gap-0.5 bg-slate-100 rounded-xl p-0.5">
                 <button
                   v-for="f in cf.pinned"
                   :key="f.id"
-                  class="px-3 py-1 text-xs font-medium rounded-lg transition-all duration-200 whitespace-nowrap"
+                  class="px-3 py-1.5 md:py-1 text-xs font-medium rounded-lg transition-all duration-200 whitespace-nowrap"
                   :class="cf.activeId === f.id && !cf.dirty
                     ? 'bg-white text-slate-900 shadow-sm'
                     : cf.activeId === f.id
@@ -823,206 +1036,27 @@ onUnmounted(() => {
                   >{{ cf.badgeOf(f.id) }}</span>
                 </button>
               </div>
-            </div>
-              <!-- 全部已读按钮：作用范围是当前过滤条件，不是全库 -->
-              <button
-                v-if="currentUnread > 0"
-                class="text-sm md:text-xs text-slate-400 hover:text-indigo-600 transition-colors disabled:opacity-40 py-2 md:py-1.5"
-                :disabled="markingAllRead"
-                title="标记全部已读"
-                @click="handleMarkAllRead"
-              >
-                <span v-if="markingAllRead">标记中...</span>
-                <span v-else class="flex items-center gap-0.5">
-                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  全部已读
-                </span>
-              </button>
-            </div>
-            <div class="flex items-center gap-1 md:gap-1.5">
-          </div>
-
-          <!-- 行 2 · 筛选层：在当前范围内收窄。左侧筛选条件，右侧视图工具 -->
-          <div class="flex items-center gap-1 md:gap-1.5">
-            <!-- 搜索框 -->
-            <div class="relative hidden md:block flex-1 min-w-0">
-              <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
-              </svg>
-              <input
-                v-model="searchQuery"
-                type="text"
-                placeholder="搜索标题..."
-                class="w-full bg-slate-50 rounded-lg pl-9 pr-3 py-2 text-sm text-slate-700 placeholder-slate-400 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all"
-              />
-            </div>
-
-            <!-- 移动端搜索按钮 -->
-            <button
-              class="md:hidden p-1.5 rounded-lg transition-all duration-200 border shrink-0"
-              :class="showMobileSearch
-                ? 'text-indigo-600 bg-indigo-50 border-indigo-200'
-                : 'text-slate-400 bg-slate-50 border-slate-200'"
-              title="搜索"
-              @click="showMobileSearch = !showMobileSearch"
-            >
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
-              </svg>
-            </button>
-            <!-- 来源多选按钮 -->
-            <div class="relative shrink-0">
-              <button
-                class="flex items-center gap-1 px-2 py-1.5 md:px-3 md:py-2 text-xs font-medium rounded-lg border transition-all duration-200"
-                :class="filterSources.length
-                  ? 'text-indigo-700 bg-indigo-50 border-indigo-200'
-                  : 'text-slate-600 bg-slate-50 border-slate-200 hover:border-slate-300'"
-                @click.stop="showSourceDropdown = !showSourceDropdown"
-              >
-                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M12 3c2.755 0 5.455.232 8.083.678.533.09.917.556.917 1.096v1.044a2.25 2.25 0 01-.659 1.591l-5.432 5.432a2.25 2.25 0 00-.659 1.591v2.927a2.25 2.25 0 01-1.244 2.013L9.75 21v-6.568a2.25 2.25 0 00-.659-1.591L3.659 7.409A2.25 2.25 0 013 5.818V4.774c0-.54.384-1.006.917-1.096A48.32 48.32 0 0112 3z" />
-                </svg>
-                <span class="hidden md:inline">来源</span><span v-if="filterSources.length">({{ filterSources.length }})</span>
-                <svg class="w-3 h-3 transition-transform hidden md:block" :class="{ 'rotate-180': showSourceDropdown }" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
-                </svg>
-              </button>
-
-              <!-- 来源多选下拉 -->
-              <Transition
-                enter-active-class="transition-all duration-150 ease-out"
-                enter-from-class="opacity-0 scale-95"
-                enter-to-class="opacity-100 scale-100"
-                leave-active-class="transition-all duration-100 ease-in"
-                leave-from-class="opacity-100 scale-100"
-                leave-to-class="opacity-0 scale-95"
-              >
-                <div
-                  v-if="showSourceDropdown"
-                  class="absolute right-0 top-full mt-1 w-56 bg-white rounded-xl shadow-lg border border-slate-200 py-1 z-30 max-h-64 overflow-y-auto"
-                  @click.stop
-                >
-
-                  <div v-if="filterSources.length" class="px-3 py-1.5 border-b border-slate-100">
-                    <button @click="clearSources" class="text-xs text-indigo-600 hover:text-indigo-800">清除所有来源</button>
-                  </div>
-                  <label
-                    v-for="s in sourceOptions"
-                    :key="s.id"
-                    class="flex items-center gap-2 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 cursor-pointer transition-colors"
-                  >
-                    <input
-                      type="checkbox"
-                      :checked="filterSources.includes(String(s.id))"
-                      class="w-3.5 h-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500/20"
-                      @change="toggleSourceFilter(s.id)"
-                    />
-                    <span class="truncate">{{ s.name }}</span>
-                  </label>
-                  <div v-if="!sourceOptions.length" class="px-3 py-3 text-xs text-slate-400 text-center">暂无来源</div>
-                </div>
-              </Transition>
-            </div>
-
-            <!-- 日期范围 -->
-            <select
-              v-model="dateRange"
-              class="hidden md:block bg-slate-50 text-xs text-slate-600 rounded-lg px-2.5 py-2 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all appearance-none cursor-pointer shrink-0"
-            >
-              <option v-for="dr in dateRangeOptions" :key="dr.value" :value="dr.value">{{ dr.label }}</option>
-            </select>
-
-            <!-- 状态下拉 -->
-            <select
-              v-model="filterStatus"
-              class="hidden md:block bg-slate-50 text-xs text-slate-600 rounded-lg px-2.5 py-2 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all appearance-none cursor-pointer shrink-0"
-            >
-              <option v-for="st in statusOptions" :key="st.value" :value="st.value">{{ st.label }}</option>
-            </select>
-
-            <!-- 未读 toggle -->
-            <button
-              class="p-1.5 md:p-2 rounded-lg transition-all duration-200 border shrink-0"
-              :class="showUnreadOnly
-                ? 'text-blue-600 bg-blue-50 border-blue-200'
-                : 'text-slate-400 hover:text-slate-600 bg-slate-50 border-slate-200 hover:border-slate-300'"
-              :title="showUnreadOnly ? '显示全部' : '只看未读'"
-              @click="toggleUnread"
-            >
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.64 0 8.577 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.64 0-8.577-3.007-9.963-7.178z" />
-                <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
-            </button>
-            <div class="ml-auto flex items-center gap-1 shrink-0">
-              <select
-                :value="sortBy"
-                @change="switchSort($event.target.value)"
-                class="bg-slate-50 text-xs text-slate-600 rounded-lg px-3 py-1.5 md:px-2.5 md:py-2 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all appearance-none cursor-pointer"
-              >
-                <option v-for="sort in sortOptions" :key="sort.value" :value="sort.value">{{ sort.label }}</option>
-              </select>
-
-              <!-- 密度切换（移动端隐藏） -->
-              <button
-                class="hidden md:inline-flex md:p-2 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-all"
-                :title="densityMode === 'compact' ? '切换舒适模式' : '切换紧凑模式'"
-                @click="toggleDensity"
-              >
-                <svg v-if="densityMode === 'compact'" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5M3.75 17.25h16.5" />
-                </svg>
-                <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 5.25h16.5m-16.5 4.5h16.5m-16.5 4.5h16.5m-16.5 4.5h16.5" />
-                </svg>
-              </button>
-              <!-- 快捷键帮助（移动端隐藏） -->
-              <button
-                class="hidden md:inline-flex md:p-2 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-all"
-                title="快捷键 (?)"
-                @click="showShortcutHelp = !showShortcutHelp"
-              >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9 5.25h.008v.008H12v-.008z" />
-                </svg>
-              </button>
-            </div>
-          </div>
-
-          <!-- 移动端搜索栏（展开） -->
-          <Transition
-            enter-active-class="transition-all duration-200 ease-out"
-            enter-from-class="opacity-0 max-h-0"
-            enter-to-class="opacity-100 max-h-14"
-            leave-active-class="transition-all duration-150 ease-in"
-            leave-from-class="opacity-100 max-h-14"
-            leave-to-class="opacity-0 max-h-0"
-          >
-            <div v-if="showMobileSearch" class="md:hidden overflow-hidden">
-              <div class="relative px-1">
-                <svg class="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-                  <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
-                </svg>
-                <input
-                  v-model="searchQuery"
-                  type="text"
-                  placeholder="搜索标题..."
-                  class="w-full pl-9 pr-8 py-2 bg-slate-50 rounded-lg border border-slate-200 text-sm text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 transition-all"
-                />
-                <button
-                  v-if="searchQuery"
-                  class="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400 hover:text-slate-600 flex items-center justify-center"
-                  @click="searchQuery = ''"
-                >
-                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
               </div>
+              <!-- 右侧渐隐：过滤器多于一屏时（移动端常态）截断处不至于像被按钮压住 -->
+              <div class="pointer-events-none absolute inset-y-0 right-0 w-6 bg-gradient-to-l from-white to-transparent"></div>
             </div>
-          </Transition>
+            <!-- 全部已读按钮：作用范围是当前过滤条件，不是全库 -->
+            <button
+              v-if="currentUnread > 0"
+              class="shrink-0 text-xs text-slate-400 hover:text-indigo-600 transition-colors disabled:opacity-40 py-1.5"
+              :disabled="markingAllRead"
+              title="标记全部已读"
+              @click="handleMarkAllRead"
+            >
+              <span v-if="markingAllRead">标记中...</span>
+              <span v-else class="flex items-center gap-0.5">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <span>全部已读</span>
+              </span>
+            </button>
+          </div>
 
           <!-- 行 3 · 状态层：仅在偏离当前过滤器定义时出现 -->
           <div v-if="cf.dirty" class="flex items-center gap-1.5 flex-wrap">

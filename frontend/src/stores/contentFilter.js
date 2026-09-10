@@ -48,9 +48,9 @@ function seedFilters() {
   return [
     makeFilter({ id: 'all', name: '全部', pinned: true, order: 0, builtin: true,
       conditions: { unread: true } }),
-    makeFilter({ id: 'video', name: '有视频', pinned: false, order: 90, builtin: true,
+    makeFilter({ id: 'video', name: '视频', pinned: false, order: 90, builtin: true,
       conditions: { media_type: 'video' } }),
-    makeFilter({ id: 'audio', name: '有音频', pinned: false, order: 91, builtin: true,
+    makeFilter({ id: 'audio', name: '音频', pinned: false, order: 91, builtin: true,
       conditions: { media_type: 'audio' } }),
     makeFilter({ id: 'ebook', name: '电子书', pinned: false, order: 92, builtin: true,
       conditions: { media_type: 'ebook' } }),
@@ -152,7 +152,13 @@ export const useContentFilterStore = defineStore('contentFilter', () => {
     overrides.value = next
   }
 
-  function clearOverrides() { overrides.value = {} }
+  /** 不传 keys 清空全部临时覆盖；传 keys 只清这几维 */
+  function clearOverrides(keys) {
+    if (!keys || !keys.length) { overrides.value = {}; return }
+    const next = { ...overrides.value }
+    keys.forEach(k => delete next[k])
+    overrides.value = next
+  }
 
   /**
    * 信息流「来源」下拉专用。它与过滤器的 source_ids 定位不同：
@@ -197,6 +203,25 @@ export const useContentFilterStore = defineStore('contentFilter', () => {
     if (activeId.value === id) activate(filters.value[0]?.id || '')
   }
 
+  /**
+   * 内置媒体过滤器早期叫「有视频/有音频」，统一为「视频/音频」。
+   * 定义已落进 system_settings，改种子不影响老数据，故在读取时就地订正；
+   * 只改名字仍是旧值的（用户自己重命名过的不动）。
+   */
+  const BUILTIN_RENAMES = { video: ['有视频', '视频'], audio: ['有音频', '音频'] }
+  function renameLegacyBuiltins(list) {
+    let changed = false
+    const next = list.map(f => {
+      const r = BUILTIN_RENAMES[f.id]
+      if (f.builtin && r && f.name === r[0]) {
+        changed = true
+        return { ...f, name: r[1] }
+      }
+      return f
+    })
+    return { list: next, changed }
+  }
+
   /** 旧的 feed.source_groups 迁移为过滤器；旧 key 保留不删，便于回退 */
   function migrateLegacy(raw) {
     let groups = []
@@ -231,7 +256,11 @@ export const useContentFilterStore = defineStore('contentFilter', () => {
       filters.value = list
       try { await persist() } catch (_) { /* 首次播种失败不阻塞 */ }
     } else {
-      filters.value = list
+      const renamed = renameLegacyBuiltins(list)
+      filters.value = renamed.list
+      if (renamed.changed) {
+        try { await persist() } catch (_) { /* 订正失败下次再来，不阻塞列表 */ }
+      }
     }
 
     let want = ''
