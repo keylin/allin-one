@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { getSettings, updateSettings } from '@/api/settings'
+import { listContent } from '@/api/content'
 
 /**
  * 内容过滤器 — 统一的数据消费状态管理。
@@ -78,9 +79,19 @@ export const useContentFilterStore = defineStore('contentFilter', () => {
 
   const dirty = computed(() => Object.keys(overrides.value).length > 0)
 
-  /** 生效条件 → listContent 的请求参数 */
-  const params = computed(() => {
-    const c = effective.value
+  function dateFromOf(range) {
+    if (!range) return null
+    const now = new Date()
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    const days = { today: 0, '3d': 2, '7d': 6, '30d': 29 }[range]
+    if (days === undefined) return null
+    const d = new Date(today.getTime() - days * 86400000)
+    const pad = n => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+  }
+
+  /** 条件 → listContent 请求参数。列表查询与未读计数共用同一套转换 */
+  function toParams(c) {
     const p = {}
     const known = new Set(sourceOptions.value.map(s => String(s.id)))
     const ids = (c.source_ids || []).map(String).filter(id => !known.size || known.has(id))
@@ -94,8 +105,43 @@ export const useContentFilterStore = defineStore('contentFilter', () => {
     if (c.favorited === true) p.is_favorited = true
     if (c.tag) p.tag = c.tag
     if (c.q && c.q.trim()) p.q = c.q.trim()
+    const df = dateFromOf(c.date_range)
+    if (df) p.date_from = df
     return p
-  })
+  }
+
+  const params = computed(() => toParams(effective.value))
+
+  // 每个固定过滤器各自的未读数：按它的条件、但强制只数未读
+  const unreadCounts = ref({})
+  let countsLoading = false
+
+  async function loadUnreadCounts() {
+    if (countsLoading) return
+    countsLoading = true
+    try {
+      const targets = pinned.value
+      const pairs = await Promise.all(targets.map(async (f) => {
+        const p = { ...toParams({ ...emptyConditions(), ...f.conditions, unread: true }), page_size: 1 }
+        try {
+          const res = await listContent(p)
+          return [f.id, res.code === 0 ? (res.total || 0) : 0]
+        } catch (_) {
+          return [f.id, unreadCounts.value[f.id] ?? 0]
+        }
+      }))
+      unreadCounts.value = Object.fromEntries(pairs)
+    } finally {
+      countsLoading = false
+    }
+  }
+
+  /** 徽标文案：0 不显示，超过 99 收敛为 99+ */
+  function badgeOf(id) {
+    const n = unreadCounts.value[id] || 0
+    if (n <= 0) return ''
+    return n > 99 ? '99+' : String(n)
+  }
 
   function setOverride(key, value) {
     const base = active.value?.conditions?.[key]
@@ -197,6 +243,8 @@ export const useContentFilterStore = defineStore('contentFilter', () => {
   return {
     filters, activeId, overrides, loaded, sourceOptions,
     sorted, pinned, active, effective, dirty, params,
+    unreadCounts,
     setOverride, setSourcePick, clearOverrides, activate, upsert, remove, persist, load,
+    toParams, loadUnreadCounts, badgeOf,
   }
 })

@@ -61,30 +61,6 @@ const dateRangeOptions = [
   { value: '30d', label: '近 30 天' },
 ]
 
-function getDateParams() {
-  if (!dateRange.value) return {}
-  const now = new Date()
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-  let dateFrom
-  switch (dateRange.value) {
-    case 'today':
-      dateFrom = today
-      break
-    case '3d':
-      dateFrom = new Date(today.getTime() - 2 * 86400000)
-      break
-    case '7d':
-      dateFrom = new Date(today.getTime() - 6 * 86400000)
-      break
-    case '30d':
-      dateFrom = new Date(today.getTime() - 29 * 86400000)
-      break
-    default:
-      return {}
-  }
-  const fmt = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-  return { date_from: fmt(dateFrom) }
-}
 
 // 密度模式
 const densityMode = ref(localStorage.getItem('feed_density') || 'comfortable')
@@ -104,11 +80,18 @@ const showMobileSearch = ref(false)
 const newContentCount = ref(0)
 let lastKnownTotal = null
 
+// 当前过滤器下的未读数——「全部已读」与阅读进度都以它为准，而非全库总数
+const currentUnread = computed(() => cf.unreadCounts[cf.activeId] ?? 0)
+watch(currentUnread, (n) => {
+  // 进度基准：切过滤器后按新范围重新起算
+  if (sessionInitialUnread.value === 0 && n > 0) sessionInitialUnread.value = n
+})
+
 // 阅读进度：基于未读消化比例
 const sessionInitialUnread = ref(0)
 const readingProgress = computed(() => {
   if (sessionInitialUnread.value <= 0) return 0
-  const consumed = sessionInitialUnread.value - contentStats.value.unread
+  const consumed = sessionInitialUnread.value - currentUnread.value
   return Math.min(100, Math.max(0, (consumed / sessionInitialUnread.value) * 100))
 })
 
@@ -235,7 +218,9 @@ function clearSources() {
 // --- 过滤器消费端：快捷方式切换 + 把当前临时调整存为新过滤器 ---
 function switchFilter(id) {
   cf.activate(id)
+  sessionInitialUnread.value = 0   // 进度条按新过滤器范围重新起算
   fetchItems(true)
+  cf.loadUnreadCounts()
 }
 
 async function saveOverridesAsFilter() {
@@ -306,8 +291,6 @@ async function fetchItems(reset = false) {
     }
     // 筛选条件唯一来源：store（定义 + 临时覆盖），本视图不再自行拼装
     Object.assign(params, cf.params)
-    const dp = getDateParams()
-    if (dp.date_from) params.date_from = dp.date_from
 
     // 游标分页: 非 reset 且有已加载项时，用最后一条的 id 作为游标
     if (!reset && items.value.length > 0) {
@@ -533,15 +516,12 @@ function closeEnrichModal() {
 const markingAllRead = ref(false)
 
 async function handleMarkAllRead() {
-  if (markingAllRead.value || contentStats.value.unread === 0) return
-  if (!confirm(`确认将 ${contentStats.value.unread} 条未读内容标记为已读？`)) return
+  if (markingAllRead.value || currentUnread.value === 0) return
+  const scope = cf.active ? `「${cf.active.name}」下的 ` : ''
+  if (!confirm(`确认将${scope}${currentUnread.value} 条未读内容标记为已读？`)) return
   markingAllRead.value = true
   try {
-    const params = { ...cf.params }
-    const dp = getDateParams()
-    if (dp.date_from) params.date_from = dp.date_from
-
-    const res = await markAllRead(params)
+    const res = await markAllRead({ ...cf.params })
     if (res.code === 0) {
       // 更新本地列表状态
       items.value.forEach(item => {
@@ -701,11 +681,9 @@ async function loadStats() {
         unread: res.data.unread || 0,
         total: newTotal,
       }
+      cf.loadUnreadCounts()
 
-      // 首次（或重置后）捕获初始未读数作为阅读进度基准
-      if (sessionInitialUnread.value === 0 && contentStats.value.unread > 0) {
-        sessionInitialUnread.value = contentStats.value.unread
-      }
+
     }
   } catch (_) { /* ignore */ }
   finally { statsLoading = false }
@@ -764,6 +742,7 @@ onMounted(async () => {
   // 恢复 URL 里的来源筛选（activate 会清覆盖，故必须放在其后）
   if (route.query.source_id) cf.setSourcePick(String(route.query.source_id).split(','))
   fetchItems(true)
+  cf.loadUnreadCounts()   // 首个 loadStats 早于 cf.load()，那时 pinned 还是空的
   document.addEventListener('keydown', handleKeydown)
   document.addEventListener('click', handleClickOutside)
 })
@@ -824,18 +803,10 @@ onUnmounted(() => {
           <!-- 计数 + 排序 + 密度切换 -->
           <div class="flex items-center justify-between">
             <div class="flex items-center gap-2">
-              <p class="text-sm md:text-xs text-slate-400">
-                <span v-if="contentStats.unread > 0" class="inline-flex items-center gap-1">
-                  <span class="inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1.5 text-xs font-medium rounded-full bg-indigo-100 text-indigo-700">
-                    {{ contentStats.unread }}
-                  </span>
-                  <span>未读</span>
-                </span>
-                <span v-else class="text-slate-300">已全部阅读</span>
-              </p>
-              <!-- 全部已读按钮 -->
+              <p v-if="!currentUnread" class="text-sm md:text-xs text-slate-300">已全部阅读</p>
+              <!-- 全部已读按钮：作用范围是当前过滤条件，不是全库 -->
               <button
-                v-if="contentStats.unread > 0"
+                v-if="currentUnread > 0"
                 class="text-sm md:text-xs text-slate-400 hover:text-indigo-600 transition-colors disabled:opacity-40 py-2 md:py-1.5"
                 :disabled="markingAllRead"
                 title="标记全部已读"
@@ -1112,6 +1083,11 @@ onUnmounted(() => {
                 @click="switchFilter(f.id)"
               >
                 {{ f.name }}
+                <span
+                  v-if="cf.badgeOf(f.id)"
+                  class="ml-1 inline-flex items-center justify-center min-w-[1.1rem] h-4 px-1 text-[10px] font-medium rounded-full align-middle"
+                  :class="cf.activeId === f.id ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-200 text-slate-600'"
+                >{{ cf.badgeOf(f.id) }}</span>
               </button>
             </div>
 
