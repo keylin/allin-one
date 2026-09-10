@@ -95,7 +95,10 @@ vim scripts/utils/cleanup_data.py
 - DB 连接池: `DB_POOL_SIZE`（默认 10）/ `DB_MAX_OVERFLOW`（默认 5）环境变量控制，各容器独立配置
 - LLM API Key 加密存储: `system_settings` 中 `api_key/token/password/secret` 关键词的键值与 `credential_data` 同套 Fernet 加密；`GET /api/settings` 返回解密后掩码（显示末 4 位原始字符）
 - 源是否在采集 = `is_active AND schedule_enabled` **两个字段的与**（`scheduled_tasks.py` 选源条件，对应索引 `ix_source_next_collection`）。两者语义不同：`is_active` 是源的启停，前端源列表的开关改的是它；`schedule_enabled` 是定时采集开关，USER 类源建源时自动置 false。**排查「某源为何不采集/为何还在采集」必须同时查两个**，只看其一会误判。重新启用时前端会顺带把非 USER 类源的 `schedule_enabled` 恢复为 true（见 SourcesView 的 restoreSchedule）
-- 来源分组（浏览端过滤器，无表无字段）: `system_settings` 的 `feed.source_groups` 存 `[{name, source_ids}]`，FeedView 的来源下拉据此渲染分组按钮，点击填充已有的多选筛选；`GET /api/content?source_id=a,b,c` 早已支持逗号分隔多值，故整套功能不碰数据模型。**分组是消费视角不是源的属性**，不要为它给 `source_configs` 加字段——同一个源在不同视角下可归不同组。当前约定：`情报`（研判用）与 `浏览`（B站关注流/摄影/订阅视频等个人消费流）。外部消费方（the-one 的 `scripts/intel-query.py`）读同一个 key，用「全部源 - 浏览组」的排除法算情报源，保证新源默认进情报侧不被静默漏掉
+- 内容过滤器（无表无字段，三层分离）: **定义层** `system_settings` 的 `content.filters`（`{version, filters[]}`，每个过滤器 = `{id,name,emoji,pinned,order,conditions}`，conditions 覆盖 source_ids / media_type / status / unread / favorited / date_range / tag / q 全部维度）；**状态层** `stores/contentFilter.js` 是数据消费状态的唯一所有者，持有「定义 + 当前激活 + 临时覆盖(overrides)」，其 `params` computed 是列表请求参数的唯一来源；**消费端** FeedView 只渲染 pinned 过滤器的快捷方式并读 store，不自行拼装筛选参数，**配置端** 设置 → 内容过滤器 负责增删改。两端只经 store 与 settings 通信。
+  - 筛选条（chip 区）只渲染 `overrides`，绝不渲染过滤器自身的条件——否则选中一个含 55 个来源的过滤器会把它们全铺成标签，这是历史上返工两次的形态。过滤器自身条件由快捷方式高亮表达。
+  - 分类是消费视角不是源的属性，**不要给 `source_configs` 加 purpose 之类的字段**；同一个源在不同过滤器里可归不同组。
+  - 外部消费方（the-one 的 `scripts/intel-query.py`）读同一个 key，按名字取「浏览」过滤器的 source_ids，用「全部源 - 浏览类」的排除法算情报源，保证新源默认进情报侧不被静默漏掉；旧 `feed.source_groups` 自动迁移且保留可回退
 - MCP 金融数据源: 蚂蚁 financial-data API 为主源（`FINANCIAL_DATA_*` 环境变量，key 走基础设施密钥模式，不经 system_settings+Fernet），akshare/雪球为降级路径；`FINANCIAL_DATA_ENABLED=false` 或留空 API key 即一键全量回退，详见 `docs/system_design.md` §10.5
 
 ## 文档导航
