@@ -9,6 +9,7 @@ import NotificationSettings from '@/components/settings/notification-settings.vu
 import RetentionSettings from '@/components/settings/retention-settings.vue'
 import SchedulingSettings from '@/components/settings/scheduling-settings.vue'
 import CredentialSettings from '@/components/settings/credential-settings.vue'
+import FilterManager from '@/components/filter-manager.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -19,6 +20,7 @@ const loading = ref(true)
 // ---- Tab ----
 const tabs = [
   { id: 'llm', label: 'LLM 配置' },
+  { id: 'filters', label: '内容过滤器' },
   { id: 'smtp', label: '邮件推送' },
   { id: 'notify', label: '通知渠道' },
   { id: 'retention', label: '内容保留' },
@@ -378,8 +380,13 @@ onMounted(async () => {
 
     <!-- Tab content -->
     <template v-else>
+      <!-- 内容过滤器（配置端；消费端在信息流顶部） -->
+      <div v-if="activeTab === 'filters'" class="flex-1 overflow-y-auto">
+        <FilterManager />
+      </div>
+
       <!-- LLM 配置 -->
-      <div v-if="activeTab === 'llm'" class="flex-1 overflow-y-auto">
+      <div v-else-if="activeTab === 'llm'" class="flex-1 overflow-y-auto">
         <LlmSettings
           ref="llmSettingsRef"
           :form="form"
