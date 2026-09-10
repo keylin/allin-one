@@ -35,7 +35,6 @@ export function makeFilter(patch = {}) {
   return {
     id: patch.id || `f_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
     name: patch.name || '未命名',
-    emoji: patch.emoji || '',
     pinned: patch.pinned !== false,
     order: patch.order ?? 0,
     builtin: !!patch.builtin,
@@ -108,6 +107,18 @@ export const useContentFilterStore = defineStore('contentFilter', () => {
   }
 
   function clearOverrides() { overrides.value = {} }
+
+  /**
+   * 信息流「来源」下拉专用。它与过滤器的 source_ids 定位不同：
+   * 过滤器决定看哪一批内容，来源下拉是页面上的临时收窄工具，因此不预勾选
+   * 过滤器的来源，也不因切换过滤器而变化。空数组即撤销该覆盖。
+   */
+  function setSourcePick(ids) {
+    const next = { ...overrides.value }
+    if (!ids || !ids.length) delete next.source_ids
+    else next.source_ids = ids.map(String)
+    overrides.value = next
+  }
 
   function activate(id) {
     if (activeId.value === id) return
@@ -186,6 +197,6 @@ export const useContentFilterStore = defineStore('contentFilter', () => {
   return {
     filters, activeId, overrides, loaded, sourceOptions,
     sorted, pinned, active, effective, dirty, params,
-    setOverride, clearOverrides, activate, upsert, remove, persist, load,
+    setOverride, setSourcePick, clearOverrides, activate, upsert, remove, persist, load,
   }
 })

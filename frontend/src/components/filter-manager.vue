@@ -163,7 +163,6 @@ onMounted(async () => {
         <div class="flex items-start justify-between gap-3">
           <div class="min-w-0">
             <div class="flex items-center gap-1.5">
-              <span v-if="f.emoji">{{ f.emoji }}</span>
               <span class="text-sm font-medium text-slate-800 truncate">{{ f.name }}</span>
               <span v-if="f.pinned" class="px-1.5 py-0.5 text-[10px] rounded bg-indigo-50 text-indigo-600 border border-indigo-100">固定</span>
             </div>
@@ -187,18 +186,11 @@ onMounted(async () => {
 
     <!-- 编辑器 -->
     <div v-else class="border border-slate-200 rounded-xl p-4 space-y-4">
-      <div class="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-3">
-        <label class="block">
-          <span class="text-xs font-medium text-slate-600">名称</span>
-          <input v-model="editing.name" type="text" placeholder="例如：情报"
-            class="mt-1 w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300" />
-        </label>
-        <label class="block md:w-24">
-          <span class="text-xs font-medium text-slate-600">图标</span>
-          <input v-model="editing.emoji" type="text" maxlength="2" placeholder="📡"
-            class="mt-1 w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300" />
-        </label>
-      </div>
+      <label class="block">
+        <span class="text-xs font-medium text-slate-600">名称</span>
+        <input v-model="editing.name" type="text" placeholder="例如：情报"
+          class="mt-1 w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300" />
+      </label>
 
       <label class="flex items-center gap-2 text-sm text-slate-700">
         <input v-model="editing.pinned" type="checkbox" class="w-4 h-4 rounded border-slate-300 text-indigo-600" />

@@ -35,7 +35,12 @@ function bind(key, get, set) {
   return computed({ get: () => get(cf.effective), set: v => cf.setOverride(key, set ? set(v) : v) })
 }
 const searchQuery = bind('q', c => c.q || '')
-const filterSources = bind('source_ids', c => c.source_ids || [])
+// 「来源」是本页的临时收窄工具，与过滤器定位不同：不预勾选过滤器的来源，
+// 也不随过滤器切换而变化；勾了就以所选来源为准，清空即回到过滤器的范围。
+const filterSources = computed({
+  get: () => cf.overrides.source_ids || [],
+  set: v => cf.setSourcePick(v),
+})
 const filterStatus = bind('status', c => c.status || '')
 const filterTag = bind('tag', c => c.tag || '')
 const dateRange = bind('date_range', c => c.date_range || '')
@@ -1104,7 +1109,7 @@ onUnmounted(() => {
                     : 'text-slate-500 hover:text-slate-700'"
                 @click="switchFilter(f.id)"
               >
-                <span v-if="f.emoji" class="mr-1">{{ f.emoji }}</span>{{ f.name }}
+                {{ f.name }}
               </button>
             </div>
 
@@ -1114,12 +1119,6 @@ onUnmounted(() => {
               <button class="text-xs text-slate-500 hover:text-slate-700 px-1.5 py-0.5 rounded hover:bg-slate-100" @click="resetOverrides">还原</button>
               <button class="text-xs text-indigo-600 hover:text-indigo-800 px-1.5 py-0.5 rounded hover:bg-indigo-50 whitespace-nowrap" @click="saveOverridesAsFilter">存为过滤器</button>
             </div>
-
-            <router-link
-              to="/settings?tab=filters"
-              class="text-xs text-slate-400 hover:text-slate-600 whitespace-nowrap shrink-0 ml-auto"
-              title="管理过滤器"
-            >管理</router-link>
           </div>
 
           <!-- 阅读进度条（内嵌在 sticky header 底部） -->
