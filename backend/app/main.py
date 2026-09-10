@@ -199,14 +199,29 @@ app.include_router(bilibili_auth.router, prefix="/api/credentials/bilibili", tag
 # Static files (Vue frontend) — 必须最后注册，catch-all 会拦截未匹配路由
 # SPA fallback: 非文件路径回落到 index.html（支持 Vue Router history 模式）
 class SPAStaticFiles(StaticFiles):
+    """SPA 静态服务 + 缓存策略。
+
+    index.html 必须 no-cache：它引用的是带内容 hash 的 chunk 名，一旦自身被浏览器
+    缓存，前端发版后用户仍会去取旧 chunk，改动看不见（2026-09-10 排查过一次，
+    服务端产物正确但页面行为是旧的）。/assets/ 下文件名含 hash，可长缓存。
+    """
+
     async def get_response(self, path: str, scope):
         from starlette.exceptions import HTTPException as StarletteHTTPException
+        served = path
         try:
-            return await super().get_response(path, scope)
+            response = await super().get_response(path, scope)
         except StarletteHTTPException as ex:
-            if ex.status_code == 404:
-                return await super().get_response("index.html", scope)
-            raise
+            if ex.status_code != 404:
+                raise
+            served = "index.html"
+            response = await super().get_response(served, scope)
+
+        if served.startswith("assets/"):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        else:
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
 
 
 if os.path.isdir("static"):

@@ -761,6 +761,8 @@ onMounted(async () => {
   } catch (_) { /* ignore */ }
   await cf.load()
   if (route.query.f && cf.filters.some(f => f.id === route.query.f)) cf.activate(route.query.f)
+  // 恢复 URL 里的来源筛选（activate 会清覆盖，故必须放在其后）
+  if (route.query.source_id) cf.setSourcePick(String(route.query.source_id).split(','))
   fetchItems(true)
   document.addEventListener('keydown', handleKeydown)
   document.addEventListener('click', handleClickOutside)
