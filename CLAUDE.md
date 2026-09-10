@@ -94,6 +94,7 @@ vim scripts/utils/cleanup_data.py
 - 凭证加密: `platform_credentials.credential_data` 使用 Fernet 对称加密 (`CREDENTIAL_ENCRYPTION_KEY` 环境变量)，未配置时透传明文，兼容历史数据
 - DB 连接池: `DB_POOL_SIZE`（默认 10）/ `DB_MAX_OVERFLOW`（默认 5）环境变量控制，各容器独立配置
 - LLM API Key 加密存储: `system_settings` 中 `api_key/token/password/secret` 关键词的键值与 `credential_data` 同套 Fernet 加密；`GET /api/settings` 返回解密后掩码（显示末 4 位原始字符）
+- 来源分组（浏览端过滤器，无表无字段）: `system_settings` 的 `feed.source_groups` 存 `[{name, source_ids}]`，FeedView 的来源下拉据此渲染分组按钮，点击填充已有的多选筛选；`GET /api/content?source_id=a,b,c` 早已支持逗号分隔多值，故整套功能不碰数据模型。**分组是消费视角不是源的属性**，不要为它给 `source_configs` 加字段——同一个源在不同视角下可归不同组。当前约定：`情报`（研判用）与 `浏览`（B站关注流/摄影/订阅视频等个人消费流）。外部消费方（the-one 的 `scripts/intel-query.py`）读同一个 key，用「全部源 - 浏览组」的排除法算情报源，保证新源默认进情报侧不被静默漏掉
 - MCP 金融数据源: 蚂蚁 financial-data API 为主源（`FINANCIAL_DATA_*` 环境变量，key 走基础设施密钥模式，不经 system_settings+Fernet），akshare/雪球为降级路径；`FINANCIAL_DATA_ENABLED=false` 或留空 API key 即一键全量回退，详见 `docs/system_design.md` §10.5
 
 ## 文档导航

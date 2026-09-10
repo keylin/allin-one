@@ -2,6 +2,7 @@
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { listContent, getContent, analyzeContent, toggleFavorite, listSourceOptions, enrichContent, applyEnrichment, getContentStats, markAllRead } from '@/api/content'
+import { getSettings, updateSettings } from '@/api/settings'
 import { useToast } from '@/composables/useToast'
 import { usePullToRefresh } from '@/composables/usePullToRefresh'
 import { useDoubleTapClose } from '@/composables/useDoubleTapClose'
@@ -38,6 +39,9 @@ const showFavoritesOnly = ref(route.query.favorites === '1')
 const showUnreadOnly = ref(route.query.unread !== '0')
 const sourceOptions = ref([])
 const showSourceDropdown = ref(false)
+// 来源分组（浏览端过滤器预设，存于 system_settings）
+const SOURCE_GROUPS_KEY = 'feed.source_groups'
+const sourceGroups = ref([])
 let searchTimer = null
 
 // 标签筛选
@@ -227,6 +231,71 @@ function toggleSourceFilter(id) {
 
 function clearSources() {
   filterSources.value = []
+}
+
+// --- 来源分组：把一组来源存成命名预设，一键切换 ---
+async function loadSourceGroups() {
+  try {
+    const res = await getSettings()
+    if (res.code !== 0) return
+    const raw = res.data?.[SOURCE_GROUPS_KEY]?.value
+    if (!raw) return
+    const parsed = JSON.parse(raw)
+    if (Array.isArray(parsed)) {
+      sourceGroups.value = parsed.filter(g => g && g.name && Array.isArray(g.source_ids))
+    }
+  } catch (_) { /* 分组为可选功能，读取失败不影响筛选 */ }
+}
+
+async function persistSourceGroups() {
+  try {
+    await updateSettings({ [SOURCE_GROUPS_KEY]: JSON.stringify(sourceGroups.value) })
+    return true
+  } catch (_) {
+    toastError('分组保存失败')
+    return false
+  }
+}
+
+// 当前勾选恰好等于某个分组时，高亮该分组
+const activeGroupName = computed(() => {
+  if (!filterSources.value.length) return ''
+  const cur = [...filterSources.value].sort().join(',')
+  const hit = sourceGroups.value.find(g => [...g.source_ids].map(String).sort().join(',') === cur)
+  return hit ? hit.name : ''
+})
+
+function applySourceGroup(group) {
+  // 再次点击已激活的分组则取消，回到全部来源
+  if (activeGroupName.value === group.name) {
+    filterSources.value = []
+    return
+  }
+  const known = new Set(sourceOptions.value.map(s => String(s.id)))
+  filterSources.value = group.source_ids.map(String).filter(id => known.has(id))
+}
+
+async function saveCurrentAsGroup() {
+  if (!filterSources.value.length) {
+    toastError('请先勾选来源，再存为分组')
+    return
+  }
+  const name = (window.prompt('分组名称', activeGroupName.value || '') || '').trim()
+  if (!name) return
+  const ids = [...filterSources.value]
+  const idx = sourceGroups.value.findIndex(g => g.name === name)
+  if (idx >= 0) {
+    sourceGroups.value = sourceGroups.value.map((g, i) => (i === idx ? { name, source_ids: ids } : g))
+  } else {
+    sourceGroups.value = [...sourceGroups.value, { name, source_ids: ids }]
+  }
+  if (await persistSourceGroups()) toastSuccess(`已保存分组「${name}」`)
+}
+
+async function removeSourceGroup(name) {
+  const backup = sourceGroups.value
+  sourceGroups.value = sourceGroups.value.filter(g => g.name !== name)
+  if (!(await persistSourceGroups())) sourceGroups.value = backup
 }
 
 // 选中项在列表中的 index
@@ -755,6 +824,7 @@ onMounted(async () => {
     const res = await listSourceOptions()
     if (res.code === 0) sourceOptions.value = res.data
   } catch (_) { /* ignore */ }
+  loadSourceGroups()
   document.addEventListener('keydown', handleKeydown)
   document.addEventListener('click', handleClickOutside)
 })
@@ -874,8 +944,29 @@ onUnmounted(() => {
                     class="absolute right-0 top-full mt-1 w-56 bg-white rounded-xl shadow-lg border border-slate-200 py-1 z-30 max-h-64 overflow-y-auto"
                     @click.stop
                   >
-                    <div v-if="filterSources.length" class="px-3 py-1.5 border-b border-slate-100">
+                    <div v-if="sourceGroups.length" class="px-3 py-2 border-b border-slate-100">
+                      <div class="text-[10px] font-medium text-slate-400 mb-1.5">分组</div>
+                      <div class="flex flex-wrap gap-1">
+                        <span
+                          v-for="g in sourceGroups"
+                          :key="g.name"
+                          class="group/grp inline-flex items-center rounded-md border text-xs transition-colors"
+                          :class="activeGroupName === g.name
+                            ? 'text-indigo-700 bg-indigo-50 border-indigo-200'
+                            : 'text-slate-600 bg-slate-50 border-slate-200 hover:border-slate-300'"
+                        >
+                          <button class="px-2 py-0.5" @click="applySourceGroup(g)">{{ g.name }}</button>
+                          <button
+                            class="pr-1.5 text-slate-300 hover:text-rose-500 opacity-0 group-hover/grp:opacity-100 transition-opacity"
+                            title="删除分组"
+                            @click.stop="removeSourceGroup(g.name)"
+                          >&times;</button>
+                        </span>
+                      </div>
+                    </div>
+                    <div v-if="filterSources.length" class="px-3 py-1.5 border-b border-slate-100 flex items-center justify-between gap-2">
                       <button @click="clearSources" class="text-xs text-indigo-600 hover:text-indigo-800">清除所有来源</button>
+                      <button @click="saveCurrentAsGroup" class="text-xs text-slate-500 hover:text-slate-700 shrink-0">存为分组</button>
                     </div>
                     <label
                       v-for="s in sourceOptions"
