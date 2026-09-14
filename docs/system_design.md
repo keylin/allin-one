@@ -789,7 +789,7 @@ class PaginatedResponse(APIResponse):
 GET  /api/dashboard/stats              → { sources_count, contents_today/yesterday/total(剔除重复项), pipelines_running, pipelines_failed(近 24h), pipelines_pending, as_of }
 GET  /api/dashboard/collection-trend   → 采集趋势数据（count 剔除重复项；含采集成功率）
 GET  /api/dashboard/daily-stats        → 每日统计（items_found 为源端发现总数，items_new 为实际新增）
-GET  /api/dashboard/source-health      → 数据源健康状态（consecutive_failures + 近 7 天失败率双维度；sync 类源单独分级不参与判定）
+GET  /api/dashboard/source-health      → { window_days, summary{healthy,warning,error,disabled,sync}, sources[] }。只对启用且需采集的源分 healthy/warning/error 三级（consecutive_failures + 近 7 天失败率），每源附 reasons[]、窗口内采集/失败/新增数、last_collected_at、last_item_at；disabled/sync 仅计数
 GET  /api/dashboard/recent-content     → 最近采集的内容
 GET  /api/dashboard/content-status-distribution → 内容状态分布
 GET  /api/dashboard/storage-stats      → 存储统计

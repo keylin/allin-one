@@ -265,74 +265,101 @@ def get_daily_stats(
 
 @router.get("/source-health")
 def get_source_health(db: Session = Depends(get_db)):
-    """获取数据源健康状态概览
+    """信息源健康概览
 
-    健康判定同时看两个维度：
-    - consecutive_failures：当前是否处于连续失败（成功一次即归零，只反映"上一次"）
-    - 近 7 天采集失败率：暴露间歇性失败（DNS 抖动、限流等），否则一次成功就全绿
+    只对"启用且需要采集"的源做健康判定，分三档：
+      error    连续失败 >= 3 或近 7 天失败率 >= 50%
+      warning  连续失败 >= 1 或近 7 天失败率 >= 20%
+      healthy  其余
+    已禁用（disabled）和外部同步型（sync）只计数、不判定。
 
-    分级：
-      disabled  未启用
-      sync      非采集型源（外部同步/用户提交），不参与判定
-      error     连续失败 >= 3 或 7 天失败率 >= 50%
-      warning   连续失败 >= 1 或 7 天失败率 >= 20%
-      healthy   其余
+    每个源附带判定依据（reasons）、近 7 天采集/失败/新增数、最近采集与最近有新内容的时间，
+    前端据此渲染"需要关注"列表；没有异常时退化为近 7 天失败率排行，保证列表始终有信息量。
     """
-    window_start = utcnow() - timedelta(days=_SOURCE_HEALTH_WINDOW_DAYS)
+    now = utcnow()
+    window_start = now - timedelta(days=_SOURCE_HEALTH_WINDOW_DAYS)
+
     window_rows = (
         db.query(
             CollectionRecord.source_id,
             func.count(CollectionRecord.id).label("total"),
             func.sum(case((CollectionRecord.status == "failed", 1), else_=0)).label("failed"),
+            func.sum(func.coalesce(CollectionRecord.items_new, 0)).label("items_new"),
         )
         .filter(CollectionRecord.started_at >= window_start)
         .group_by(CollectionRecord.source_id)
         .all()
     )
-    window_map = {r.source_id: (r.total, r.failed or 0) for r in window_rows}
+    window_map = {r.source_id: (r.total, r.failed or 0, r.items_new or 0) for r in window_rows}
 
-    sources = (
-        db.query(SourceConfig)
-        .order_by(SourceConfig.consecutive_failures.desc(), SourceConfig.name)
+    last_item_rows = (
+        db.query(ContentItem.source_id, func.max(ContentItem.collected_at).label("last_item"))
+        .filter(ContentItem.source_id.isnot(None))
+        .group_by(ContentItem.source_id)
         .all()
     )
+    last_item_map = {r.source_id: r.last_item for r in last_item_rows}
 
+    sources = db.query(SourceConfig).order_by(SourceConfig.name).all()
+
+    summary = {"healthy": 0, "warning": 0, "error": 0, "disabled": 0, "sync": 0}
     data = []
     for s in sources:
-        total, failed = window_map.get(s.id, (0, 0))
+        total, failed, items_new = window_map.get(s.id, (0, 0, 0))
         failure_rate = round(failed / total * 100, 1) if total > 0 else 0.0
+        last_item = last_item_map.get(s.id)
+        reasons: list[str] = []
 
         if not s.is_active:
             health = "disabled"
         elif _is_non_collecting(s.source_type):
             health = "sync"
-        elif s.consecutive_failures >= 3 or failure_rate >= 50:
-            health = "error"
-        elif s.consecutive_failures >= 1 or failure_rate >= 20:
-            health = "warning"
         else:
-            health = "healthy"
+            if s.consecutive_failures >= 3 or failure_rate >= 50:
+                health = "error"
+            elif s.consecutive_failures >= 1 or failure_rate >= 20:
+                health = "warning"
+            else:
+                health = "healthy"
+            if s.consecutive_failures > 0:
+                reasons.append(f"连续失败 {s.consecutive_failures} 次")
+            if failed > 0:
+                reasons.append(f"近 {_SOURCE_HEALTH_WINDOW_DAYS} 天失败 {failed}/{total}（{failure_rate:g}%）")
+            if total > 0 and items_new == 0:
+                if last_item:
+                    idle_days = (now - last_item).days
+                    reasons.append(f"{idle_days} 天无新内容" if idle_days >= 1 else "今日暂无新内容")
+                else:
+                    reasons.append("从未采到内容")
+            if total == 0:
+                reasons.append(f"近 {_SOURCE_HEALTH_WINDOW_DAYS} 天无采集记录")
 
+        summary[health] += 1
         data.append({
             "id": s.id,
             "name": s.name,
             "source_type": s.source_type,
             "health": health,
+            "reasons": reasons,
             "consecutive_failures": s.consecutive_failures,
-            "window_days": _SOURCE_HEALTH_WINDOW_DAYS,
             "window_total": total,
             "window_failed": failed,
             "failure_rate": failure_rate,
+            "items_new_window": items_new,
             "last_collected_at": s.last_collected_at.isoformat() if s.last_collected_at else None,
+            "last_item_at": last_item.isoformat() if last_item else None,
             "is_active": s.is_active,
         })
 
-    # 异常在前，便于前端直接截取
-    order = {"error": 0, "warning": 1, "disabled": 2, "sync": 3, "healthy": 4}
-    data.sort(key=lambda d: (order[d["health"]], -d["failure_rate"], d["name"]))
-
-    return {"code": 0, "data": data, "message": "ok"}
-
+    return {
+        "code": 0,
+        "data": {
+            "window_days": _SOURCE_HEALTH_WINDOW_DAYS,
+            "summary": summary,
+            "sources": data,
+        },
+        "message": "ok",
+    }
 
 
 @router.get("/content-status-distribution")

@@ -26,7 +26,7 @@ const stats = ref({
 })
 const activities = ref([])
 const trend = ref([])
-const sourceHealthList = ref([])
+const sourceHealth = ref({ window_days: 7, summary: { healthy: 0, warning: 0, error: 0, disabled: 0, sync: 0 }, sources: [] })
 const financeSummaries = ref([])
 const contentStatus = ref({ pending: 0, processing: 0, ready: 0, analyzed: 0, failed: 0, total: 0 })
 const storageStats = ref({ media: {}, database_bytes: 0, total_bytes: 0 })
@@ -218,24 +218,50 @@ const statusChartData = computed(() => {
 // --- 采集趋势 ---
 const trendMax = computed(() => Math.max(...trend.value.map(t => t.count), 1))
 
-// --- 信息源健康统计 ---
-const healthSummary = computed(() => {
-  const h = { healthy: 0, warning: 0, error: 0, disabled: 0, sync: 0 }
-  sourceHealthList.value.forEach(s => h[s.health]++)
-  return h
+// --- 信息源健康 ---
+// 只有"启用且需采集"的源参与判定（healthy / warning / error），已禁用与同步型只计数
+const HEALTH_LEVELS = {
+  error:   { label: '异常', bar: 'bg-rose-400',    badge: 'bg-rose-50 text-rose-600 ring-rose-200' },
+  warning: { label: '关注', bar: 'bg-amber-400',   badge: 'bg-amber-50 text-amber-700 ring-amber-200' },
+  healthy: { label: '正常', bar: 'bg-emerald-400', badge: 'bg-emerald-50 text-emerald-700 ring-emerald-200' },
+}
+
+const healthSummary = computed(() => sourceHealth.value.summary || {})
+const collectingTotal = computed(() => {
+  const h = healthSummary.value
+  return (h.healthy || 0) + (h.warning || 0) + (h.error || 0)
+})
+const healthBar = computed(() => {
+  const total = collectingTotal.value || 1
+  return ['error', 'warning', 'healthy']
+    .map(k => ({ key: k, count: healthSummary.value[k] || 0, pct: (healthSummary.value[k] || 0) / total * 100, ...HEALTH_LEVELS[k] }))
+    .filter(seg => seg.count > 0)
 })
 
-// 只列需要关注的：异常/告警/已禁用；同步型源没有采集记录，不进列表
-const unhealthySources = computed(() =>
-  sourceHealthList.value.filter(s => s.health !== 'healthy' && s.health !== 'sync')
+// 需要关注：异常 + 关注，按严重度、失败率排序
+const attentionSources = computed(() =>
+  sourceHealth.value.sources
+    .filter(s => s.health === 'error' || s.health === 'warning')
+    .sort((a, b) => (a.health === b.health ? b.failure_rate - a.failure_rate : (a.health === 'error' ? -1 : 1)))
 )
+// 没有异常时退化为近 N 天失败率排行（仅列有过失败的），列表始终有信息量
+const failureBoard = computed(() =>
+  sourceHealth.value.sources
+    .filter(s => s.health === 'healthy' && s.window_failed > 0)
+    .sort((a, b) => b.failure_rate - a.failure_rate || b.window_failed - a.window_failed)
+    .slice(0, 5)
+)
+const healthListMode = computed(() => attentionSources.value.length > 0 ? 'attention' : 'board')
+const healthList = computed(() => healthListMode.value === 'attention' ? attentionSources.value : failureBoard.value)
 
-function healthDetail(s) {
-  if (s.health === 'disabled') return '已禁用'
-  const parts = []
-  if (s.consecutive_failures > 0) parts.push(`连续失败 ${s.consecutive_failures} 次`)
-  if (s.window_total > 0) parts.push(`近 ${s.window_days} 天失败 ${s.window_failed}/${s.window_total}（${s.failure_rate}%）`)
-  return parts.join(' · ') || '无采集记录'
+function relativeTime(iso) {
+  if (!iso) return '从未'
+  const mins = Math.max(0, dayjs().diff(dayjs.utc(iso).local(), 'minute'))
+  if (mins < 1) return '刚刚'
+  if (mins < 60) return `${mins} 分钟前`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return `${hours} 小时前`
+  return `${Math.floor(hours / 24)} 天前`
 }
 
 // --- 存储格式化 ---
@@ -258,13 +284,6 @@ const statusStyles = {
 const statusLabels = {
   pending: '等待中', running: '运行中', completed: '已完成',
   failed: '失败', cancelled: '已取消',
-}
-const healthStyles = {
-  healthy: { dot: 'bg-emerald-400', text: 'text-emerald-600', label: '正常' },
-  warning: { dot: 'bg-amber-400', text: 'text-amber-600', label: '告警' },
-  error: { dot: 'bg-rose-400', text: 'text-rose-600', label: '异常' },
-  disabled: { dot: 'bg-slate-300', text: 'text-slate-400', label: '已禁用' },
-  sync: { dot: 'bg-sky-300', text: 'text-sky-500', label: '同步型' },
 }
 
 function storageBarClass(bytes) {
@@ -319,7 +338,7 @@ async function fetchFast() {
     (res) => { stats.value = res.data },
     (res) => { activities.value = res.data },
     (res) => { trend.value = res.data },
-    (res) => { sourceHealthList.value = res.data },
+    (res) => { sourceHealth.value = res.data },
     (res) => { contentStatus.value = res.data },
     (res) => { behaviorStats.value = res.data },
   ])
@@ -956,9 +975,9 @@ onUnmounted(() => {
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
       <!-- 信息源健康 -->
       <div class="bg-white rounded-xl border border-slate-200/60 shadow-sm p-4">
-        <div class="flex items-center justify-between mb-4">
+        <div class="flex items-center justify-between mb-3">
           <h3 class="text-sm font-semibold text-slate-700">信息源健康</h3>
-          <router-link to="/sources" class="text-xs text-indigo-500 hover:text-indigo-700">查看全部</router-link>
+          <router-link to="/sources" class="text-xs text-indigo-500 hover:text-indigo-700">管理信息源</router-link>
         </div>
 
         <div v-if="loading" class="flex items-center justify-center h-24">
@@ -969,28 +988,50 @@ onUnmounted(() => {
         </div>
 
         <template v-else>
-          <!-- 健康摘要 -->
-          <div class="flex items-center gap-4 mb-4 pb-4 border-b border-slate-100">
-            <div v-for="(style, key) in healthStyles" :key="key" class="flex items-center gap-1.5" :class="!healthSummary[key] ? 'opacity-40' : ''">
-              <div class="w-2 h-2 rounded-full" :class="style.dot"></div>
-              <span class="text-xs" :class="style.text">{{ healthSummary[key] }}</span>
+          <!-- 概览：一条堆叠条 + 文字计数。只对采集中的源分级，已禁用/同步型灰字计数 -->
+          <div class="mb-4 pb-4 border-b border-slate-100">
+            <div class="flex items-baseline justify-between mb-2">
+              <span class="text-xs text-slate-500">采集中 <span class="font-semibold text-slate-700">{{ collectingTotal }}</span> 个</span>
+              <span class="text-[10px] text-slate-400">已禁用 {{ healthSummary.disabled || 0 }} · 同步型 {{ healthSummary.sync || 0 }}</span>
+            </div>
+            <div class="flex w-full h-2 rounded-full overflow-hidden bg-slate-100 gap-px">
+              <div v-for="seg in healthBar" :key="seg.key" class="h-full transition-all duration-500" :class="seg.bar" :style="{ width: `${seg.pct}%` }" :title="`${seg.label} ${seg.count}`"></div>
+            </div>
+            <div class="flex items-center gap-4 mt-2">
+              <span v-for="(lv, key) in HEALTH_LEVELS" :key="key" class="flex items-center gap-1.5 text-xs" :class="healthSummary[key] ? 'text-slate-600' : 'text-slate-300'">
+                <span class="w-2 h-2 rounded-sm" :class="lv.bar"></span>{{ lv.label }} {{ healthSummary[key] || 0 }}
+              </span>
             </div>
           </div>
 
-          <!-- 异常源列表 -->
-          <div v-if="unhealthySources.length > 0" class="space-y-2 max-h-[140px] overflow-y-auto">
+          <!-- 列表：有异常列异常；否则列近 N 天失败率最高的源 -->
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-medium text-slate-600">
+              {{ healthListMode === 'attention' ? '需要关注' : `近 ${sourceHealth.window_days} 天失败最多` }}
+            </span>
+            <span v-if="healthListMode === 'board'" class="text-[10px] text-slate-400">均在阈值内</span>
+          </div>
+
+          <div v-if="healthList.length > 0" class="space-y-1.5 max-h-[168px] overflow-y-auto pr-0.5">
             <div
-              v-for="s in unhealthySources"
+              v-for="s in healthList"
               :key="s.id"
-              class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg bg-slate-50/50"
+              class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg bg-slate-50/60 hover:bg-slate-50"
             >
-              <div class="w-2 h-2 rounded-full shrink-0" :class="healthStyles[s.health].dot"></div>
               <div class="flex-1 min-w-0">
-                <div class="text-xs font-medium text-slate-700 truncate">{{ s.name }}</div>
-                <div class="text-[10px] text-slate-400 truncate">{{ healthDetail(s) }}</div>
+                <div class="flex items-center gap-2">
+                  <span class="text-xs font-medium text-slate-700 truncate">{{ s.name }}</span>
+                  <span class="shrink-0 px-1.5 py-px rounded text-[10px] font-medium ring-1 ring-inset" :class="HEALTH_LEVELS[s.health].badge">{{ HEALTH_LEVELS[s.health].label }}</span>
+                </div>
+                <div class="text-[10px] text-slate-400 truncate mt-0.5" :title="s.reasons.join('；')">
+                  {{ s.reasons.join(' · ') || '无失败记录' }}
+                </div>
+              </div>
+              <div class="shrink-0 text-right hidden sm:block">
+                <div class="text-[10px] text-slate-500">采集 {{ relativeTime(s.last_collected_at) }}</div>
+                <div class="text-[10px] text-slate-400">新内容 {{ relativeTime(s.last_item_at) }}</div>
               </div>
               <button
-                v-if="s.health === 'error' || s.health === 'warning'"
                 class="px-2 py-1 text-[10px] font-medium text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors shrink-0 disabled:opacity-40"
                 :disabled="collectingId === s.id"
                 @click="handleCollectSource(s)"
@@ -1005,7 +1046,7 @@ onUnmounted(() => {
                 <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
               </svg>
             </div>
-            <span class="text-xs text-slate-400">全部信息源运行正常</span>
+            <span class="text-xs text-slate-400">近 {{ sourceHealth.window_days }} 天所有采集源零失败</span>
           </div>
         </template>
       </div>
