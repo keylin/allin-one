@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { listContent, getContent, analyzeContent, toggleFavorite, listSourceOptions, enrichContent, applyEnrichment, getContentStats, markAllRead } from '@/api/content'
+import { listContent, getContent, analyzeContent, toggleFavorite, listSourceOptions, enrichContent, applyEnrichment, getContentStats, markAllRead, incrementView } from '@/api/content'
 import { useContentFilterStore } from '@/stores/contentFilter'
 import { useToast } from '@/composables/useToast'
 import { usePullToRefresh } from '@/composables/usePullToRefresh'
@@ -386,6 +386,8 @@ function selectItem(item) {
   if (rightPanelRef.value) rightPanelRef.value.scrollTop = 0
   // [B] 点击选中走 markAsRead 统一路径（乐观更新）
   markAsRead(item.id)
+  // 真正打开详情：记录 view_count / opened_at，仪表盘阅读统计以此为准（滚动自动已读不算）
+  incrementView(item.id).catch(() => {})
   loadDetail(item.id)
 }
 
