@@ -1020,8 +1020,13 @@ onUnmounted(() => {
             >
               <div class="flex-1 min-w-0">
                 <div class="flex items-center gap-2">
-                  <span class="text-xs font-medium text-slate-700 truncate">{{ s.name }}</span>
+                  <button
+                    class="text-xs font-medium text-slate-700 truncate hover:text-indigo-600 hover:underline underline-offset-2 text-left"
+                    :title="`打开「${s.name}」的配置`"
+                    @click="router.push({ path: '/sources', query: { q: s.name, edit: s.id } })"
+                  >{{ s.name }}</button>
                   <span class="shrink-0 px-1.5 py-px rounded text-[10px] font-medium ring-1 ring-inset" :class="HEALTH_LEVELS[s.health].badge">{{ HEALTH_LEVELS[s.health].label }}</span>
+                  <router-link :to="{ path: '/feed', query: { source_id: s.id } }" class="shrink-0 text-[10px] text-slate-400 hover:text-indigo-600" title="查看该源的内容">内容</router-link>
                 </div>
                 <div class="text-[10px] text-slate-400 truncate mt-0.5" :title="s.reasons.join('；')">
                   {{ s.reasons.join(' · ') || '无失败记录' }}

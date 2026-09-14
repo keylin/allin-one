@@ -9,7 +9,7 @@ import SourceFormModal from '@/components/source-form-modal.vue'
 import ContentSubmitModal from '@/components/content-submit-modal.vue'
 import SourceDetailPanel from '@/components/source-detail-panel.vue'
 import DetailDrawer from '@/components/detail-drawer.vue'
-import { importOPML, exportOPML, importFull, exportFull } from '@/api/sources'
+import { importOPML, exportOPML, importFull, exportFull, getSource } from '@/api/sources'
 import { asConfigObject } from '@/utils/config'
 
 const route = useRoute()
@@ -119,8 +119,9 @@ function fetchWithFilters() {
   if (filterCategory.value) params.category = filterCategory.value
   if (sortBy.value) params.sort_by = sortBy.value
   if (sortOrder.value) params.sort_order = sortOrder.value
-  store.fetchSources(params)
+  const p = store.fetchSources(params)
   syncQueryParams()
+  return p
 }
 
 function closeAllMenus() {
@@ -133,9 +134,22 @@ onMounted(() => {
   if (route.query.sort_by) sortBy.value = route.query.sort_by
   if (route.query.sort_order) sortOrder.value = route.query.sort_order
   if (route.query.category) filterCategory.value = route.query.category
-  fetchWithFilters()
+  const editId = route.query.edit
+  fetchWithFilters().then(() => { if (editId) openEditById(String(editId)) })
   document.addEventListener('click', closeAllMenus)
 })
+
+// 从仪表盘等处带 ?edit=<id> 进来时直接打开该源的编辑弹窗；不在当前页则单独拉取
+async function openEditById(id) {
+  let source = store.sources.find(s => s.id === id)
+  if (!source) {
+    try {
+      const res = await getSource(id)
+      if (res.code === 0) source = res.data
+    } catch { /* 找不到就停留在列表 */ }
+  }
+  if (source) openEdit(source)
+}
 
 onUnmounted(() => {
   document.removeEventListener('click', closeAllMenus)
