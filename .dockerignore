@@ -45,3 +45,6 @@ LICENSE
 
 # Local dev scripts
 deploy-local.sh
+
+# 旧部署遗留的前端产物，正式构建由 Dockerfile 多阶段产出到 /app/static，不能从 backend/ 拷入
+backend/static
