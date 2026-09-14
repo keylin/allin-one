@@ -240,7 +240,7 @@ def get_daily_stats(
     top_sources = [
         {
             "source_id": r.source_id,
-            "source_name": source_name_map.get(r.source_id, "未知数据源"),
+            "source_name": source_name_map.get(r.source_id, "未知信息源"),
             "items_new": r.items_new,
             "collection_count": r.collection_count,
         }
@@ -481,7 +481,7 @@ def get_dedup_stats(db: Session = Depends(get_db)):
     by_source = [
         {
             "source_id": r.source_id,
-            "source_name": source_name_map.get(r.source_id, "未知数据源"),
+            "source_name": source_name_map.get(r.source_id, "未知信息源"),
             "duplicate_count": r.dup_count,
             "total_count": r.total_count,
             "dedup_rate": round(r.dup_count / r.total_count * 100, 1) if r.total_count > 0 else 0,
@@ -625,7 +625,7 @@ def _query_source_preference(db: Session, top_n: int) -> list[dict]:
     return [
         {
             "source_id": r.source_id,
-            "source_name": name_map.get(r.source_id, "未知数据源"),
+            "source_name": name_map.get(r.source_id, "未知信息源"),
             "opened_count": r.opened_count,
             "favorite_count": r.favorite_count or 0,
         }

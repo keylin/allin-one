@@ -23,13 +23,13 @@ def validate_source_config(source_type: str, url: str | None, config_json: dict 
     config = config_json if isinstance(config_json, dict) else {}
     if source_type == "rss.hub":
         if not config.get("rsshub_route"):
-            return "RSSHub 数据源必须在配置中提供 rsshub_route 字段"
+            return "RSSHub 信息源必须在配置中提供 rsshub_route 字段"
     elif source_type == "rss.standard":
         if not url:
-            return "RSS/Atom 数据源必须提供 url 字段"
+            return "RSS/Atom 信息源必须提供 url 字段"
     elif source_type == "podcast.apple":
         if not config.get("apple_podcast_url") and not config.get("podcast_id"):
-            return "Apple Podcasts 数据源必须提供 apple_podcast_url 或 podcast_id"
+            return "Apple Podcasts 信息源必须提供 apple_podcast_url 或 podcast_id"
     return None
 
 
@@ -50,5 +50,5 @@ def validate_source_name_unique(name: str, db: Session, exclude_id: str | None =
         query = query.filter(SourceConfig.id != exclude_id)
     existing = query.first()
     if existing:
-        return f"数据源「{name}」已存在，请使用不同名称"
+        return f"信息源「{name}」已存在，请使用不同名称"
     return None

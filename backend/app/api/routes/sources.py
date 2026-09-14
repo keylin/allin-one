@@ -195,7 +195,7 @@ def cleanup_duplicate_sources(db: Session = Depends(get_db)):
     )
 
     if not dup_sources:
-        return {"code": 0, "data": {"groups_cleaned": 0, "sources_deleted": 0, "content_reassigned": 0}, "message": "无重复数据源"}
+        return {"code": 0, "data": {"groups_cleaned": 0, "sources_deleted": 0, "content_reassigned": 0}, "message": "无重复信息源"}
 
     # 2. 按名称分组
     groups: dict[str, list] = defaultdict(list)
@@ -274,13 +274,13 @@ def update_source(source_id: str, body: SourceUpdate, db: Session = Depends(get_
         else:
             config = source.config_json if isinstance(source.config_json, dict) else {}
         if not config.get("rsshub_route"):
-            return error_response(400, "RSSHub 数据源必须在配置中提供 rsshub_route 字段")
+            return error_response(400, "RSSHub 信息源必须在配置中提供 rsshub_route 字段")
 
     # 验证标准 RSS 源必须有 url
     elif final_source_type == "rss.standard":
         final_url = update_data.get("url", source.url)
         if not final_url:
-            return error_response(400, "RSS/Atom 数据源必须提供 url 字段")
+            return error_response(400, "RSS/Atom 信息源必须提供 url 字段")
 
     # 校验 pipeline_template_id
     if "pipeline_template_id" in update_data and update_data["pipeline_template_id"]:
@@ -295,7 +295,7 @@ def update_source(source_id: str, body: SourceUpdate, db: Session = Depends(get_
             SourceConfig.id != source_id,
         ).first()
         if conflict:
-            return error_response(400, f"数据源「{update_data['name']}」已存在，请使用不同名称")
+            return error_response(400, f"信息源「{update_data['name']}」已存在，请使用不同名称")
 
     for key, value in update_data.items():
         setattr(source, key, value)
@@ -320,7 +320,7 @@ async def batch_collect_all(db: Session = Depends(get_db)):
         return {
             "code": 0,
             "data": {"sources_queued": 0, "sources_skipped": 0},
-            "message": "没有启用的数据源",
+            "message": "没有启用的信息源",
         }
 
     sources_queued = 0

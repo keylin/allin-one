@@ -596,7 +596,7 @@ onUnmounted(() => {
         </svg>
       </div>
       <p class="text-sm text-slate-500 font-medium mb-1">暂无内容</p>
-      <p class="text-xs text-slate-400">添加数据源后内容会自动出现在这里</p>
+      <p class="text-xs text-slate-400">添加信息源后内容会自动出现在这里</p>
     </div>
 
     <!-- Desktop table -->

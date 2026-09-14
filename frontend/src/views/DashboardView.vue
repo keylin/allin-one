@@ -60,7 +60,7 @@ async function handleCollectSource(source) {
 
 // --- 统计卡片配置 ---
 const statCards = [
-  { key: 'sources_count', label: '数据源', accent: 'indigo', link: '/sources', icon: 'M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1' },
+  { key: 'sources_count', label: '信息源', accent: 'indigo', link: '/sources', icon: 'M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1' },
   { key: 'contents_today', label: '今日采集', accent: 'emerald', link: '/content', icon: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z' },
   { key: 'pipelines_running', label: '运行中', accent: 'amber', link: '/pipelines', icon: 'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15' },
   { key: 'pipelines_failed', label: '24h 失败', accent: 'rose', link: '/pipelines', icon: 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z' },
@@ -194,7 +194,7 @@ const trendChartData = computed(() => {
   return { data, readPoints, favPoints, readPath: toPath(readPoints), favPath: toPath(favPoints), W, H }
 })
 
-// --- 数据源消费偏好 ---
+// --- 信息源消费偏好 ---
 const sourcePreferenceData = computed(() => {
   if (!behaviorStats.value?.source_preference?.length) return []
   const top = behaviorStats.value.source_preference.slice(0, 5)
@@ -218,7 +218,7 @@ const statusChartData = computed(() => {
 // --- 采集趋势 ---
 const trendMax = computed(() => Math.max(...trend.value.map(t => t.count), 1))
 
-// --- 数据源健康统计 ---
+// --- 信息源健康统计 ---
 const healthSummary = computed(() => {
   const h = { healthy: 0, warning: 0, error: 0, disabled: 0, sync: 0 }
   sourceHealthList.value.forEach(s => h[s.health]++)
@@ -776,9 +776,9 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- B4: 数据源消费偏好 -->
+        <!-- B4: 信息源消费偏好 -->
         <div class="bg-white rounded-xl border border-slate-200/60 shadow-sm p-4">
-          <h3 class="text-sm font-semibold text-slate-700 mb-4">数据源偏好 Top 5</h3>
+          <h3 class="text-sm font-semibold text-slate-700 mb-4">信息源偏好 Top 5</h3>
 
           <div v-if="loading" class="flex items-center justify-center h-32">
             <svg class="w-6 h-6 animate-spin text-slate-200" fill="none" viewBox="0 0 24 24">
@@ -807,8 +807,9 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <div v-else class="flex items-center justify-center h-32 text-sm text-slate-400">
-            暂无数据
+          <div v-else class="flex flex-col items-center justify-center h-32 text-sm text-slate-400 gap-1">
+            <span>尚无打开记录</span>
+            <span class="text-xs text-slate-300">按真正点开详情的篇数排序，从现在起累积</span>
           </div>
         </div>
       </div>
@@ -951,12 +952,12 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- 数据源健康 + 存储空间 -->
+    <!-- 信息源健康 + 存储空间 -->
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
-      <!-- 数据源健康 -->
+      <!-- 信息源健康 -->
       <div class="bg-white rounded-xl border border-slate-200/60 shadow-sm p-4">
         <div class="flex items-center justify-between mb-4">
-          <h3 class="text-sm font-semibold text-slate-700">数据源健康</h3>
+          <h3 class="text-sm font-semibold text-slate-700">信息源健康</h3>
           <router-link to="/sources" class="text-xs text-indigo-500 hover:text-indigo-700">查看全部</router-link>
         </div>
 
@@ -1004,7 +1005,7 @@ onUnmounted(() => {
                 <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
               </svg>
             </div>
-            <span class="text-xs text-slate-400">全部数据源运行正常</span>
+            <span class="text-xs text-slate-400">全部信息源运行正常</span>
           </div>
         </template>
       </div>
@@ -1178,9 +1179,9 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- 按数据源分布 -->
+        <!-- 按信息源分布 -->
         <div v-if="dedupStats.by_source.length > 0">
-          <div class="text-xs text-slate-400 mb-2.5">按数据源分布 (Top {{ dedupStats.by_source.length }})</div>
+          <div class="text-xs text-slate-400 mb-2.5">按信息源分布 (Top {{ dedupStats.by_source.length }})</div>
           <div class="space-y-2">
             <div v-for="src in dedupStats.by_source" :key="src.source_id" class="flex items-center gap-3">
               <div class="w-20 text-xs text-slate-600 truncate shrink-0" :title="src.source_name">{{ src.source_name }}</div>

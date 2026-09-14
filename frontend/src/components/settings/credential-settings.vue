@@ -100,9 +100,9 @@ async function handleDeleteCredential(id, force = false) {
       credentials.value = credentials.value.filter(c => c.id !== id)
       toast.success('凭证已删除')
     } else if (res.code === 1 && res.data?.source_count) {
-      // 有数据源引用，询问是否强制删除
+      // 有信息源引用，询问是否强制删除
       const count = res.data.source_count
-      if (confirm(`该凭证被 ${count} 个数据源引用。\n强制删除将解除所有关联，确认继续？`)) {
+      if (confirm(`该凭证被 ${count} 个信息源引用。\n强制删除将解除所有关联，确认继续？`)) {
         await handleDeleteCredential(id, true)
       }
     } else {
@@ -482,7 +482,7 @@ onBeforeUnmount(() => {
               </div>
               <p class="text-xs text-slate-400 mt-0.5">
                 {{ cred.platform }} &middot; {{ cred.credential_data }} &middot;
-                {{ cred.source_count }} 个数据源引用
+                {{ cred.source_count }} 个信息源引用
               </p>
             </div>
           </div>
