@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.content import SourceConfig, ContentItem, ContentStatus, MediaItem
-from app.services.collectors.base import BaseCollector
+from app.services.collectors.base import BaseCollector, report_found
 from app.services.collectors.utils import resolve_rss_feed_url
 from app.services.media_detection import detect_media_for_content
 
@@ -43,6 +43,7 @@ class RSSCollector(BaseCollector):
             .all()
         )
 
+        report_found(len(feed.entries))
         new_items = []
         for entry in feed.entries:
             url = self._fix_link(entry.get("link"))

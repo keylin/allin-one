@@ -215,7 +215,8 @@ class ContentItem(Base):
     chat_history = Column(JSONB, nullable=True)  # [{"role":"user","content":"..."},{"role":"assistant","content":"..."}]
 
     view_count = Column(Integer, default=0)
-    last_viewed_at = Column(DateTime, nullable=True)     # 最后浏览时间
+    last_viewed_at = Column(DateTime, nullable=True)     # 最后一次"已读"写入时间（含滚动/批量标记）
+    opened_at = Column(DateTime, nullable=True)          # 首次真正打开详情的时间（仅 /view 接口写入）
     # 相似度去重
     title_hash = Column(BigInteger, nullable=True)       # SimHash 64 位指纹
     duplicate_of_id = Column(String, ForeignKey("content_items.id", ondelete="SET NULL"), nullable=True)

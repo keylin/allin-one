@@ -1143,13 +1143,20 @@ async def toggle_favorite(content_id: str, db: Session = Depends(get_db)):
 
 @router.post("/{content_id}/view")
 def record_view(content_id: str, db: Session = Depends(get_db)):
-    """记录查看次数 (view_count += 1)"""
+    """记录查看次数 (view_count += 1)，并记录首次打开时间 opened_at
+
+    opened_at 只在这里写入，区别于 batch-read / mark-all-read 的"已读标记"，
+    仪表盘的阅读活跃度、趋势、偏好统计以 opened_at 为准。
+    """
     item = db.get(ContentItem, content_id)
     if not item:
         return error_response(404, "Content not found")
 
+    now = utcnow()
     item.view_count = (item.view_count or 0) + 1
-    item.last_viewed_at = utcnow()
+    item.last_viewed_at = now
+    if item.opened_at is None:
+        item.opened_at = now
     db.commit()
 
     return {"code": 0, "data": {"view_count": item.view_count}, "message": "ok"}

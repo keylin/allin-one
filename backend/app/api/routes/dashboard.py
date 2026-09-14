@@ -1,6 +1,7 @@
 """Dashboard API"""
 
 import asyncio
+from datetime import datetime, timedelta
 import sqlalchemy
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
@@ -18,10 +19,34 @@ from app.models.pipeline import PipelineExecution, PipelineStatus
 
 router = APIRouter()
 
+# 不参与"内容量"口径的重复项过滤：与去重统计、信息流未读数保持一致
+_NO_DUP = ContentItem.duplicate_of_id.is_(None)
+
+# 失败流水线卡片只看最近 N 小时，避免历史失败永久挂在首页
+_PIPELINE_FAILED_WINDOW_HOURS = 24
+
+# 数据源健康的失败率统计窗口
+_SOURCE_HEALTH_WINDOW_DAYS = 7
+
+# 非采集型数据源：靠外部同步脚本/用户提交写入，没有采集记录，不参与健康判定
+_NON_COLLECTING_PREFIXES = ("sync.",)
+_NON_COLLECTING_TYPES = {"user.note", "file.upload", "system.notification"}
+
+
+def _is_non_collecting(source_type: str | None) -> bool:
+    if not source_type:
+        return False
+    return source_type in _NON_COLLECTING_TYPES or source_type.startswith(_NON_COLLECTING_PREFIXES)
+
 
 @router.get("/stats")
 def get_dashboard_stats(db: Session = Depends(get_db)):
-    """获取仪表盘统计数据"""
+    """获取仪表盘统计数据
+
+    - 内容计数剔除重复项（duplicate_of_id 非空），与去重统计口径一致
+    - pipelines_failed 只统计最近 24 小时，running/pending 为当前状态量
+    - as_of 为容器本地时间，供前端标注"今日"数据的截止时刻
+    """
     sources_count = db.query(func.count(SourceConfig.id)).scalar()
 
     # 计算今日边界（容器时区）
@@ -29,6 +54,7 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
     contents_today = (
         db.query(func.count(ContentItem.id))
         .filter(
+            _NO_DUP,
             ContentItem.collected_at >= today_start,
             ContentItem.collected_at < today_end
         )
@@ -41,21 +67,28 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
     contents_yesterday = (
         db.query(func.count(ContentItem.id))
         .filter(
+            _NO_DUP,
             ContentItem.collected_at >= yesterday_start,
             ContentItem.collected_at < yesterday_end
         )
         .scalar()
     )
 
-    # 单次查询聚合所有 pipeline 状态计数，避免 3 次独立 COUNT
-    pipeline_counts = dict(
-        db.query(PipelineExecution.status, func.count(PipelineExecution.id))
-        .group_by(PipelineExecution.status)
-        .all()
-    )
+    # 当前状态量：running / pending 全量；failed 只看时间窗
+    now = utcnow()
+    failed_since = now - timedelta(hours=_PIPELINE_FAILED_WINDOW_HOURS)
+    pipeline_row = db.query(
+        func.count(case((PipelineExecution.status == PipelineStatus.RUNNING.value, 1))).label("running"),
+        func.count(case((PipelineExecution.status == PipelineStatus.PENDING.value, 1))).label("pending"),
+        func.count(case((
+            (PipelineExecution.status == PipelineStatus.FAILED.value) &
+            (PipelineExecution.created_at >= failed_since),
+            1,
+        ))).label("failed_recent"),
+    ).one()
 
-    # 总内容数
-    contents_total = db.query(func.count(ContentItem.id)).scalar()
+    # 总内容数（剔除重复）
+    contents_total = db.query(func.count(ContentItem.id)).filter(_NO_DUP).scalar()
 
     return {
         "code": 0,
@@ -64,9 +97,11 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
             "contents_today": contents_today,
             "contents_yesterday": contents_yesterday,
             "contents_total": contents_total,
-            "pipelines_running": pipeline_counts.get(PipelineStatus.RUNNING.value, 0),
-            "pipelines_failed": pipeline_counts.get(PipelineStatus.FAILED.value, 0),
-            "pipelines_pending": pipeline_counts.get(PipelineStatus.PENDING.value, 0),
+            "pipelines_running": pipeline_row.running,
+            "pipelines_failed": pipeline_row.failed_recent,
+            "pipelines_failed_window_hours": _PIPELINE_FAILED_WINDOW_HOURS,
+            "pipelines_pending": pipeline_row.pending,
+            "as_of": datetime.now().strftime("%Y-%m-%d %H:%M"),
         },
         "message": "ok",
     }
@@ -77,7 +112,10 @@ def get_collection_trend(
     days: int = Query(7, ge=1, le=30),
     db: Session = Depends(get_db),
 ):
-    """获取最近 N 天每日采集数量趋势（含成功率）"""
+    """获取最近 N 天每日采集数量趋势（含成功率）
+
+    count 为当日采集入库的非重复内容数（剔除 duplicate_of_id 非空），与 /stats 口径一致。
+    """
     # 计算起始边界（容器时区的 N 天前 00:00）
     start_date = get_local_date_offset(-(days - 1))
     start_utc, _ = get_local_day_boundaries(start_date)
@@ -97,7 +135,7 @@ def get_collection_trend(
             ).label("day"),
             func.count(ContentItem.id).label("count"),
         )
-        .filter(ContentItem.collected_at >= start_utc)
+        .filter(_NO_DUP, ContentItem.collected_at >= start_utc)
         .group_by("day")
         .all()
     )
@@ -114,18 +152,13 @@ def get_collection_trend(
             ).label("day"),
             func.count(CollectionRecord.id).label("total"),
             func.sum(func.cast(CollectionRecord.status == 'completed', sqlalchemy.Integer)).label("success"),
-            func.sum(func.coalesce(CollectionRecord.items_new, 0)).label("items_new"),
         )
         .filter(CollectionRecord.started_at >= start_utc)
         .group_by("day")
         .all()
     )
     collection_map = {
-        str(row.day): {
-            "total": row.total,
-            "success": row.success or 0,
-            "items_new": row.items_new or 0,
-        }
+        str(row.day): {"total": row.total, "success": row.success or 0}
         for row in collection_rows
     }
 
@@ -133,7 +166,7 @@ def get_collection_trend(
     date_range = get_local_date_range(days)
     trend = []
     for day in date_range:
-        col_data = collection_map.get(day, {"total": 0, "success": 0, "items_new": 0})
+        col_data = collection_map.get(day, {"total": 0, "success": 0})
         total = col_data["total"]
         success = col_data["success"]
         success_rate = round(success / total * 100, 1) if total > 0 else 0
@@ -144,7 +177,6 @@ def get_collection_trend(
             "collection_total": total,
             "collection_success": success,
             "success_rate": success_rate,
-            "items_new": col_data["items_new"],
         })
 
     return {"code": 0, "data": trend, "message": "ok"}
@@ -233,7 +265,32 @@ def get_daily_stats(
 
 @router.get("/source-health")
 def get_source_health(db: Session = Depends(get_db)):
-    """获取数据源健康状态概览"""
+    """获取数据源健康状态概览
+
+    健康判定同时看两个维度：
+    - consecutive_failures：当前是否处于连续失败（成功一次即归零，只反映"上一次"）
+    - 近 7 天采集失败率：暴露间歇性失败（DNS 抖动、限流等），否则一次成功就全绿
+
+    分级：
+      disabled  未启用
+      sync      非采集型源（外部同步/用户提交），不参与判定
+      error     连续失败 >= 3 或 7 天失败率 >= 50%
+      warning   连续失败 >= 1 或 7 天失败率 >= 20%
+      healthy   其余
+    """
+    window_start = utcnow() - timedelta(days=_SOURCE_HEALTH_WINDOW_DAYS)
+    window_rows = (
+        db.query(
+            CollectionRecord.source_id,
+            func.count(CollectionRecord.id).label("total"),
+            func.sum(case((CollectionRecord.status == "failed", 1), else_=0)).label("failed"),
+        )
+        .filter(CollectionRecord.started_at >= window_start)
+        .group_by(CollectionRecord.source_id)
+        .all()
+    )
+    window_map = {r.source_id: (r.total, r.failed or 0) for r in window_rows}
+
     sources = (
         db.query(SourceConfig)
         .order_by(SourceConfig.consecutive_failures.desc(), SourceConfig.name)
@@ -242,11 +299,16 @@ def get_source_health(db: Session = Depends(get_db)):
 
     data = []
     for s in sources:
+        total, failed = window_map.get(s.id, (0, 0))
+        failure_rate = round(failed / total * 100, 1) if total > 0 else 0.0
+
         if not s.is_active:
             health = "disabled"
-        elif s.consecutive_failures >= 3:
+        elif _is_non_collecting(s.source_type):
+            health = "sync"
+        elif s.consecutive_failures >= 3 or failure_rate >= 50:
             health = "error"
-        elif s.consecutive_failures >= 1:
+        elif s.consecutive_failures >= 1 or failure_rate >= 20:
             health = "warning"
         else:
             health = "healthy"
@@ -257,9 +319,17 @@ def get_source_health(db: Session = Depends(get_db)):
             "source_type": s.source_type,
             "health": health,
             "consecutive_failures": s.consecutive_failures,
+            "window_days": _SOURCE_HEALTH_WINDOW_DAYS,
+            "window_total": total,
+            "window_failed": failed,
+            "failure_rate": failure_rate,
             "last_collected_at": s.last_collected_at.isoformat() if s.last_collected_at else None,
             "is_active": s.is_active,
         })
+
+    # 异常在前，便于前端直接截取
+    order = {"error": 0, "warning": 1, "disabled": 2, "sync": 3, "healthy": 4}
+    data.sort(key=lambda d: (order[d["health"]], -d["failure_rate"], d["name"]))
 
     return {"code": 0, "data": data, "message": "ok"}
 
@@ -434,35 +504,33 @@ def get_dedup_stats(db: Session = Depends(get_db)):
 
 
 def _query_behavior_overview(db: Session) -> dict:
-    """行为概览指标：阅读/收藏/对话/笔记/批注计数"""
-    no_dup = ContentItem.duplicate_of_id.is_(None)
+    """行为概览指标
+
+    两套口径并列返回：
+    - read_*     已处理（view_count > 0，含滚动自动已读 / 批量已读），按 last_viewed_at 计日
+    - opened_*   真正打开过详情（opened_at 非空，仅 /view 写入），按 opened_at 计日
+    """
     today_start, today_end = get_local_day_boundaries()
     yesterday_date = get_local_date_offset(-1)
     yesterday_start, yesterday_end = get_local_day_boundaries(yesterday_date)
 
+    def _in(col, start, end):
+        return (col >= start) & (col < end)
+
     row = db.query(
         func.count(case((ContentItem.view_count > 0, ContentItem.id))).label("read_total"),
-        func.count(case((
-            (ContentItem.last_viewed_at >= today_start) &
-            (ContentItem.last_viewed_at < today_end),
-            ContentItem.id,
-        ))).label("read_today"),
-        func.count(case((
-            (ContentItem.last_viewed_at >= yesterday_start) &
-            (ContentItem.last_viewed_at < yesterday_end),
-            ContentItem.id,
-        ))).label("read_yesterday"),
+        func.count(case((_in(ContentItem.last_viewed_at, today_start, today_end), ContentItem.id))).label("read_today"),
+        func.count(case((_in(ContentItem.last_viewed_at, yesterday_start, yesterday_end), ContentItem.id))).label("read_yesterday"),
+        func.count(case((ContentItem.opened_at.isnot(None), ContentItem.id))).label("opened_total"),
+        func.count(case((_in(ContentItem.opened_at, today_start, today_end), ContentItem.id))).label("opened_today"),
+        func.count(case((_in(ContentItem.opened_at, yesterday_start, yesterday_end), ContentItem.id))).label("opened_yesterday"),
         func.count(case((ContentItem.is_favorited.is_(True), ContentItem.id))).label("favorited_total"),
         func.count(case((
-            (ContentItem.is_favorited.is_(True)) &
-            (ContentItem.favorited_at >= today_start) &
-            (ContentItem.favorited_at < today_end),
+            (ContentItem.is_favorited.is_(True)) & _in(ContentItem.favorited_at, today_start, today_end),
             ContentItem.id,
         ))).label("favorited_today"),
         func.count(case((
-            (ContentItem.is_favorited.is_(True)) &
-            (ContentItem.favorited_at >= yesterday_start) &
-            (ContentItem.favorited_at < yesterday_end),
+            (ContentItem.is_favorited.is_(True)) & _in(ContentItem.favorited_at, yesterday_start, yesterday_end),
             ContentItem.id,
         ))).label("favorited_yesterday"),
         func.count(case((ContentItem.chat_history.isnot(None), ContentItem.id))).label("chat_count"),
@@ -470,7 +538,7 @@ def _query_behavior_overview(db: Session) -> dict:
             (ContentItem.user_note.isnot(None)) & (ContentItem.user_note != ""),
             ContentItem.id,
         ))).label("note_count"),
-    ).filter(no_dup).one()
+    ).filter(_NO_DUP).one()
 
     annotation_count = db.query(func.count(BookAnnotation.id)).scalar()
 
@@ -478,6 +546,9 @@ def _query_behavior_overview(db: Session) -> dict:
         "read_total": row.read_total,
         "read_today": row.read_today,
         "read_yesterday": row.read_yesterday,
+        "opened_total": row.opened_total,
+        "opened_today": row.opened_today,
+        "opened_yesterday": row.opened_yesterday,
         "favorited_total": row.favorited_total,
         "favorited_today": row.favorited_today,
         "favorited_yesterday": row.favorited_yesterday,
@@ -487,79 +558,41 @@ def _query_behavior_overview(db: Session) -> dict:
     }
 
 
-def _query_reading_heatmap(db: Session, tz_param, days: int) -> list[dict]:
-    """阅读活跃度热力图"""
-    no_dup = ContentItem.duplicate_of_id.is_(None)
+def _daily_counts(db: Session, tz_param, col, days: int, *extra_filters) -> dict[str, int]:
+    """按容器时区把 col 归到日期，返回 {YYYY-MM-DD: count}"""
     start_date = get_local_date_offset(-(days - 1))
     start_utc, _ = get_local_day_boundaries(start_date)
-
     rows = (
         db.query(
-            func.date(
-                func.timezone(tz_param, func.timezone("UTC", ContentItem.last_viewed_at))
-            ).label("day"),
-            func.count(ContentItem.id).label("read_count"),
+            func.date(func.timezone(tz_param, func.timezone("UTC", col))).label("day"),
+            func.count(ContentItem.id).label("n"),
         )
-        .filter(
-            no_dup,
-            ContentItem.last_viewed_at >= start_utc,
-            ContentItem.last_viewed_at.isnot(None),
-        )
+        .filter(_NO_DUP, col.isnot(None), col >= start_utc, *extra_filters)
         .group_by("day")
         .all()
     )
-    heatmap_map = {str(row.day): row.read_count for row in rows}
+    return {str(r.day): r.n for r in rows}
+
+
+def _query_reading_heatmap(db: Session, tz_param, days: int) -> list[dict]:
+    """阅读活跃度热力图：按首次打开日期（opened_at）计数，历史不随重看漂移"""
+    opened_map = _daily_counts(db, tz_param, ContentItem.opened_at, days)
     return [
-        {"date": day, "read_count": heatmap_map.get(day, 0)}
+        {"date": day, "opened_count": opened_map.get(day, 0)}
         for day in get_local_date_range(days)
     ]
 
 
 def _query_behavior_trend(db: Session, tz_param, days: int) -> list[dict]:
-    """近期行为趋势（已读 + 收藏）"""
-    no_dup = ContentItem.duplicate_of_id.is_(None)
-    start_date = get_local_date_offset(-(days - 1))
-    start_utc, _ = get_local_day_boundaries(start_date)
-
-    read_rows = (
-        db.query(
-            func.date(
-                func.timezone(tz_param, func.timezone("UTC", ContentItem.last_viewed_at))
-            ).label("day"),
-            func.count(ContentItem.id).label("read_count"),
-        )
-        .filter(
-            no_dup,
-            ContentItem.last_viewed_at >= start_utc,
-            ContentItem.last_viewed_at.isnot(None),
-        )
-        .group_by("day")
-        .all()
+    """近期行为趋势（打开 + 收藏）"""
+    opened_map = _daily_counts(db, tz_param, ContentItem.opened_at, days)
+    fav_map = _daily_counts(
+        db, tz_param, ContentItem.favorited_at, days, ContentItem.is_favorited.is_(True)
     )
-    read_map = {str(row.day): row.read_count for row in read_rows}
-
-    fav_rows = (
-        db.query(
-            func.date(
-                func.timezone(tz_param, func.timezone("UTC", ContentItem.favorited_at))
-            ).label("day"),
-            func.count(ContentItem.id).label("favorite_count"),
-        )
-        .filter(
-            no_dup,
-            ContentItem.is_favorited.is_(True),
-            ContentItem.favorited_at >= start_utc,
-            ContentItem.favorited_at.isnot(None),
-        )
-        .group_by("day")
-        .all()
-    )
-    fav_map = {str(row.day): row.favorite_count for row in fav_rows}
-
     return [
         {
             "date": day,
-            "read_count": read_map.get(day, 0),
+            "opened_count": opened_map.get(day, 0),
             "favorite_count": fav_map.get(day, 0),
         }
         for day in get_local_date_range(days)
@@ -567,15 +600,14 @@ def _query_behavior_trend(db: Session, tz_param, days: int) -> list[dict]:
 
 
 def _query_source_preference(db: Session, top_n: int) -> list[dict]:
-    """数据源消费偏好 Top N"""
-    no_dup = ContentItem.duplicate_of_id.is_(None)
+    """数据源消费偏好 Top N：按真正打开过的篇数排序"""
     rows = (
         db.query(
             ContentItem.source_id,
-            func.count(ContentItem.id).label("read_count"),
+            func.count(ContentItem.id).label("opened_count"),
             func.sum(case((ContentItem.is_favorited.is_(True), 1), else_=0)).label("favorite_count"),
         )
-        .filter(no_dup, ContentItem.view_count > 0, ContentItem.source_id.isnot(None))
+        .filter(_NO_DUP, ContentItem.opened_at.isnot(None), ContentItem.source_id.isnot(None))
         .group_by(ContentItem.source_id)
         .order_by(func.count(ContentItem.id).desc())
         .limit(top_n)
@@ -594,7 +626,7 @@ def _query_source_preference(db: Session, top_n: int) -> list[dict]:
         {
             "source_id": r.source_id,
             "source_name": name_map.get(r.source_id, "未知数据源"),
-            "read_count": r.read_count,
+            "opened_count": r.opened_count,
             "favorite_count": r.favorite_count or 0,
         }
         for r in rows
@@ -608,7 +640,11 @@ def get_user_behavior_stats(
     top_n: int = Query(5, ge=1, le=20),
     db: Session = Depends(get_db),
 ):
-    """获取用户行为统计聚合数据（行为概览、热力图、趋势、数据源偏好）"""
+    """获取用户行为统计聚合数据（行为概览、热力图、趋势、数据源偏好）
+
+    热力图 / 趋势 / 偏好均以 opened_at（首次打开详情）为准；
+    概览同时给出 read_*（已处理）与 opened_*（已打开）两套口径。
+    """
     tz_name = get_container_timezone_name()
     tz_param = bindparam("tz_name", value=tz_name, type_=String)
 

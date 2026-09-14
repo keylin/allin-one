@@ -22,7 +22,7 @@ const toast = useToast()
 // 数据状态
 const stats = ref({
   sources_count: 0, contents_today: 0, contents_yesterday: 0, contents_total: 0,
-  pipelines_running: 0, pipelines_failed: 0, pipelines_pending: 0,
+  pipelines_running: 0, pipelines_failed: 0, pipelines_pending: 0, as_of: null,
 })
 const activities = ref([])
 const trend = ref([])
@@ -43,7 +43,8 @@ let timer = null
 let failCount = 0
 
 // 趋势图选中日期（仅用于高亮）
-const selectedDate = ref(dayjs().format('YYYY-MM-DD'))
+const todayStr = dayjs().format('YYYY-MM-DD')
+const selectedDate = ref(todayStr)
 
 async function handleCollectSource(source) {
   collectingId.value = source.id
@@ -62,7 +63,7 @@ const statCards = [
   { key: 'sources_count', label: '数据源', accent: 'indigo', link: '/sources', icon: 'M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1' },
   { key: 'contents_today', label: '今日采集', accent: 'emerald', link: '/content', icon: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z' },
   { key: 'pipelines_running', label: '运行中', accent: 'amber', link: '/pipelines', icon: 'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15' },
-  { key: 'pipelines_failed', label: '失败', accent: 'rose', link: '/pipelines', icon: 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z' },
+  { key: 'pipelines_failed', label: '24h 失败', accent: 'rose', link: '/pipelines', icon: 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z' },
 ]
 
 const accentClasses = {
@@ -86,7 +87,20 @@ function behaviorDayChange(today, yesterday) {
   return today - yesterday
 }
 
-// --- 收藏率 ---
+// --- 互动（AI 对话 + 笔记 + 批注），为 0 时不占版面 ---
+const interactionCount = computed(() => {
+  if (!behaviorStats.value) return 0
+  const b = behaviorStats.value
+  return (b.chat_count || 0) + (b.note_count || 0) + (b.annotation_count || 0)
+})
+
+// --- 今日数据截止时刻（来自后端容器本地时间） ---
+const asOfTime = computed(() => {
+  const v = stats.value.as_of
+  return v ? v.slice(11, 16) : ''
+})
+
+// --- 收藏率（相对已处理数） ---
 const favoriteRate = computed(() => {
   if (!behaviorStats.value) return null
   const { read_total, favorited_total } = behaviorStats.value
@@ -98,7 +112,7 @@ const favoriteRate = computed(() => {
 const heatmapCells = computed(() => {
   if (!behaviorStats.value?.heatmap) return []
   const map = {}
-  behaviorStats.value.heatmap.forEach(d => { map[d.date] = d.read_count })
+  behaviorStats.value.heatmap.forEach(d => { map[d.date] = d.opened_count })
 
   const todayStr = behaviorStats.value?.today || dayjs().format('YYYY-MM-DD')
   const today = dayjs(todayStr)
@@ -154,7 +168,7 @@ const heatmapMonthLabels = computed(() => {
 const trendChartData = computed(() => {
   if (!behaviorStats.value?.trend?.length) return null
   const data = behaviorStats.value.trend
-  const readCounts = data.map(d => d.read_count)
+  const readCounts = data.map(d => d.opened_count)
   const favCounts = data.map(d => d.favorite_count)
   const maxVal = Math.max(...readCounts, ...favCounts, 1)
   const W = 400
@@ -170,7 +184,7 @@ const trendChartData = computed(() => {
     return { x, y }
   }
 
-  const readPoints = data.map((d, i) => toPoint(i, d.read_count))
+  const readPoints = data.map((d, i) => toPoint(i, d.opened_count))
   const favPoints = data.map((d, i) => toPoint(i, d.favorite_count))
 
   function toPath(points) {
@@ -184,8 +198,8 @@ const trendChartData = computed(() => {
 const sourcePreferenceData = computed(() => {
   if (!behaviorStats.value?.source_preference?.length) return []
   const top = behaviorStats.value.source_preference.slice(0, 5)
-  const maxRead = Math.max(...top.map(s => s.read_count), 1)
-  return top.map(s => ({ ...s, barWidth: Math.round(s.read_count / maxRead * 100) }))
+  const maxRead = Math.max(...top.map(s => s.opened_count), 1)
+  return top.map(s => ({ ...s, barWidth: Math.round(s.opened_count / maxRead * 100) }))
 })
 
 // --- 内容状态分布 ---
@@ -206,14 +220,23 @@ const trendMax = computed(() => Math.max(...trend.value.map(t => t.count), 1))
 
 // --- 数据源健康统计 ---
 const healthSummary = computed(() => {
-  const h = { healthy: 0, warning: 0, error: 0, disabled: 0 }
+  const h = { healthy: 0, warning: 0, error: 0, disabled: 0, sync: 0 }
   sourceHealthList.value.forEach(s => h[s.health]++)
   return h
 })
 
+// 只列需要关注的：异常/告警/已禁用；同步型源没有采集记录，不进列表
 const unhealthySources = computed(() =>
-  sourceHealthList.value.filter(s => s.health !== 'healthy')
+  sourceHealthList.value.filter(s => s.health !== 'healthy' && s.health !== 'sync')
 )
+
+function healthDetail(s) {
+  if (s.health === 'disabled') return '已禁用'
+  const parts = []
+  if (s.consecutive_failures > 0) parts.push(`连续失败 ${s.consecutive_failures} 次`)
+  if (s.window_total > 0) parts.push(`近 ${s.window_days} 天失败 ${s.window_failed}/${s.window_total}（${s.failure_rate}%）`)
+  return parts.join(' · ') || '无采集记录'
+}
 
 // --- 存储格式化 ---
 function formatBytes(bytes) {
@@ -241,6 +264,7 @@ const healthStyles = {
   warning: { dot: 'bg-amber-400', text: 'text-amber-600', label: '告警' },
   error: { dot: 'bg-rose-400', text: 'text-rose-600', label: '异常' },
   disabled: { dot: 'bg-slate-300', text: 'text-slate-400', label: '已禁用' },
+  sync: { dot: 'bg-sky-300', text: 'text-sky-500', label: '同步型' },
 }
 
 function storageBarClass(bytes) {
@@ -251,31 +275,12 @@ function storageBarClass(bytes) {
 }
 
 // --- 数据获取 ---
-async function fetchData() {
-  const results = await Promise.allSettled([
-    getDashboardStats(),
-    getRecentActivity(8),
-    getCollectionTrend(7),
-    getSourceHealth(),
-    getFinanceSummary(),
-    getContentStatusDistribution(),
-    getStorageStats(),
-    getDedupStats(),
-    getUserBehaviorStats({ heatmap_days: 84, trend_days: 7, top_n: 5 }),
-  ])
+// 快组：30s 刷新的运行态指标；慢组：存储扫描 / 去重全表统计 / 金融摘要，5 分钟一次
+const FAST_INTERVAL = 30000
+const SLOW_INTERVAL = 5 * 60 * 1000
+let slowTimer = null
 
-  const handlers = [
-    (res) => { stats.value = res.data },
-    (res) => { activities.value = res.data },
-    (res) => { trend.value = res.data },
-    (res) => { sourceHealthList.value = res.data },
-    (res) => { financeSummaries.value = res.data.slice(0, 4) },
-    (res) => { contentStatus.value = res.data },
-    (res) => { storageStats.value = res.data },
-    (res) => { dedupStats.value = res.data },
-    (res) => { behaviorStats.value = res.data },
-  ]
-
+function applyResults(results, handlers) {
   let hasError = false
   results.forEach((result, i) => {
     if (result.status === 'fulfilled' && result.value?.code === 0) {
@@ -284,19 +289,60 @@ async function fetchData() {
       hasError = true
     }
   })
+  return hasError
+}
 
+function noteFailure(hasError) {
   if (hasError) {
     failCount++
     if (failCount >= 3 && timer) {
       clearInterval(timer)
       timer = null
+      if (slowTimer) { clearInterval(slowTimer); slowTimer = null }
       toast.error('自动刷新已暂停，请检查网络后刷新页面')
     }
   } else {
     failCount = 0
   }
+}
 
+async function fetchFast() {
+  const results = await Promise.allSettled([
+    getDashboardStats(),
+    getRecentActivity(8),
+    getCollectionTrend(7),
+    getSourceHealth(),
+    getContentStatusDistribution(),
+    getUserBehaviorStats({ heatmap_days: 84, trend_days: 7, top_n: 5 }),
+  ])
+  const hasError = applyResults(results, [
+    (res) => { stats.value = res.data },
+    (res) => { activities.value = res.data },
+    (res) => { trend.value = res.data },
+    (res) => { sourceHealthList.value = res.data },
+    (res) => { contentStatus.value = res.data },
+    (res) => { behaviorStats.value = res.data },
+  ])
+  noteFailure(hasError)
   loading.value = false
+}
+
+async function fetchSlow() {
+  const results = await Promise.allSettled([
+    getFinanceSummary(),
+    getStorageStats(),
+    getDedupStats(),
+  ])
+  const hasError = applyResults(results, [
+    (res) => { financeSummaries.value = res.data.slice(0, 4) },
+    (res) => { storageStats.value = res.data },
+    (res) => { dedupStats.value = res.data },
+  ])
+  noteFailure(hasError)
+}
+
+async function fetchData() {
+  await Promise.all([fetchFast(), fetchSlow()])
 }
 
 function selectDate(date) {
@@ -306,7 +352,7 @@ function selectDate(date) {
 function showHeatmapTooltip(event, cell) {
   const d = dayjs(cell.dateStr)
   const weekdays = ['日', '一', '二', '三', '四', '五', '六']
-  const label = `${d.format('M')}月${d.format('D')}日 周${weekdays[d.day()]}：阅读 ${cell.count} 篇`
+  const label = `${d.format('M')}月${d.format('D')}日 周${weekdays[d.day()]}：打开 ${cell.count} 篇`
   heatmapTooltip.value = { visible: true, text: label }
 }
 
@@ -338,11 +384,13 @@ function formatTime(t) {
 
 onMounted(() => {
   fetchData()
-  timer = setInterval(fetchData, 30000)
+  timer = setInterval(fetchFast, FAST_INTERVAL)
+  slowTimer = setInterval(fetchSlow, SLOW_INTERVAL)
 })
 
 onUnmounted(() => {
   if (timer) clearInterval(timer)
+  if (slowTimer) clearInterval(slowTimer)
 })
 </script>
 
@@ -424,8 +472,8 @@ onUnmounted(() => {
       </div>
 
       <!-- B1: 行为统计卡片 -->
-      <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <!-- 已阅读 -->
+      <!-- 已打开 = 真正点开详情（opened_at）；已处理 = 含滚动/批量标记的已读（view_count） -->
+      <div class="grid grid-cols-2 gap-4" :class="interactionCount > 0 ? 'lg:grid-cols-4' : 'lg:grid-cols-3'">
         <div
           class="bg-white rounded-xl border border-slate-200/60 p-4 shadow-sm hover:shadow-md hover:border-slate-300 transition-all duration-300 cursor-pointer"
           @click="router.push('/feed?unread=0')"
@@ -433,7 +481,7 @@ onUnmounted(() => {
           <div class="flex items-center justify-between mb-2">
             <div class="w-9 h-9 rounded-lg flex items-center justify-center bg-teal-50">
               <svg class="w-5 h-5 text-teal-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" />
+                <path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
               </svg>
             </div>
             <svg class="w-4 h-4 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
@@ -442,6 +490,38 @@ onUnmounted(() => {
           </div>
           <div class="flex items-baseline gap-2">
             <div class="text-2xl font-bold tracking-tight text-teal-700">
+              {{ loading || !behaviorStats ? '-' : behaviorStats.opened_total }}
+            </div>
+            <div v-if="!loading && behaviorStats && behaviorDayChange(behaviorStats.opened_today, behaviorStats.opened_yesterday) !== 0" class="flex items-center gap-0.5">
+              <svg v-if="behaviorDayChange(behaviorStats.opened_today, behaviorStats.opened_yesterday) > 0" class="w-3 h-3 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M5 10l7-7m0 0l7 7m-7-7v18" />
+              </svg>
+              <svg v-else class="w-3 h-3 text-rose-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+              </svg>
+              <span class="text-xs font-medium" :class="behaviorDayChange(behaviorStats.opened_today, behaviorStats.opened_yesterday) > 0 ? 'text-emerald-500' : 'text-rose-500'">
+                {{ behaviorDayChange(behaviorStats.opened_today, behaviorStats.opened_yesterday) > 0 ? '+' : '' }}{{ behaviorDayChange(behaviorStats.opened_today, behaviorStats.opened_yesterday) }}
+              </span>
+            </div>
+          </div>
+          <div class="text-sm text-slate-500 mt-0.5">已打开</div>
+        </div>
+        <div
+          class="bg-white rounded-xl border border-slate-200/60 p-4 shadow-sm hover:shadow-md hover:border-slate-300 transition-all duration-300 cursor-pointer"
+          @click="router.push('/feed?unread=0')"
+        >
+          <div class="flex items-center justify-between mb-2">
+            <div class="w-9 h-9 rounded-lg flex items-center justify-center bg-slate-100">
+              <svg class="w-5 h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" />
+              </svg>
+            </div>
+            <svg class="w-4 h-4 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+            </svg>
+          </div>
+          <div class="flex items-baseline gap-2">
+            <div class="text-2xl font-bold tracking-tight text-slate-600">
               {{ loading || !behaviorStats ? '-' : behaviorStats.read_total }}
             </div>
             <div v-if="!loading && behaviorStats && behaviorDayChange(behaviorStats.read_today, behaviorStats.read_yesterday) !== 0" class="flex items-center gap-0.5">
@@ -456,10 +536,9 @@ onUnmounted(() => {
               </span>
             </div>
           </div>
-          <div class="text-sm text-slate-500 mt-0.5">已阅读</div>
+          <div class="text-sm text-slate-500 mt-0.5">已处理</div>
+          <div class="text-xs text-slate-400 mt-0.5">含滚动与批量标记</div>
         </div>
-
-        <!-- 已收藏 -->
         <div
           class="bg-white rounded-xl border border-slate-200/60 p-4 shadow-sm hover:shadow-md hover:border-slate-300 transition-all duration-300 cursor-pointer"
           @click="router.push('/favorites')"
@@ -495,9 +574,8 @@ onUnmounted(() => {
             收藏率 {{ favoriteRate }}%
           </div>
         </div>
-
-        <!-- AI 对话 -->
         <div
+          v-if="interactionCount > 0"
           class="bg-white rounded-xl border border-slate-200/60 p-4 shadow-sm hover:shadow-md hover:border-slate-300 transition-all duration-300 cursor-pointer"
           @click="router.push('/content')"
         >
@@ -511,31 +589,12 @@ onUnmounted(() => {
               <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
             </svg>
           </div>
-          <div class="text-2xl font-bold tracking-tight text-violet-700">
-            {{ loading || !behaviorStats ? '-' : behaviorStats.chat_count }}
-          </div>
-          <div class="text-sm text-slate-500 mt-0.5">AI 对话</div>
-        </div>
-
-        <!-- 笔记批注 -->
-        <div
-          class="bg-white rounded-xl border border-slate-200/60 p-4 shadow-sm hover:shadow-md hover:border-slate-300 transition-all duration-300 cursor-pointer"
-          @click="router.push('/content')"
-        >
-          <div class="flex items-center justify-between mb-2">
-            <div class="w-9 h-9 rounded-lg flex items-center justify-center bg-cyan-50">
-              <svg class="w-5 h-5 text-cyan-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10" />
-              </svg>
+          <div class="flex items-baseline gap-2">
+            <div class="text-2xl font-bold tracking-tight text-violet-700">
+              {{ loading || !behaviorStats ? '-' : interactionCount }}
             </div>
-            <svg class="w-4 h-4 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
-            </svg>
           </div>
-          <div class="text-2xl font-bold tracking-tight text-cyan-700">
-            {{ loading || !behaviorStats ? '-' : (behaviorStats.note_count + behaviorStats.annotation_count) }}
-          </div>
-          <div class="text-sm text-slate-500 mt-0.5">笔记批注</div>
+          <div class="text-sm text-slate-500 mt-0.5">互动（对话 / 笔记 / 批注）</div>
         </div>
       </div>
 
@@ -669,7 +728,7 @@ onUnmounted(() => {
                 r="3"
                 fill="#6366f1"
                 class="cursor-pointer hover:r-4 transition-all"
-                @mouseenter="showTrendTooltip($event, `${formatTrendDate(trendChartData.data[i].date)}：阅读 ${trendChartData.data[i].read_count} 篇`)"
+                @mouseenter="showTrendTooltip($event, `${formatTrendDate(trendChartData.data[i].date)}：打开 ${trendChartData.data[i].opened_count} 篇`)"
                 @mouseleave="hideTrendTooltip"
               />
 
@@ -703,7 +762,7 @@ onUnmounted(() => {
             <div class="flex items-center gap-4 mt-3 justify-center">
               <div class="flex items-center gap-1.5">
                 <div class="w-3 h-0.5 bg-indigo-500 rounded"></div>
-                <span class="text-[10px] text-slate-500">阅读</span>
+                <span class="text-[10px] text-slate-500">打开</span>
               </div>
               <div class="flex items-center gap-1.5">
                 <div class="w-3 h-0.5 bg-amber-500 rounded"></div>
@@ -733,8 +792,8 @@ onUnmounted(() => {
               <div class="flex items-center justify-between gap-2">
                 <span class="text-xs text-slate-700 truncate flex-1 min-w-0" :title="src.source_name">{{ src.source_name }}</span>
                 <div class="flex items-center gap-2 shrink-0">
-                  <span class="text-xs font-medium text-teal-600">{{ src.read_count }}</span>
-                  <span class="text-[10px] text-slate-400">阅读</span>
+                  <span class="text-xs font-medium text-teal-600">{{ src.opened_count }}</span>
+                  <span class="text-[10px] text-slate-400">打开</span>
                   <span class="text-xs font-medium text-pink-500">{{ src.favorite_count }}</span>
                   <span class="text-[10px] text-slate-400">收藏</span>
                 </div>
@@ -854,12 +913,12 @@ onUnmounted(() => {
                       ? 'bg-indigo-400 group-hover:bg-indigo-500'
                       : 'bg-slate-100'"
                   :style="{ height: `${Math.max(day.count / trendMax * 100, 4)}px` }"
-                  :title="`${day.date}: ${day.count} 条`"
+                  :title="day.date === todayStr && asOfTime ? `${day.date}: ${day.count} 条（截至 ${asOfTime}）` : `${day.date}: ${day.count} 条`"
                 ></div>
               </div>
               <div class="flex flex-col items-center gap-0.5">
                 <span class="text-[10px]" :class="selectedDate === day.date ? 'text-indigo-600 font-semibold' : 'text-slate-400'">
-                  {{ formatTrendDate(day.date) }}
+                  {{ formatTrendDate(day.date) }}<template v-if="day.date === todayStr && asOfTime"> <span class="text-slate-300">至{{ asOfTime }}</span></template>
                 </span>
                 <div v-if="selectedDate === day.date" class="w-1 h-1 rounded-full bg-indigo-600"></div>
               </div>
@@ -927,11 +986,7 @@ onUnmounted(() => {
               <div class="w-2 h-2 rounded-full shrink-0" :class="healthStyles[s.health].dot"></div>
               <div class="flex-1 min-w-0">
                 <div class="text-xs font-medium text-slate-700 truncate">{{ s.name }}</div>
-                <div class="text-[10px] text-slate-400">
-                  <span v-if="s.health === 'error'">连续失败 {{ s.consecutive_failures }} 次</span>
-                  <span v-else-if="s.health === 'warning'">失败 {{ s.consecutive_failures }} 次</span>
-                  <span v-else>已禁用</span>
-                </div>
+                <div class="text-[10px] text-slate-400 truncate">{{ healthDetail(s) }}</div>
               </div>
               <button
                 v-if="s.health === 'error' || s.health === 'warning'"

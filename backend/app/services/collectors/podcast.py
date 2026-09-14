@@ -18,7 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.content import SourceConfig, ContentItem, ContentStatus, MediaItem
-from app.services.collectors.base import BaseCollector
+from app.services.collectors.base import BaseCollector, report_found
 from app.services.collectors.utils import coerce_config
 from app.services.media_detection import detect_media_for_content
 
@@ -59,6 +59,7 @@ class PodcastCollector(BaseCollector):
             .all()
         )
 
+        report_found(len(feed.entries[:max_episodes]))
         new_items = []
         for entry in feed.entries[:max_episodes]:
             url = entry.get("link")

@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.content import SourceConfig, ContentItem, ContentStatus
-from app.services.collectors.base import BaseCollector
+from app.services.collectors.base import BaseCollector, report_found
 from app.services.collectors.utils import coerce_config
 
 logger = logging.getLogger(__name__)
@@ -72,6 +72,7 @@ class GenericAccountCollector(BaseCollector):
         time_field = config.get("time_field")
         time_format = config.get("time_format", "iso")
 
+        report_found(len(items))
         new_items = []
         for entry in items:
             title = str(entry.get(title_field, ""))

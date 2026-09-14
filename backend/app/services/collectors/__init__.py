@@ -6,6 +6,7 @@ import httpx
 from sqlalchemy.orm import Session
 from app.core.time import utcnow
 from app.models.content import SourceConfig, ContentItem, CollectionRecord
+from app.services.collectors.base import take_found
 from app.services.collectors.rss import RSSCollector
 from app.services.collectors.podcast import PodcastCollector
 from app.services.collectors.web_scraper import ScraperCollector
@@ -193,12 +194,13 @@ async def collect_source_with_retry(source: SourceConfig, db: Session) -> list[C
             db.commit()
             return []
 
-        # 调用带重试的采集
+        # 调用带重试的采集（先清掉上一次可能残留的发现数）
+        take_found(0)
         new_items = await collect_with_retry(collector, source, db, retry_config)
 
-        # 成功：更新记录
+        # 成功：更新记录（items_found 为源端发现总数，items_new 为实际新增）
         record.status = "completed"
-        record.items_found = len(new_items)
+        record.items_found = take_found(len(new_items))
         record.items_new = len(new_items)
         record.completed_at = utcnow()
         db.commit()
@@ -245,10 +247,11 @@ async def collect_source(source: SourceConfig, db: Session) -> list[ContentItem]
             db.commit()
             return []
 
+        take_found(0)
         new_items = await collector.collect(source, db)
 
         record.status = "completed"
-        record.items_found = len(new_items)
+        record.items_found = take_found(len(new_items))
         record.items_new = len(new_items)
         record.completed_at = utcnow()
         db.commit()

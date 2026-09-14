@@ -210,8 +210,9 @@ CREATE TABLE content_items (
     favorited_at    DATETIME,                   -- 收藏时间
     user_note       TEXT,                       -- 用户笔记
     chat_history    JSONB,                      -- AI 对话历史 (JSON: [{role, content}, ...])
-    view_count      INTEGER DEFAULT 0,           -- 浏览次数
-    last_viewed_at  DATETIME,                     -- 最后浏览时间
+    view_count      INTEGER DEFAULT 0,           -- 已读标记次数（滚动自动已读/批量已读/打开详情都会置 >0）
+    last_viewed_at  DATETIME,                     -- 最后一次已读写入时间
+    opened_at       DATETIME,                     -- 首次真正打开详情的时间（仅 POST /content/{id}/view 写入；仪表盘阅读统计以此为准）
     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (source_id) REFERENCES source_configs(id) ON DELETE SET NULL,
@@ -785,16 +786,16 @@ class PaginatedResponse(APIResponse):
 
 #### Dashboard
 ```
-GET  /api/dashboard/stats              → { sources_count, contents_today, pipelines_running, pipelines_failed }
-GET  /api/dashboard/collection-trend   → 采集趋势数据
-GET  /api/dashboard/daily-stats        → 每日统计
-GET  /api/dashboard/source-health      → 数据源健康状态
+GET  /api/dashboard/stats              → { sources_count, contents_today/yesterday/total(剔除重复项), pipelines_running, pipelines_failed(近 24h), pipelines_pending, as_of }
+GET  /api/dashboard/collection-trend   → 采集趋势数据（count 剔除重复项；含采集成功率）
+GET  /api/dashboard/daily-stats        → 每日统计（items_found 为源端发现总数，items_new 为实际新增）
+GET  /api/dashboard/source-health      → 数据源健康状态（consecutive_failures + 近 7 天失败率双维度；sync 类源单独分级不参与判定）
 GET  /api/dashboard/recent-content     → 最近采集的内容
 GET  /api/dashboard/content-status-distribution → 内容状态分布
 GET  /api/dashboard/storage-stats      → 存储统计
 GET  /api/dashboard/today-summary      → 今日概要
 GET  /api/dashboard/recent-activity    → 最近活动
-GET  /api/dashboard/user-behavior-stats → 用户行为统计（阅读/收藏/热力图/趋势/偏好）
+GET  /api/dashboard/user-behavior-stats → 用户行为统计。概览含 read_*（已处理，view_count>0）与 opened_*（已打开，opened_at）两套口径；热力图/趋势/偏好按 opened_at 计
 ```
 
 #### Sources

@@ -40,6 +40,7 @@ class ContentResponse(BaseModel):
     user_note: Optional[str] = None
     view_count: int = 0
     last_viewed_at: Optional[datetime] = None
+    opened_at: Optional[datetime] = None
     duplicate_of_id: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
