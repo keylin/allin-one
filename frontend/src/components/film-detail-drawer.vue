@@ -5,6 +5,7 @@ import { getFilm, getFilmStats, updateWatchRecord, updateFilmNote, deleteFilm, e
 import { formatTimeShort } from '@/utils/time'
 import { useToast } from '@/composables/useToast'
 import { useDoubleTapClose } from '@/composables/useDoubleTapClose'
+import StarRating from '@/components/star-rating.vue'
 
 const props = defineProps({
   visible: { type: Boolean, default: false },
@@ -104,9 +105,9 @@ function setStatus(value) {
 }
 
 function setRating(value) {
-  const next = form.value.my_rating === value ? null : value
-  form.value.my_rating = next
-  saveRecord({ my_rating: next })
+  // StarRating 已处理"再点同一值即清除"，这里拿到的是 1~10 或 null
+  form.value.my_rating = value
+  saveRecord({ my_rating: value })
 }
 
 function saveWatchedAt() {
@@ -264,16 +265,8 @@ function fmt(iso) {
         </div>
 
         <div class="mt-4">
-          <p class="text-[11px] text-slate-400 mb-1.5">我的评分</p>
-          <div class="flex gap-1">
-            <button
-              v-for="n in 10"
-              :key="n"
-              class="w-7 h-7 text-xs rounded-md transition-all tabular-nums"
-              :class="form.my_rating != null && n <= form.my_rating ? 'bg-amber-400 text-white' : 'bg-slate-100 text-slate-400 hover:bg-amber-100'"
-              @click="setRating(n)"
-            >{{ n }}</button>
-          </div>
+          <p class="text-[11px] text-slate-400 mb-1.5">我的评分 <span class="text-slate-300">· 点星的左半边是半星</span></p>
+          <StarRating :model-value="form.my_rating" size="lg" show-value @update:model-value="setRating" />
         </div>
 
         <div class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">

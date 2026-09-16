@@ -1,10 +1,11 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { listFilms, getFilmStats, enrichMissing, updateWatchRecord, deleteFilm, statusMeta, WATCH_STATUS_OPTIONS } from '@/api/films'
+import { listFilms, getFilmStats, enrichMissing, updateWatchRecord, statusMeta, WATCH_STATUS_OPTIONS } from '@/api/films'
 import { useToast } from '@/composables/useToast'
 import FilmDetailDrawer from '@/components/film-detail-drawer.vue'
 import FilmAddModal from '@/components/film-add-modal.vue'
+import StarRating from '@/components/star-rating.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -35,13 +36,10 @@ const addVisible = ref(false)
 const showFilters = ref(false)
 
 // 卡片快捷操作
-const ratingOpenId = ref(null)       // 正在展开评分条的卡片
 const sheetFilm = ref(null)          // 移动端操作面板
-const deleteConfirmId = ref(null)
 const busyId = ref(null)
 let searchTimer = null
 let longPressTimer = null
-let deleteConfirmTimer = null
 
 const QUICK_STATUSES = WATCH_STATUS_OPTIONS.filter(o => ['want', 'watched', 'dropped'].includes(o.value))
 
@@ -201,36 +199,9 @@ function quickStatus(film, value) {
   quickRecord(film, { status: next })   // 看过且无日期时后端默认上映日期
 }
 
-function quickRating(film, n) {
-  const next = film.record?.my_rating === n ? null : n
-  ratingOpenId.value = null
-  quickRecord(film, { my_rating: next })
-}
-
-function toggleRating(film) {
-  ratingOpenId.value = ratingOpenId.value === film.content_id ? null : film.content_id
-}
-
-async function quickDelete(film) {
-  if (deleteConfirmId.value !== film.content_id) {
-    deleteConfirmId.value = film.content_id
-    clearTimeout(deleteConfirmTimer)
-    deleteConfirmTimer = setTimeout(() => { deleteConfirmId.value = null }, 3000)
-    return
-  }
-  deleteConfirmId.value = null
-  try {
-    const res = await deleteFilm(film.content_id)
-    if (res.code === 0) {
-      success(`已删除「${film.title}」（Emby 不受影响）`)
-      onFilmDeleted(film.content_id)
-      sheetFilm.value = null
-    } else {
-      showError(res.message || '删除失败')
-    }
-  } catch {
-    showError('删除失败')
-  }
+function quickRating(film, value) {
+  // StarRating 给的是 1~10 或 null（再点同一值即清除）
+  quickRecord(film, { my_rating: value })
 }
 
 // 移动端长按 → 操作面板
@@ -246,11 +217,6 @@ function cancelLongPress() {
 }
 function closeSheet() {
   sheetFilm.value = null
-  deleteConfirmId.value = null
-}
-
-function onDocClick(e) {
-  if (ratingOpenId.value && !e.target.closest('[data-rating-pop]')) ratingOpenId.value = null
 }
 
 // ---- 补全元数据 ----
@@ -304,10 +270,8 @@ function statusCount(value) {
 onMounted(() => {
   fetchFilms()
   fetchStats()
-  document.addEventListener('click', onDocClick)
 })
 onUnmounted(() => {
-  document.removeEventListener('click', onDocClick)
   if (observer) observer.disconnect()
 })
 </script>
@@ -472,7 +436,7 @@ onUnmounted(() => {
                   :class="statusMeta(film.record.status).color"
                 >{{ statusMeta(film.record.status).label }}</span>
                 <span v-if="film.in_emby" class="absolute top-1.5 right-1.5 px-1.5 py-0.5 text-[10px] font-medium bg-black/60 text-white rounded" title="在 Emby 库内">E</span>
-                <span v-if="film.record?.my_rating" class="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 text-[10px] font-semibold bg-amber-400/90 text-white rounded tabular-nums">{{ film.record.my_rating }}</span>
+                <span v-if="film.record?.my_rating" class="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 text-[10px] font-semibold bg-amber-400/90 text-white rounded tabular-nums">★ {{ (film.record.my_rating / 2).toFixed(1).replace('.0', '') }}</span>
                 <div v-if="film.emby && film.emby.progress > 0 && film.emby.progress < 1 && !film.emby.played" class="absolute bottom-0 left-0 right-0 h-0.5 bg-black/20">
                   <div class="h-full bg-indigo-400" :style="{ width: Math.round(film.emby.progress * 100) + '%' }" />
                 </div>
@@ -489,40 +453,19 @@ onUnmounted(() => {
               </div>
 
               <!-- quick actions (desktop 常显；移动端长按走面板) -->
-              <div class="hidden sm:flex items-center gap-0.5 px-1.5 pb-1.5 relative" data-rating-pop>
-                <button
-                  v-for="opt in QUICK_STATUSES"
-                  :key="opt.value"
-                  class="flex-1 px-1 py-1 text-[10px] rounded-md transition-all"
-                  :class="film.record?.status === opt.value ? 'bg-slate-800 text-white' : 'text-slate-400 hover:bg-slate-100 hover:text-slate-700'"
-                  :title="film.record?.status === opt.value ? `取消「${opt.label}」` : `标为「${opt.label}」`"
-                  @click.stop="quickStatus(film, opt.value)"
-                >{{ opt.label }}</button>
-                <button
-                  class="px-1.5 py-1 text-[10px] rounded-md transition-all tabular-nums"
-                  :class="film.record?.my_rating ? 'text-amber-600 bg-amber-50 hover:bg-amber-100' : 'text-slate-400 hover:bg-slate-100 hover:text-amber-600'"
-                  title="评分"
-                  @click.stop="toggleRating(film)"
-                >★{{ film.record?.my_rating || '' }}</button>
-                <button
-                  class="px-1 py-1 text-[10px] rounded-md transition-all"
-                  :class="deleteConfirmId === film.content_id ? 'bg-rose-600 text-white' : 'text-slate-300 hover:bg-rose-50 hover:text-rose-500'"
-                  :title="deleteConfirmId === film.content_id ? '再点一次确认删除' : '删除记录（Emby 不受影响）'"
-                  @click.stop="quickDelete(film)"
-                >{{ deleteConfirmId === film.content_id ? '确认' : '×' }}</button>
-
-                <!-- rating strip -->
-                <div
-                  v-if="ratingOpenId === film.content_id"
-                  class="absolute left-1 right-1 bottom-full mb-1 z-20 bg-white border border-slate-200 rounded-lg shadow-lg p-1.5 flex gap-0.5"
-                >
+              <div class="hidden sm:block px-1.5 pb-1.5">
+                <div class="flex items-center justify-center mb-1">
+                  <StarRating :model-value="film.record?.my_rating" size="sm" @update:model-value="quickRating(film, $event)" />
+                </div>
+                <div class="flex items-center gap-0.5">
                   <button
-                    v-for="n in 10"
-                    :key="n"
-                    class="flex-1 h-6 text-[10px] rounded transition-all tabular-nums"
-                    :class="film.record?.my_rating && n <= film.record.my_rating ? 'bg-amber-400 text-white' : 'bg-slate-100 text-slate-500 hover:bg-amber-100'"
-                    @click.stop="quickRating(film, n)"
-                  >{{ n }}</button>
+                    v-for="opt in QUICK_STATUSES"
+                    :key="opt.value"
+                    class="flex-1 px-1 py-1 text-[10px] rounded-md transition-all"
+                    :class="film.record?.status === opt.value ? 'bg-slate-800 text-white' : 'text-slate-400 hover:bg-slate-100 hover:text-slate-700'"
+                    :title="film.record?.status === opt.value ? `取消「${opt.label}」` : `标为「${opt.label}」`"
+                    @click.stop="quickStatus(film, opt.value)"
+                  >{{ opt.label }}</button>
                 </div>
               </div>
             </div>
@@ -578,25 +521,12 @@ onUnmounted(() => {
                 </div>
               </div>
               <div>
-                <p class="text-[11px] text-slate-400 mb-1.5">评分</p>
-                <div class="flex gap-1">
-                  <button
-                    v-for="n in 10"
-                    :key="n"
-                    class="flex-1 h-8 text-xs rounded-md transition-all tabular-nums"
-                    :class="sheetFilm.record?.my_rating && n <= sheetFilm.record.my_rating ? 'bg-amber-400 text-white' : 'bg-slate-100 text-slate-500 active:bg-amber-100'"
-                    @click="quickRating(sheetFilm, n)"
-                  >{{ n }}</button>
-                </div>
+                <p class="text-[11px] text-slate-400 mb-1.5">评分 <span class="text-slate-300">· 点星的左半边是半星</span></p>
+                <StarRating :model-value="sheetFilm.record?.my_rating" size="lg" show-value @update:model-value="quickRating(sheetFilm, $event)" />
               </div>
             </div>
             <div class="border-t border-slate-100">
               <button class="w-full text-left px-4 py-3 text-sm text-slate-700 active:bg-slate-100" @click="openFilm({ content_id: sheetFilm.content_id }); sheetFilm = null">查看详情</button>
-              <button
-                class="w-full text-left px-4 py-3 text-sm active:bg-rose-100"
-                :class="deleteConfirmId === sheetFilm.content_id ? 'text-rose-700 bg-rose-50 font-medium' : 'text-rose-600'"
-                @click="quickDelete(sheetFilm)"
-              >{{ deleteConfirmId === sheetFilm.content_id ? '再点一次确认删除' : '删除记录（Emby 不受影响）' }}</button>
               <button class="w-full py-3 text-sm text-slate-500 font-medium border-t border-slate-100 active:bg-slate-100" @click="closeSheet">取消</button>
             </div>
           </div>
