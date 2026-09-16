@@ -8,7 +8,7 @@ import FilmAddModal from '@/components/film-add-modal.vue'
 
 const route = useRoute()
 const router = useRouter()
-const { success, error: showError } = useToast()
+const { success, error: showError, showToast } = useToast()
 
 // ---- state ----
 const loading = ref(false)
@@ -148,19 +148,35 @@ function onFilmAdded(film) {
 // 补全元数据（循环调用直到 remaining=0）
 const enriching = ref(false)
 const enrichProgress = ref('')
+const enrichHint = computed(() => {
+  const n = stats.value?.unenriched ?? 0
+  const f = stats.value?.enrich_failed ?? 0
+  if (n > 0) return `${n} 部缺海报或 ID，点击补全`
+  if (f > 0) return `没有可批量补全的记录；${f} 部之前搜不到，可在详情里换名后单条重试`
+  return '所有记录都有元数据'
+})
+
 async function runEnrich() {
   if (enriching.value) return
+  const pending = stats.value?.unenriched ?? 0
+  if (pending === 0) {
+    showToast(enrichHint.value, { type: 'info', duration: 5000 })
+    return
+  }
   enriching.value = true
   let totalOk = 0
+  let totalFailed = 0
   try {
     for (let i = 0; i < 20; i++) {
       const res = await enrichMissing(30)
       if (res.code !== 0) { showError(res.message || '补全失败'); break }
       totalOk += res.data.ok
+      totalFailed += res.data.processed - res.data.ok
       enrichProgress.value = `已补全 ${totalOk}，剩余 ${res.data.remaining}`
       if (res.data.remaining === 0 || res.data.processed === 0) break
     }
-    success(`补全完成：${totalOk} 部拿到了元数据`)
+    if (totalFailed) showToast(`补全完成：${totalOk} 部拿到元数据，${totalFailed} 部搜不到（详情里可单条重试）`, { type: 'warning', duration: 6000 })
+    else success(`补全完成：${totalOk} 部拿到元数据`)
     reload()
   } catch {
     showError('补全失败')
@@ -219,12 +235,15 @@ onMounted(() => {
           同步
         </router-link>
         <button
-          class="hidden sm:inline-flex items-center gap-1 px-2.5 py-1.5 text-xs text-slate-500 hover:text-slate-700 bg-slate-50 hover:bg-slate-100 rounded-lg transition-all disabled:opacity-50"
+          class="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs rounded-lg transition-all disabled:cursor-not-allowed"
+          :class="(stats?.unenriched ?? 0) > 0 ? 'text-indigo-600 bg-indigo-50 hover:bg-indigo-100' : 'text-slate-400 bg-slate-50'"
           :disabled="enriching"
-          title="给缺海报/ID 的记录补元数据（TMDb 或 Emby 搜索）"
+          :title="enrichHint"
           @click="runEnrich"
         >
-          {{ enriching ? (enrichProgress || '补全中...') : '补全元数据' }}
+          <svg v-if="enriching" class="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>
+          <template v-if="enriching">{{ enrichProgress || '补全中...' }}</template>
+          <template v-else>补全元数据<span v-if="(stats?.unenriched ?? 0) > 0" class="ml-0.5 tabular-nums">({{ stats.unenriched }})</span></template>
         </button>
         <button
           class="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-white bg-indigo-500 hover:bg-indigo-600 rounded-lg transition-all"

@@ -74,6 +74,8 @@ def film_stats(db: Session = Depends(get_db)):
     genres: dict[str, int] = {}
     tags: dict[str, int] = {}
     years: set[int] = set()
+    unenriched = 0
+    enrich_failed = 0
     for content, record in rows:
         for t in (record.tags if record and record.tags else []):
             tags[t] = tags.get(t, 0) + 1
@@ -87,6 +89,13 @@ def film_stats(db: Session = Depends(get_db)):
             genres[g] = genres.get(g, 0) + 1
         if raw.get("year"):
             years.add(int(raw["year"]))
+        poster = raw.get("poster") or {}
+        has_poster = bool(poster.get("emby_item_id") or poster.get("tmdb_path") or poster.get("image_url"))
+        has_tmdb = bool((raw.get("provider_ids") or {}).get("tmdb"))
+        if raw.get("enrich_failed"):
+            enrich_failed += 1
+        elif not has_poster or not has_tmdb:
+            unenriched += 1
     return {
         "code": 0,
         "data": {
@@ -97,6 +106,8 @@ def film_stats(db: Session = Depends(get_db)):
             "genres": [g for g, _ in sorted(genres.items(), key=lambda kv: (-kv[1], kv[0]))],
             "tags": [t for t, _ in sorted(tags.items(), key=lambda kv: (-kv[1], kv[0]))],
             "years": sorted(years, reverse=True),
+            "unenriched": unenriched,          # 缺 ID/海报且未标失败的记录数（「补全元数据」按钮用）
+            "enrich_failed": enrich_failed,    # 补全失败过、等单条重试的记录数
             "tmdb_configured": bool(get_tmdb_api_key(db)),
             "emby_configured": get_emby_connection(db) is not None,
         },
