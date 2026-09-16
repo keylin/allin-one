@@ -32,9 +32,15 @@ cd backend && procrastinate --app=app.tasks.procrastinate_app.proc_app worker --
 cd backend && alembic revision --autogenerate -m "description"
 cd backend && alembic upgrade head
 
-# 部署
+# 部署（本地开发容器）
 docker compose up -d --build
+
+# 部署到家庭服务器生产环境（在服务器本机执行：rsync → /opt/allin-one → 构建 → up -d → 迁移 → 健康检查）
+./deploy-home-server.sh          # 全流程；镜像源拉不动时自动切换候选源
+./deploy-home-server.sh status   # 容器状态
 ```
+
+生产目录 `/opt/allin-one` 是仓库的 rsync 镜像，不是 git checkout；其中 `docker-compose.home-server.yml` 与 `.env` 是机器本地文件，不在仓库、不会被同步覆盖。**发版一律跑 `deploy-home-server.sh`，不要手工 rsync / docker build**。
 
 ## 代码规范
 

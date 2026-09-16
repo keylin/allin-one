@@ -1151,6 +1151,16 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 ### 8.3 部署脚本
 
+三套脚本对应三种拓扑：
+
+| 脚本 | 运行位置 | 目标 | Compose 文件 |
+|------|----------|------|--------------|
+| `deploy-local.sh` | 开发机 | 本机开发容器（Colima） | `docker-compose.local.yml` |
+| `deploy-remote.sh` | 开发机 | 通过 SSH 部署到远程服务器 | `docker-compose.remote.yml` |
+| `deploy-home-server.sh` | 家庭服务器本机 | 同机 `/opt/allin-one` 生产目录 | `docker-compose.home-server.yml`（机器本地文件，不入库） |
+
+`deploy-home-server.sh` 流程：rsync 源码到生产目录（`--delete`，排除 `.env`/compose/数据/证书等本地文件）→ 探测可用基础镜像源（依次拉取 node/docker-cli/python 三个基础镜像，超时即换下一个，最后直连 Docker Hub）→ `docker compose build --build-arg REGISTRY=<选中源>` → `up -d` → 等待 healthy → `alembic upgrade head` → 健康检查。Dockerfile 的 `ARG REGISTRY` 默认 `docker.1ms.run/`，其它部署路径行为不变。
+
 ```bash
 #!/bin/bash
 # deploy-remote.sh - 一键部署到远程服务器

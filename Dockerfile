@@ -1,7 +1,11 @@
+# 基础镜像仓库前缀（含结尾斜杠）。国内默认走 docker.1ms.run；某个镜像源拉不动时
+# 由部署脚本探测可用源后通过 --build-arg REGISTRY=... 覆盖，留空则直连 Docker Hub
+ARG REGISTRY=docker.1ms.run/
+
 # ============================================
 # Stage 1: Build Frontend
 # ============================================
-FROM docker.1ms.run/node:22-alpine AS frontend-builder
+FROM ${REGISTRY}node:22-alpine AS frontend-builder
 
 # 配置阿里云 Alpine 镜像源
 RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
@@ -26,12 +30,12 @@ RUN npm run build
 # ============================================
 # Stage 2: Docker CLI (for RSSHub container management)
 # ============================================
-FROM docker.1ms.run/docker:cli AS docker-cli
+FROM ${REGISTRY}docker:cli AS docker-cli
 
 # ============================================
 # Stage 3: Backend Runtime
 # ============================================
-FROM docker.1ms.run/python:3.11-slim
+FROM ${REGISTRY}python:3.11-slim
 
 # 配置阿里云 Debian 镜像源
 RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources && \
