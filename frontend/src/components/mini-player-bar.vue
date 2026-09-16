@@ -9,6 +9,8 @@ const progressPercent = computed(() => {
   return Math.min(100, (playerStore.currentTime / playerStore.duration) * 100)
 })
 
+const isVideo = computed(() => playerStore.activeMedia?.kind === 'video')
+
 function formatTime(secs) {
   if (!secs || isNaN(secs)) return '0:00'
   const s = Math.floor(secs)
@@ -26,15 +28,6 @@ function onProgressClick(e) {
   const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
   playerStore.seek(ratio * playerStore.duration)
 }
-
-function togglePlay() {
-  if (playerStore.isPlaying) {
-    playerStore.pause()
-  } else {
-    playerStore.resume()
-  }
-}
-
 </script>
 
 <template>
@@ -47,7 +40,7 @@ function togglePlay() {
     leave-to-class="translate-y-full"
   >
     <div
-      v-if="playerStore.displayMode === 'mini' && playerStore.activeMedia"
+      v-if="playerStore.showMiniBar && playerStore.activeMedia"
       class="fixed bottom-0 left-0 right-0 z-40 bg-white border-t border-slate-200 shadow-[0_-4px_24px_rgb(0,0,0,0.08)]"
       style="padding-bottom: env(safe-area-inset-bottom, 0px)"
     >
@@ -63,7 +56,7 @@ function togglePlay() {
       </div>
 
       <!-- 主体 -->
-      <div class="flex items-center gap-3 px-4 py-2.5">
+      <div class="flex items-center gap-2 md:gap-3 px-3 md:px-4 py-2.5">
         <!-- 封面/图标 -->
         <div class="shrink-0 w-10 h-10 rounded-lg overflow-hidden bg-slate-100 flex items-center justify-center">
           <img
@@ -85,13 +78,26 @@ function togglePlay() {
           <p class="text-xs text-slate-400 tabular-nums mt-0.5">
             {{ formatTime(playerStore.currentTime) }}
             <span v-if="playerStore.duration"> / {{ formatTime(playerStore.duration) }}</span>
+            <span v-if="isVideo" class="ml-1.5 text-[10px] text-slate-400">{{ playerStore.isPIP ? '· 小窗中' : '· 视频音轨' }}</span>
           </p>
         </div>
+
+        <!-- 后退 15s -->
+        <button
+          class="shrink-0 w-8 h-8 hidden sm:flex items-center justify-center rounded-lg text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 active:scale-95 transition-all"
+          title="后退15秒"
+          @click="playerStore.skip(-playerStore.SKIP_SECONDS)"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 15L3 9m0 0l6-6M3 9h12a6 6 0 010 12h-3" />
+          </svg>
+        </button>
 
         <!-- 播放/暂停 -->
         <button
           class="shrink-0 w-9 h-9 flex items-center justify-center rounded-full bg-indigo-600 text-white hover:bg-indigo-700 active:scale-95 transition-all shadow-sm shadow-indigo-200"
-          @click="togglePlay"
+          :title="playerStore.isPlaying ? '暂停' : '播放'"
+          @click="playerStore.toggle()"
         >
           <!-- 加载中 -->
           <svg v-if="playerStore.isLoading" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -105,6 +111,31 @@ function togglePlay() {
           <!-- 播放 -->
           <svg v-else class="w-4 h-4 ml-0.5" fill="currentColor" viewBox="0 0 24 24">
             <path fill-rule="evenodd" d="M4.5 5.653c0-1.426 1.529-2.33 2.779-1.643l11.54 6.348c1.295.712 1.295 2.573 0 3.285L7.28 19.991c-1.25.687-2.779-.217-2.779-1.643V5.653z" clip-rule="evenodd" />
+          </svg>
+        </button>
+
+        <!-- 前进 15s -->
+        <button
+          class="shrink-0 w-8 h-8 hidden sm:flex items-center justify-center rounded-lg text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 active:scale-95 transition-all"
+          title="前进15秒"
+          @click="playerStore.skip(playerStore.SKIP_SECONDS)"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 15l6-6m0 0l-6-6m6 6H9a6 6 0 000 12h3" />
+          </svg>
+        </button>
+
+        <!-- 画中画（仅视频） -->
+        <button
+          v-if="playerStore.canPIP"
+          class="shrink-0 w-8 h-8 flex items-center justify-center rounded-lg transition-all active:scale-95"
+          :class="playerStore.isPIP ? 'text-indigo-600 bg-indigo-50' : 'text-slate-500 hover:text-indigo-600 hover:bg-indigo-50'"
+          :title="playerStore.isPIP ? '退出小窗' : '小窗播放'"
+          @click="playerStore.togglePIP()"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <rect x="3" y="5" width="18" height="14" rx="2" />
+            <rect x="12" y="11" width="7" height="5" rx="1" fill="currentColor" stroke="none" />
           </svg>
         </button>
 

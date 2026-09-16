@@ -49,7 +49,7 @@ const isLoginPage = computed(() => route.path === '/login')
 const hasApiKey = computed(() => !!localStorage.getItem('api_key'))
 
 const playerStore = usePlayerStore()
-const showMiniPlayer = computed(() => playerStore.displayMode === 'mini')
+const showMiniPlayer = computed(() => playerStore.showMiniBar)
 
 function handleLogout() {
   localStorage.removeItem('api_key')

@@ -1,5 +1,6 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
+import VideoPlayer from '@/components/video-player.vue'
 import IframeVideoPlayer from '@/components/iframe-video-player.vue'
 import PodcastPlayer from '@/components/podcast-player.vue'
 import ImageLightbox from '@/components/image-lightbox.vue'
@@ -170,6 +171,28 @@ const parsedRawData = computed(() => {
 
 const podcastMeta = computed(() => parsedRawData.value?.podcast_meta || null)
 const itunesMeta = computed(() => parsedRawData.value?.itunes || null)
+
+// 已下载的视频 MediaItem → 本地 Artplayer 播放（支持画中画、销毁时自动后台续播音轨）
+const downloadedVideo = computed(() => {
+  return props.item?.media_items?.find(m => m.media_type === 'video' && m.status === 'downloaded')
+})
+const anyVideoMedia = computed(() => {
+  return props.item?.media_items?.find(m => m.media_type === 'video')
+})
+
+// 本地播放失败时回退到嵌入播放
+const videoPlayerRef = ref(null)
+const videoPlayerFailed = ref(false)
+
+watch(() => props.item?.id, () => {
+  videoPlayerFailed.value = false
+})
+
+function onVideoPlayerError() {
+  videoPlayerFailed.value = true
+  const isCodecError = videoPlayerRef.value?.errorType === 'codec'
+  toast.warning(isCodecError ? '视频编码不兼容，已切换为在线播放' : '本地播放失败，已切换为在线播放', { duration: 4000 })
+}
 
 // 是否两个版本都有内容，支持切换
 const hasBothVersions = computed(() => {
@@ -460,12 +483,36 @@ defineExpose({ resetViewMode })
   <div :class="isMobileOverlay ? 'flex flex-col min-h-[50vh]' : ''">
     <!-- 视频播放器 -->
     <div :class="isMobileOverlay ? 'px-4 py-2' : ''">
+      <!-- 视频：已下载 → 本地播放（失败则回退嵌入） -->
+      <VideoPlayer
+        v-if="downloadedVideo && !videoPlayerFailed"
+        ref="videoPlayerRef"
+        :key="'lvp-' + item.id"
+        :content-id="item.id"
+        :title="item.title || '视频播放'"
+        :saved-position="downloadedVideo.playback_position || 0"
+        @error="onVideoPlayerError"
+      />
+      <!-- 视频：可嵌入 → iframe 播放 -->
       <IframeVideoPlayer
-        v-if="embeddableVideoUrl"
+        v-else-if="embeddableVideoUrl"
         :key="'vp-' + item.id"
         :video-url="embeddableVideoUrl"
         :title="item.title || '视频播放'"
       />
+      <!-- 视频：未下载且无嵌入源 → 状态提示 -->
+      <div
+        v-else-if="anyVideoMedia"
+        class="bg-slate-100 rounded-xl flex items-center justify-center"
+        style="aspect-ratio: 16/9"
+      >
+        <div class="text-center text-slate-400">
+          <svg class="w-10 h-10 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z" />
+          </svg>
+          <p class="text-sm font-medium">{{ anyVideoMedia.status === 'failed' ? '视频下载失败' : '视频下载中...' }}</p>
+        </div>
+      </div>
     </div>
 
     <!-- 播客音频播放器 -->

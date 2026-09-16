@@ -194,14 +194,17 @@ export const useSourcesStore = defineStore('sources', () => {
 
 ### Player Store（全局单例）
 
-`stores/player.js` 管理后台播放状态。与普通 Store 的区别：
-- Audio 实例放在 **module-level 变量**（非 `ref()`），避免 Vue 代理 DOM 对象的性能问题
-- 关闭弹窗时通过 `handoff()` 将播放控制从组件内播放器移交到全局 Audio，底部显示 `MiniPlayerBar`
-- `handoffGen` 计数器防止 async handoff 并发撕裂
+`stores/player.js` 是音频/视频后台播放的**唯一所有者**。与普通 Store 的区别：
+- 媒体元素放在 **module-level 变量**（非 `ref()`），避免 Vue 代理 DOM 对象的性能问题。音频用 `<audio>`（iOS 锁屏可续播），视频用挂在 `body` 上的隐藏 `<video>`（只有 video 元素能进画中画，且元素常驻 App 级别，切路由不中断）
+- **内嵌播客播放器不自带 `<audio>`**：`podcast-player.vue` 通过 `playerStore.load()` 发起播放，自身只是"当前进度的视图 + 控制面板"。面板关闭、切换条目、切路由都不会中断播放；不要再给它加本地 audio 元素
+- **视频走 handoff**：`video-player.vue`（Artplayer）在 `destroy()` 时若仍在播放，自动调用 `playerStore.handoff()` 把音轨交给全局 `<video>`（含当时的画中画状态）；重新打开同一视频时 `init()` 从全局进度续播并 `stop()` 全局播放器。消费方（弹窗、信息流、媒体管理）无需自己写 handoff
+- `loadGen` 计数器防止 async load 并发撕裂；进度保存（15s 间隔 + visibilitychange + pagehide）由 store 统一负责
+- Media Session：设置锁屏/系统媒体控件的元数据与 play/pause/seek 处理器
+- 内嵌播放器通过 `registerInline()` 登记自身可见性（IntersectionObserver），当前内容的内嵌播放器在视口内时迷你播放条隐藏，避免双份控件
 
 ## 全局组件
 
-`MiniPlayerBar` 挂载在 `App.vue`，通过 `playerStore.displayMode` 控制显隐。显示时 `.main-content` 自动加 `has-mini-player` class（68px padding-bottom），影响所有页面布局。
+`MiniPlayerBar` 挂载在 `App.vue`，通过 `playerStore.showMiniBar` 控制显隐（有活动媒体且其内嵌播放器不在视口内）。显示时 `.main-content` 自动加 `has-mini-player` class（68px padding-bottom），影响所有页面布局。视频类媒体在迷你条上提供画中画按钮（`playerStore.togglePIP()`）。
 
 ## defineExpose 跨层通信
 
@@ -216,7 +219,7 @@ const playerRef = ref(null)
 const time = playerRef.value?.getCurrentTime()
 ```
 
-已使用: `video-player.vue`、`podcast-player.vue`（供 `content-detail-modal.vue` 在关闭时提取播放进度）
+已使用: `video-player.vue`（`init/destroy/errorType`，供媒体管理页命令式销毁与弹窗判断编码错误）、`podcast-player.vue`（保留 `getCurrentTime/isCurrentlyPlaying/pausePlayback` 兼容查询，播放状态实际来自 playerStore）
 
 ## 时间戳处理
 

@@ -4,7 +4,6 @@ import { getContent, analyzeContent } from '@/api/content'
 import { useScrollLock } from '@/composables/useScrollLock'
 import { useContentChat } from '@/composables/useContentChat'
 import { useDoubleTapClose } from '@/composables/useDoubleTapClose'
-import { usePlayerStore } from '@/stores/player'
 import { useToast } from '@/composables/useToast'
 import ChatPanel from '@/components/feed/chat-panel.vue'
 import MarkdownIt from 'markdown-it'
@@ -28,10 +27,8 @@ const props = defineProps({
 const emit = defineEmits(['close', 'favorite', 'note', 'prev', 'next'])
 useScrollLock(toRef(props, 'visible'))
 
-const playerStore = usePlayerStore()
 const { warning: toastWarning } = useToast()
 const videoPlayerRef = ref(null)
-const podcastPlayerRef = ref(null)
 
 const modalCardRef = ref(null)
 
@@ -134,56 +131,17 @@ watch(() => props.contentId, async (newId) => {
 // 弹窗打开时始终重新加载（修复切换 tab 后 contentId 未变的情况）
 watch(() => props.visible, async (val) => {
   if (val && props.contentId) {
-    // 若迷你播放条正在播放同一内容，停止它（弹窗内播放器接管）
-    if (playerStore.activeMedia?.contentId === props.contentId) {
-      playerStore.stop()
-    }
+    // 后台播放的接管/移交由播放器组件自行处理：
+    // - 播客：PodcastPlayer 直接读写全局 playerStore，弹窗开关不影响播放
+    // - 视频：VideoPlayer init 时从全局进度续播，destroy 时若仍在播放则自动 handoff
     transitioning.value = true
     await loadContent()
     loadHistory(props.contentId)
     transitioning.value = false
   } else if (!val) {
-    // 关闭弹窗前：如果媒体正在播放，将控制权交给全局 audio 继续后台播放
-    handoffToGlobalPlayer()
     cancelChat()
   }
 })
-
-function handoffToGlobalPlayer() {
-  // 防止 loadContent 异步期间关闭弹窗导致 handoff 错误的内容
-  if (!content.value || content.value.id !== props.contentId) return
-
-  // 视频优先
-  if (videoPlayerRef.value?.isCurrentlyPlaying()) {
-    const pos = videoPlayerRef.value.getCurrentTime()
-    videoPlayerRef.value.pausePlayback()
-    // 同时暂停播客（防止两者同时播放时只接管一个）
-    podcastPlayerRef.value?.pausePlayback()
-    playerStore.handoff({
-      contentId: content.value.id,
-      title: content.value.title || '视频播放',
-      streamUrl: `/api/video/${content.value.id}/stream`,
-      thumbnailUrl: `/api/video/${content.value.id}/thumbnail`,
-      position: pos,
-      progressPath: `/video/${content.value.id}/progress`,
-    })
-    return
-  }
-
-  // 播客音频
-  if (podcastPlayerRef.value?.isCurrentlyPlaying()) {
-    const pos = podcastPlayerRef.value.getCurrentTime()
-    podcastPlayerRef.value.pausePlayback()
-    playerStore.handoff({
-      contentId: content.value.id,
-      title: content.value.title || '播客',
-      streamUrl: audioPlayUrl.value,
-      thumbnailUrl: podcastMeta.value?.artwork_url || '',
-      position: pos,
-      progressPath: `/media/${content.value.id}/progress`,
-    })
-  }
-}
 
 async function loadContent() {
   if (!props.contentId) return
@@ -512,7 +470,6 @@ function formatTime(t) {
             <!-- 播客音频播放器 -->
             <PodcastPlayer
               v-if="audioMedia"
-              ref="podcastPlayerRef"
               :key="'ap-' + content.id"
               :audio-url="audioPlayUrl"
               :title="content.title"

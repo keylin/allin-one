@@ -3,6 +3,7 @@ import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import Artplayer from 'artplayer'
 import { saveProgress } from '@/api/video'
 import { useToast } from '@/composables/useToast'
+import { usePlayerStore } from '@/stores/player'
 
 const props = defineProps({
   contentId: { type: String, required: true },
@@ -12,6 +13,7 @@ const props = defineProps({
 
 const emit = defineEmits(['error'])
 const { info } = useToast()
+const playerStore = usePlayerStore()
 
 const containerRef = ref(null)
 const hasError = ref(false)
@@ -82,6 +84,16 @@ function init() {
   hasError.value = false
   errorType.value = ''
   if (!containerRef.value || !props.contentId) return
+
+  // 若全局播放器正在后台播放本视频的音轨，由内嵌播放器接管：从后台进度续播。
+  // 仅可见实例接管（信息流在移动端会同时挂一个 display:none 的桌面端详情，不能让它抢走播放）
+  let resumePosition = props.savedPosition
+  const isRendered = containerRef.value.getClientRects().length > 0
+  if (isRendered && playerStore.isActive(props.contentId, 'video')) {
+    resumePosition = Math.floor(playerStore.currentTime) || resumePosition
+    playerStore.stop()
+  }
+
   try {
     art = new Artplayer({
       container: containerRef.value,
@@ -157,9 +169,9 @@ function init() {
         emit('error')
       }
     })
-    if (props.savedPosition > 0) {
+    if (resumePosition > 0) {
       art.once('ready', () => {
-        art.currentTime = props.savedPosition
+        art.currentTime = resumePosition
       })
     }
     // 每 15 秒自动保存进度 + 切后台时保存
@@ -188,10 +200,28 @@ function destroy() {
   saveInterval = null
   document.removeEventListener('visibilitychange', onVisChange)
   saveCurrentProgress()
+
+  // 销毁时若仍在播放（关闭面板 / 切换条目 / 切路由），把音轨交给全局播放器继续后台播放；
+  // 若当时处于画中画，尽量让全局播放器接着以小窗播放
+  let handoffInfo = null
+  if (art && art.playing) {
+    handoffInfo = {
+      contentId: props.contentId,
+      kind: 'video',
+      title: props.title,
+      streamUrl: `/api/video/${props.contentId}/stream`,
+      thumbnailUrl: `/api/video/${props.contentId}/thumbnail`,
+      position: art.currentTime || 0,
+      progressPath: `/video/${props.contentId}/progress`,
+      pip: art.template?.$video ? isPIPActive(art.template.$video) : false,
+    }
+  }
+
   if (art) {
     art.destroy()
     art = null
   }
+  if (handoffInfo) playerStore.handoff(handoffInfo)
 }
 
 function onVisChange() {

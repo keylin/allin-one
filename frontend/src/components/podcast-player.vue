@@ -1,6 +1,12 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
-import api from '@/api'
+import { usePlayerStore } from '@/stores/player'
+
+/**
+ * 播客内嵌播放器 —— 不持有 <audio>，播放请求交给全局 playerStore。
+ * 面板关闭 / 切换条目 / 切路由时本组件销毁，但播放在 store 里延续，
+ * 底部迷你播放条接管控制（本组件离开视口时同样显示迷你条）。
+ */
 
 const props = defineProps({
   audioUrl: { type: String, required: true },
@@ -12,16 +18,23 @@ const props = defineProps({
   playbackPosition: { type: Number, default: 0 },
 })
 
-const audioRef = ref(null)
-const isPlaying = ref(false)
-const currentTime = ref(0)
-const totalDuration = ref(0)
-const isLoading = ref(false)
-const playbackRate = ref(1)
-const isDragging = ref(false)
+const playerStore = usePlayerStore()
+
+const rootRef = ref(null)
 const progressBarRef = ref(null)
+const isDragging = ref(false)
+// 未接入全局播放时的本地进度（初始为服务端记录的位置，可被拖动/±15s 修改）
+const localPosition = ref(props.playbackPosition || 0)
+const dragPosition = ref(0)
 
 const speeds = [1, 1.25, 1.5, 2]
+const instanceId = `podcast-${Math.random().toString(36).slice(2)}`
+
+// 全局播放器当前是否正在播放本条内容
+const isActive = computed(() => playerStore.isActive(props.contentId, 'audio'))
+const isPlaying = computed(() => isActive.value && playerStore.isPlaying)
+const isLoading = computed(() => isActive.value && playerStore.isLoading)
+const playbackRate = computed(() => playerStore.playbackRate)
 
 // Format seconds to mm:ss or hh:mm:ss
 function formatDuration(secs) {
@@ -44,63 +57,114 @@ function parseDuration(dur) {
   return 0
 }
 
+const totalDuration = computed(() => {
+  if (isActive.value && playerStore.duration > 0) return playerStore.duration
+  return parseDuration(props.duration)
+})
+
+const currentTime = computed(() => {
+  if (isDragging.value) return dragPosition.value
+  return isActive.value ? playerStore.currentTime : localPosition.value
+})
+
 const displayDuration = computed(() => {
   if (totalDuration.value > 0) return formatDuration(totalDuration.value)
-  if (props.duration) return props.duration
-  return ''
+  return props.duration || ''
 })
 
 const progressPercent = computed(() => {
   if (!totalDuration.value) return 0
-  return (currentTime.value / totalDuration.value) * 100
+  return Math.max(0, Math.min(100, (currentTime.value / totalDuration.value) * 100))
 })
 
+// 接入全局播放器时记住最后位置，停止后仍显示在原处
+watch(() => playerStore.currentTime, (t) => {
+  if (isActive.value) localPosition.value = t
+})
+
+// 切换条目（父组件复用本实例）时重置本地状态并重新登记
+watch(() => props.contentId, () => {
+  localPosition.value = props.playbackPosition || 0
+  registerVisibility()
+})
+watch(() => props.playbackPosition, (p) => {
+  if (!isActive.value) localPosition.value = p || 0
+})
+
+function mediaInfo(position) {
+  return {
+    contentId: props.contentId,
+    kind: 'audio',
+    title: props.title,
+    streamUrl: props.audioUrl,
+    thumbnailUrl: props.artworkUrl,
+    position,
+    progressPath: `/media/${props.contentId}/progress`,
+  }
+}
+
 function togglePlay() {
-  const audio = audioRef.value
-  if (!audio) return
-  if (isPlaying.value) {
-    audio.pause()
+  if (isActive.value) {
+    playerStore.toggle()
   } else {
-    audio.play()
+    playerStore.load(mediaInfo(localPosition.value))
   }
 }
 
 function cycleSpeed() {
   const idx = speeds.indexOf(playbackRate.value)
   const next = speeds[(idx + 1) % speeds.length]
-  playbackRate.value = next
-  if (audioRef.value) audioRef.value.playbackRate = next
+  playerStore.setRate(next)
 }
 
-function skipForward() {
-  if (audioRef.value) audioRef.value.currentTime = Math.min(audioRef.value.currentTime + 15, audioRef.value.duration || 0)
+function skipBy(delta) {
+  if (isActive.value) {
+    playerStore.skip(delta)
+  } else {
+    const max = totalDuration.value || Infinity
+    localPosition.value = Math.max(0, Math.min(localPosition.value + delta, max))
+  }
 }
 
-function skipBackward() {
-  if (audioRef.value) audioRef.value.currentTime = Math.max(audioRef.value.currentTime - 15, 0)
-}
+function skipForward() { skipBy(playerStore.SKIP_SECONDS) }
+function skipBackward() { skipBy(-playerStore.SKIP_SECONDS) }
 
 // Progress bar seek
-function seekFromEvent(e) {
+function ratioFromEvent(e) {
   const bar = progressBarRef.value
-  if (!bar || !audioRef.value) return
+  if (!bar) return null
   const rect = bar.getBoundingClientRect()
-  const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
-  audioRef.value.currentTime = ratio * (audioRef.value.duration || 0)
+  return Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
+}
+
+function previewFromEvent(e) {
+  const ratio = ratioFromEvent(e)
+  if (ratio === null) return
+  dragPosition.value = ratio * (totalDuration.value || 0)
+}
+
+function commitSeek() {
+  if (!totalDuration.value) return
+  if (isActive.value) {
+    playerStore.seek(dragPosition.value)
+  } else {
+    localPosition.value = dragPosition.value
+  }
 }
 
 function onProgressMouseDown(e) {
   isDragging.value = true
-  seekFromEvent(e)
+  previewFromEvent(e)
   document.addEventListener('mousemove', onProgressMouseMove)
   document.addEventListener('mouseup', onProgressMouseUp)
 }
 
 function onProgressMouseMove(e) {
-  if (isDragging.value) seekFromEvent(e)
+  if (isDragging.value) previewFromEvent(e)
 }
 
 function onProgressMouseUp() {
+  commitSeek()
   isDragging.value = false
   document.removeEventListener('mousemove', onProgressMouseMove)
   document.removeEventListener('mouseup', onProgressMouseUp)
@@ -108,82 +172,53 @@ function onProgressMouseUp() {
 
 function onProgressTouchStart(e) {
   isDragging.value = true
-  seekFromEvent(e.touches[0])
+  previewFromEvent(e.touches[0])
 }
 
 function onProgressTouchMove(e) {
   if (isDragging.value) {
     e.preventDefault()
-    seekFromEvent(e.touches[0])
+    previewFromEvent(e.touches[0])
   }
 }
 
 function onProgressTouchEnd() {
+  commitSeek()
   isDragging.value = false
 }
 
-// Audio event handlers
-function onPlay() { isPlaying.value = true }
-function onPause() { isPlaying.value = false }
-function onTimeUpdate() {
-  if (!isDragging.value && audioRef.value) {
-    currentTime.value = audioRef.value.currentTime
-  }
-}
-function onLoadedMetadata() {
-  if (audioRef.value) {
-    totalDuration.value = audioRef.value.duration
-    isLoading.value = false
-  }
-}
-function onWaiting() { isLoading.value = true }
-function onCanPlay() { isLoading.value = false }
+// ---- 可见性登记：本播放器在视口内时隐藏迷你播放条 ----
+let observer = null
+let lastVisible = false
 
-// Save playback position via video progress API (reuses existing endpoint)
-async function saveProgress() {
-  if (!props.contentId || !audioRef.value || currentTime.value < 5) return
-  try {
-    await api.put(`/media/${props.contentId}/progress`, {
-      position: Math.floor(currentTime.value),
-    })
-  } catch { /* ignore */ }
+function registerVisibility() {
+  playerStore.registerInline(instanceId, props.contentId, lastVisible)
 }
 
-// Restore position from playbackPosition prop on mount
-function restorePosition() {
-  if (props.playbackPosition > 0 && audioRef.value) {
-    audioRef.value.currentTime = props.playbackPosition
-    currentTime.value = props.playbackPosition
-  }
-}
-
-// Precompute iTunes duration as initial total
 onMounted(() => {
-  if (props.duration) {
-    const parsed = parseDuration(props.duration)
-    if (parsed > 0) totalDuration.value = parsed
+  if ('IntersectionObserver' in window && rootRef.value) {
+    observer = new IntersectionObserver((entries) => {
+      lastVisible = entries.some(en => en.isIntersecting)
+      registerVisibility()
+    }, { threshold: 0.2 })
+    observer.observe(rootRef.value)
+  } else {
+    lastVisible = true
+    registerVisibility()
   }
-  restorePosition()
-})
-
-// Save progress periodically and on unmount
-let saveInterval = null
-onMounted(() => {
-  saveInterval = setInterval(saveProgress, 30000) // every 30s
 })
 
 onBeforeUnmount(() => {
-  clearInterval(saveInterval)
-  saveProgress()
-  // Stop audio
-  if (audioRef.value) {
-    audioRef.value.pause()
-    audioRef.value.src = ''
-  }
+  observer?.disconnect()
+  observer = null
+  playerStore.unregisterInline(instanceId)
+  document.removeEventListener('mousemove', onProgressMouseMove)
+  document.removeEventListener('mouseup', onProgressMouseUp)
 })
 
+// 兼容旧的命令式访问（父组件可查询状态）
 function getCurrentTime() {
-  return audioRef.value?.currentTime ?? 0
+  return currentTime.value
 }
 
 function isCurrentlyPlaying() {
@@ -191,27 +226,14 @@ function isCurrentlyPlaying() {
 }
 
 function pausePlayback() {
-  if (audioRef.value) audioRef.value.pause()
+  if (isActive.value) playerStore.pause()
 }
 
 defineExpose({ getCurrentTime, isCurrentlyPlaying, pausePlayback })
 </script>
 
 <template>
-  <div class="rounded-2xl border border-indigo-100 bg-gradient-to-br from-indigo-50/80 to-white overflow-hidden shadow-sm">
-    <!-- Hidden audio element -->
-    <audio
-      ref="audioRef"
-      :src="audioUrl"
-      preload="metadata"
-      @play="onPlay"
-      @pause="onPause"
-      @timeupdate="onTimeUpdate"
-      @loadedmetadata="onLoadedMetadata"
-      @waiting="onWaiting"
-      @canplay="onCanPlay"
-    />
-
+  <div ref="rootRef" class="rounded-2xl border border-indigo-100 bg-gradient-to-br from-indigo-50/80 to-white overflow-hidden shadow-sm">
     <div class="p-4 md:p-5">
       <!-- Top: artwork + info + controls -->
       <div class="flex items-start gap-3 md:gap-4">
@@ -241,6 +263,10 @@ defineExpose({ getCurrentTime, isCurrentlyPlaying, pausePlayback })
               Podcast
             </span>
             <span v-if="episode" class="text-[10px] text-indigo-400 font-medium">EP {{ episode }}</span>
+            <span v-if="isPlaying" class="inline-flex items-center gap-1 text-[10px] text-emerald-600 font-medium">
+              <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+              后台播放中
+            </span>
           </div>
           <p class="text-sm font-semibold text-slate-800 line-clamp-2 leading-snug">{{ title }}</p>
           <p v-if="displayDuration" class="mt-0.5 text-xs text-slate-400">{{ displayDuration }}</p>
@@ -257,11 +283,6 @@ defineExpose({ getCurrentTime, isCurrentlyPlaying, pausePlayback })
           @touchmove="onProgressTouchMove"
           @touchend="onProgressTouchEnd"
         >
-          <!-- Buffered (simple visual hint) -->
-          <div
-            class="absolute inset-y-0 left-0 bg-indigo-200 rounded-full transition-all"
-            :style="{ width: progressPercent + '%' }"
-          />
           <!-- Played -->
           <div
             class="absolute inset-y-0 left-0 bg-indigo-500 rounded-full"
@@ -306,6 +327,7 @@ defineExpose({ getCurrentTime, isCurrentlyPlaying, pausePlayback })
         <!-- Play/Pause -->
         <button
           class="w-12 h-12 flex items-center justify-center rounded-full bg-indigo-500 text-white hover:bg-indigo-600 active:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all"
+          :title="isPlaying ? '暂停' : '播放'"
           @click="togglePlay"
         >
           <!-- Loading spinner -->
