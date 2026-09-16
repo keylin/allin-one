@@ -5,6 +5,7 @@ export function getSyncStatus() {
 }
 
 export { setupEbookSync } from './ebook'
+export { setupFilmSync } from './films'
 
 export function setupVideoSync(sourceType = 'sync.bilibili') {
   return api.post('/video/sync/setup', null, { params: { source_type: sourceType } })

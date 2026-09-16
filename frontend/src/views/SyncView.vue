@@ -1,6 +1,6 @@
 <script setup>
 import { ref, onMounted, onUnmounted, computed } from 'vue'
-import { getSyncStatus, setupEbookSync, setupVideoSync, triggerSync, linkCredential, streamSyncProgress } from '@/api/sync'
+import { getSyncStatus, setupEbookSync, setupVideoSync, setupFilmSync, triggerSync, linkCredential, streamSyncProgress } from '@/api/sync'
 import { listCredentials } from '@/api/credentials'
 import { formatTimeShort } from '@/utils/time'
 import { useToast } from '@/composables/useToast'
@@ -51,6 +51,12 @@ const PLUGIN_META = {
       `python scripts/bilibili-sync.py --api-url ${apiUrl} --cookie "SESSDATA=xxx" --type favorites --media-id YOUR_ID`,
       `python scripts/bilibili-sync.py --api-url ${apiUrl} --cookie "SESSDATA=xxx" --type history`,
     ],
+  },
+  'sync.emby': {
+    color: 'violet',
+    platform: 'emby',
+    setupFn: () => setupFilmSync(),
+    commands: () => [],
   },
 }
 
@@ -230,6 +236,10 @@ async function doSync(sourceType, options) {
           if (r.new_books) parts.push(`新增 ${r.new_books} 本`)
           if (r.updated_books) parts.push(`更新 ${r.updated_books} 本`)
           if (r.new_annotations) parts.push(`新增 ${r.new_annotations} 条标注`)
+          if (r.new_films) parts.push(`新增 ${r.new_films} 部影片`)
+          if (r.updated_films) parts.push(`更新 ${r.updated_films} 部`)
+          if (r.autofilled) parts.push(`自动标记看过 ${r.autofilled} 部`)
+          if (r.removed_from_emby) parts.push(`${r.removed_from_emby} 部已不在 Emby`)
           success(`同步完成: ${parts.join(', ') || '无新增数据'}`)
         } else {
           success('同步完成')
@@ -294,6 +304,7 @@ function getIconColor(plugin) {
     slate: 'text-slate-600',
     emerald: 'text-emerald-600',
     pink: 'text-pink-500',
+    violet: 'text-violet-600',
   }
   return colorMap[meta?.color] || 'text-slate-600'
 }
@@ -378,12 +389,15 @@ onUnmounted(() => {
                   <path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                   <path stroke-linecap="round" stroke-linejoin="round" d="M15.91 11.672a.375.375 0 010 .656l-5.603 3.113a.375.375 0 01-.557-.328V8.887c0-.286.307-.466.557-.327l5.603 3.112z" />
                 </svg>
+                <svg v-else-if="plugin.source_type === 'sync.emby'" class="w-[18px] h-[18px]" :class="getIconColor(plugin)" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
+                  <rect x="2" y="4" width="20" height="16" rx="2" /><path d="M2 8h20M7 4v16M17 4v16" />
+                </svg>
               </div>
               <div class="min-w-0">
                 <div class="flex items-center gap-2">
                   <h3 class="font-semibold text-sm text-gray-900">{{ plugin.name }}</h3>
-                  <span class="px-1.5 py-0.5 rounded text-[10px] font-medium" :class="plugin.category === 'ebook' ? 'bg-indigo-50 text-indigo-400' : 'bg-pink-50 text-pink-400'">
-                    {{ plugin.category === 'ebook' ? '电子书' : '视频' }}
+                  <span class="px-1.5 py-0.5 rounded text-[10px] font-medium" :class="plugin.category === 'ebook' ? 'bg-indigo-50 text-indigo-400' : plugin.category === 'film' ? 'bg-violet-50 text-violet-500' : 'bg-pink-50 text-pink-400'">
+                    {{ plugin.category === 'ebook' ? '电子书' : plugin.category === 'film' ? '影视' : '视频' }}
                   </span>
                   <span class="px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-50 text-slate-400">
                     {{ plugin.sync_mode === 'script' ? '脚本' : '在线' }}
@@ -408,6 +422,10 @@ onUnmounted(() => {
                 <path stroke-linecap="round" stroke-linejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z" />
               </svg>
               <span class="text-gray-500">{{ plugin.stats.total_items || 0 }} 条目</span>
+            </span>
+            <span v-if="plugin.stats.in_emby != null" class="flex items-center gap-1">
+              <span class="text-gray-500">{{ plugin.stats.in_emby }} 在库</span>
+              <router-link to="/films" class="text-indigo-400 hover:text-indigo-600 transition-colors">查看影视库</router-link>
             </span>
             <span v-if="plugin.stats.total_annotations != null" class="flex items-center gap-1">
               <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">

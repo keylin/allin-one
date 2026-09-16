@@ -22,6 +22,7 @@ services/
 │   ├── base.py          # BaseSyncService 接口
 │   ├── bilibili.py      # B站同步
 │   ├── wechat_read.py   # 微信读书同步
+│   ├── emby.py          # Emby 媒体库只读同步（影视资料库）
 │   └── upsert.py        # 通用 upsert 逻辑
 ├── scheduling/          # 智能调度服务
 │   ├── calculator.py    # SchedulingService (间隔计算)
@@ -38,6 +39,7 @@ services/
 ├── dedup.py             # SimHash 去重
 ├── enrichment.py        # 内容富化 (enrich_content 步骤实现)
 ├── ebook_parser.py      # 电子书解析
+├── film_library.py      # 影视资料库：影片 upsert / 用户标记 / TMDb 客户端 / 序列化（路由、Fetcher、MCP 共用）
 ├── book_metadata.py     # 书籍元数据服务
 ├── media_detection.py   # 媒体检测
 ├── rsshub_sync.py       # RSSHub 同步服务

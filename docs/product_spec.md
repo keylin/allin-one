@@ -97,11 +97,13 @@ Allin-One 是 AI 驱动的个人思维训练系统。它从海量信息源中自
 | 同步 | `sync.safari_bookmarks` | Safari 书签同步 | Fountain 客户端读取本地书签库推送 | Fountain |
 | 同步 | `sync.chrome_bookmarks` | Chrome 书签同步 | Fountain 客户端读取本地书签文件推送 | Fountain |
 | 同步 | `sync.douban_books` | 豆瓣书单同步 | 豆瓣读书数据同步 | Fountain |
-| 同步 | `sync.douban_movies` | 豆瓣影单同步 | 豆瓣电影数据同步 | Fountain |
+| 同步 | `sync.douban_movies` | 豆瓣影单同步 | 豆瓣电影数据同步（预留） | Fountain |
+| 同步 | `sync.emby` | Emby 媒体库同步 | Worker 只读拉取 Emby 电影/剧集与观看状态 → 影视资料库 | Fountain (internal) |
 | 同步 | `sync.zhihu` | 知乎收藏夹同步 | 知乎收藏数据同步 | Fountain |
 | 同步 | `sync.github_stars` | GitHub Star 同步 | GitHub Star 仓库数据同步 | Fountain |
 | 同步 | `sync.twitter` | Twitter/X 推文同步 | Twitter 推文数据同步 | Fountain |
 | 记录 | `user.note` | 日常笔记 | 用户手动输入 | 直接 POST API |
+| 记录 | `user.film` | 手工影片 | 影视资料库手工/agent 添加 | `POST /api/films` |
 | 记录 | `system.notification` | 系统消息 | 系统通知 | 系统生成 |
 
 **关键设计**: 没有 `video_bilibili` / `video_youtube` 等类型。B站/YouTube 视频通过 `rss.hub` 数据源发现新内容，再由流水线中的 `localize_media` 步骤处理。`sync.*` 类型通过外部脚本获取平台数据后推送到同步 API。

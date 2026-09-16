@@ -59,11 +59,13 @@
 | `sync.safari_bookmarks` | user | Safari 书签同步 | Fountain 客户端读取本地书签库推送 |
 | `sync.chrome_bookmarks` | user | Chrome 书签同步 | Fountain 客户端读取本地书签文件推送 |
 | `sync.douban_books` | user | 豆瓣书单同步 | 豆瓣读书数据同步 |
-| `sync.douban_movies` | user | 豆瓣影单同步 | 豆瓣电影数据同步 |
+| `sync.douban_movies` | user | 豆瓣影单同步 | 豆瓣电影数据同步（预留，Phase 2） |
+| `sync.emby` | user | Emby 媒体库同步 | Worker 内置 Fetcher 只读拉取 Emby 电影/剧集与观看状态，写入影视资料库；页面手动触发 |
 | `sync.zhihu` | user | 知乎收藏夹同步 | 知乎收藏数据同步 |
 | `sync.github_stars` | user | GitHub Star 同步 | GitHub Star 仓库数据同步 |
 | `sync.twitter` | user | Twitter/X 推文同步 | Twitter 推文数据同步 |
 | `user.note` | user | 日常笔记 | 用户手动输入，通过 `/api/content/submit` 提交 |
+| `user.film` | user | 手工添加的影片 | 影视资料库手工/agent 添加的影片，经 TMDb 补元数据或片名+年份骨架 |
 | `file.upload` | user | 用户上传文件 | 文本/图片/文档，通过 `/api/content/upload` 上传 |
 | `system.notification` | user | 系统消息 | 系统通知 |
 
@@ -239,6 +241,13 @@ MediaType 现在仅用于 `MediaItem`（媒体项），不再是 ContentItem 或
 - **接入模式**：Fountain (script 模式) — Rust 同步器读取 macOS BKLibrary SQLite，或外部脚本 `scripts/apple-books-sync.py`
 - **API 流程**：`POST /api/ebook/sync/setup` → `GET /api/ebook/sync/status` → `POST /api/ebook/sync`
 - **流水线模板**：无（标注写入 book_annotations 表）
+
+### 场景 7：Emby 影视资料库同步
+- **数据源类型**：`sync.emby`（SourceCategory.USER）
+- **接入模式**：Fountain (internal 模式) — `POST /api/sync/run/sync.emby`，SyncView 手动触发，不注册定时任务
+- **凭证**：`platform=emby`，`credential_type=api_key`，`extra_info={base_url, user_name, user_id}`
+- **数据落点**：ContentItem（元数据 + `raw_data.emby` 观看事实）+ `watch_records`（用户标记，同步只填空不覆盖）
+- **详细设计**：`docs/design_film_library.md`
 
 ### 场景 6：微信读书同步
 - **数据源类型**：`sync.wechat_read`（SourceCategory.USER）

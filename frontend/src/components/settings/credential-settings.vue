@@ -238,6 +238,44 @@ async function handleSaveWechat() {
   }
 }
 
+// Emby 凭证（影视资料库同步）
+const embyBaseUrl = ref('http://127.0.0.1:8096')
+const embyApiKey = ref('')
+const embyUserName = ref('emby')
+const embySaving = ref(false)
+const embySaveResult = ref(null)
+
+async function handleSaveEmby() {
+  const key = embyApiKey.value.trim()
+  const baseUrl = embyBaseUrl.value.trim().replace(/\/+$/, '')
+  if (!key || !baseUrl) return
+  embySaving.value = true
+  embySaveResult.value = null
+  try {
+    const res = await createCredential({
+      platform: 'emby',
+      credential_type: 'api_key',
+      credential_data: key,
+      display_name: `Emby ${embyUserName.value.trim() || 'emby'}`,
+      extra_info: { base_url: baseUrl, user_name: embyUserName.value.trim() || 'emby' },
+    })
+    if (res.code === 0) {
+      const reason = res.data?.validation_reason
+      embySaveResult.value = reason
+        ? { success: false, message: res.message }
+        : { success: true, message: `凭证已保存并验证通过${res.data?.extra_info?.server_name ? '：' + res.data.extra_info.server_name : ''}` }
+      embyApiKey.value = ''
+      await loadCredentials()
+    } else {
+      embySaveResult.value = { success: false, message: res.message || '保存失败' }
+    }
+  } catch (e) {
+    embySaveResult.value = { success: false, message: '保存失败: ' + (e.message || '网络错误') }
+  } finally {
+    embySaving.value = false
+  }
+}
+
 const statusBadge = (status) => {
   switch (status) {
     case 'active': return 'bg-emerald-50 text-emerald-700 border-emerald-200'
@@ -433,6 +471,70 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
+    <!-- Emby 凭证 -->
+    <div class="p-4 bg-white rounded-xl border border-slate-200/60 shadow-sm">
+      <div class="flex items-center gap-2 mb-3">
+        <div class="w-7 h-7 rounded-lg flex items-center justify-center bg-violet-50 text-violet-600">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <rect x="2" y="4" width="20" height="16" rx="2" /><path d="M2 8h20M7 4v16M17 4v16" />
+          </svg>
+        </div>
+        <h4 class="text-sm font-semibold text-slate-700">Emby 凭证</h4>
+        <span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-400">影视资料库</span>
+      </div>
+      <div class="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-2">
+        <input
+          v-model="embyBaseUrl"
+          type="url"
+          placeholder="服务器地址，如 http://127.0.0.1:8096"
+          class="min-w-0 px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-sm text-slate-700 placeholder-slate-300 focus:ring-2 focus:ring-violet-500/20 focus:border-violet-400 outline-none transition-all duration-200"
+        />
+        <input
+          v-model="embyUserName"
+          type="text"
+          placeholder="Emby 用户名"
+          class="sm:w-36 min-w-0 px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-sm text-slate-700 placeholder-slate-300 focus:ring-2 focus:ring-violet-500/20 focus:border-violet-400 outline-none transition-all duration-200"
+        />
+      </div>
+      <div class="flex gap-2 mt-2">
+        <input
+          v-model="embyApiKey"
+          type="password"
+          placeholder="粘贴 API 密钥"
+          class="flex-1 min-w-0 px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-sm text-slate-700 placeholder-slate-300 focus:ring-2 focus:ring-violet-500/20 focus:border-violet-400 outline-none transition-all duration-200"
+        />
+        <button
+          class="px-3.5 py-2.5 text-sm font-medium text-white bg-violet-600 rounded-xl hover:bg-violet-700 active:bg-violet-800 disabled:opacity-50 transition-all duration-200 whitespace-nowrap"
+          :disabled="embySaving || !embyApiKey.trim() || !embyBaseUrl.trim()"
+          @click="handleSaveEmby"
+        >
+          {{ embySaving ? '保存中...' : '保存' }}
+        </button>
+      </div>
+      <p class="mt-2 text-xs text-slate-400">
+        获取方式：Emby 管理后台 → 高级 → API 密钥 → 新建。用户名决定同步谁的观看记录。只做只读拉取，不会改动 Emby。
+      </p>
+      <Transition
+        enter-active-class="transition-all duration-300 ease-out"
+        enter-from-class="opacity-0 translate-y-1"
+        enter-to-class="opacity-100 translate-y-0"
+        leave-active-class="transition-all duration-200 ease-in"
+        leave-from-class="opacity-100"
+        leave-to-class="opacity-0"
+      >
+        <p v-if="embySaveResult" class="mt-2 text-sm flex items-center gap-1.5"
+           :class="embySaveResult.success ? 'text-emerald-600' : 'text-rose-600'">
+          <svg v-if="embySaveResult.success" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+          </svg>
+          {{ embySaveResult.message }}
+        </p>
+      </Transition>
+    </div>
+
     <!-- 凭证列表 -->
     <div class="bg-white rounded-xl border border-slate-200/60 shadow-sm overflow-hidden">
       <div class="px-5 py-3 bg-slate-50/50 border-b border-slate-100">
@@ -459,7 +561,7 @@ onBeforeUnmount(() => {
           <div class="flex items-center justify-between p-4">
           <div class="flex items-center gap-3 min-w-0">
             <div class="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
-                 :class="cred.platform === 'bilibili' ? 'bg-pink-50 text-pink-500' : cred.platform === 'twitter' ? 'bg-sky-50 text-slate-800' : cred.platform === 'wechat_read' ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-500'">
+                 :class="cred.platform === 'bilibili' ? 'bg-pink-50 text-pink-500' : cred.platform === 'twitter' ? 'bg-sky-50 text-slate-800' : cred.platform === 'wechat_read' ? 'bg-emerald-50 text-emerald-600' : cred.platform === 'emby' ? 'bg-violet-50 text-violet-600' : 'bg-slate-100 text-slate-500'">
               <svg v-if="cred.platform === 'bilibili'" class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M17.813 4.653h.854c1.51.054 2.769.578 3.773 1.574 1.004.995 1.524 2.249 1.56 3.76v7.36c-.036 1.51-.556 2.769-1.56 3.773s-2.262 1.524-3.773 1.56H5.333c-1.51-.036-2.769-.556-3.773-1.56S.036 18.858 0 17.347v-7.36c.036-1.511.556-2.765 1.56-3.76 1.004-.996 2.262-1.52 3.773-1.574h.774l-1.174-1.12a1.234 1.234 0 0 1-.373-.906c0-.356.124-.658.373-.907l.027-.027c.267-.249.573-.373.92-.373.347 0 .653.124.92.373L9.653 4.44c.071.071.134.142.187.213h4.267a.836.836 0 0 1 .16-.213l2.853-2.747c.267-.249.573-.373.92-.373.347 0 .662.151.929.4.267.249.391.551.391.907 0 .355-.124.657-.373.906zM5.333 7.24c-.746.018-1.373.276-1.88.773-.506.498-.769 1.13-.786 1.894v7.52c.017.764.28 1.395.786 1.893.507.498 1.134.756 1.88.773h13.334c.746-.017 1.373-.275 1.88-.773.506-.498.769-1.129.786-1.893v-7.52c-.017-.765-.28-1.396-.786-1.894-.507-.497-1.134-.755-1.88-.773zM8 11.107c.373 0 .684.124.933.373.25.249.383.569.4.96v1.173c-.017.391-.15.711-.4.96-.249.25-.56.374-.933.374s-.684-.125-.933-.374c-.25-.249-.383-.569-.4-.96V12.44c.017-.391.15-.711.4-.96.249-.249.56-.373.933-.373zm8 0c.373 0 .684.124.933.373.25.249.383.569.4.96v1.173c-.017.391-.15.711-.4.96-.249.25-.56.374-.933.374s-.684-.125-.933-.374c-.25-.249-.383-.569-.4-.96V12.44c.017-.391.15-.711.4-.96.249-.249.56-.373.933-.373z"/>
               </svg>
@@ -468,6 +570,9 @@ onBeforeUnmount(() => {
               </svg>
               <svg v-else-if="cred.platform === 'wechat_read'" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" />
+              </svg>
+              <svg v-else-if="cred.platform === 'emby'" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <rect x="2" y="4" width="20" height="16" rx="2" /><path d="M2 8h20M7 4v16M17 4v16" />
               </svg>
               <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z" />
@@ -489,7 +594,7 @@ onBeforeUnmount(() => {
 
           <div class="flex items-center gap-1.5 shrink-0 ml-3 flex-wrap">
             <button
-              v-if="['bilibili', 'twitter', 'wechat_read'].includes(cred.platform)"
+              v-if="['bilibili', 'twitter', 'wechat_read', 'emby'].includes(cred.platform)"
               class="px-2.5 py-1.5 text-xs font-medium text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 hover:border-slate-300 disabled:opacity-50 transition-all duration-200"
               :disabled="!!credActionLoading[cred.id]"
               @click="handleCheckCredential(cred.id)"

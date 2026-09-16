@@ -661,7 +661,7 @@ class ContentEnricher:
 
 | 模式 | 说明 | 适用类型 |
 |------|------|---------|
-| **internal** | Worker 内置 Fetcher，通过 `/api/sync/run/{source_type}` 触发 | sync.wechat_read, sync.bilibili |
+| **internal** | Worker 内置 Fetcher，通过 `/api/sync/run/{source_type}` 触发 | sync.wechat_read, sync.bilibili, sync.emby |
 | **script** | 外部脚本独立采集后推送 | sync.apple_books 等需要本地数据的类型 |
 
 **统一同步管理 API** (`/api/sync`):
@@ -680,6 +680,7 @@ class ContentEnricher:
 | `/api/ebook/sync` | `sync.apple_books`, `sync.wechat_read` | setup / status / sync (书籍+标注) |
 | `/api/video/sync` | `sync.bilibili` | setup / status / sync (视频元数据) |
 | `/api/bookmark/sync` | `sync.safari_bookmarks`, `sync.chrome_bookmarks` | setup / status / sync (书签) |
+| `/api/films/sync/setup` | `sync.emby` | 仅 setup；拉取由 internal Fetcher 完成（`app/services/sync/emby.py`） |
 
 **同步流程** (三步式):
 1. `POST /setup?source_type=sync.xxx` — 获取或创建 SourceConfig，返回 source_id
@@ -962,6 +963,22 @@ POST   /api/bookmark/sync/setup        → { source_id } (创建/获取 sync 数
 GET    /api/bookmark/sync/status        → SyncStatus (同步状态)
 POST   /api/bookmark/sync               → SyncResponse (推送书签数据)
 ```
+
+#### Films (影视资料库)
+```
+POST   /api/films/sync/setup           → { source_id } (创建/获取 sync.emby 源)
+GET    /api/films/stats                → 状态/类型计数 + 类型/年份筛选项 + tmdb/emby 是否配置
+GET    /api/films/search?q=&year=      → TMDb 候选（需 tmdb_api_key）
+GET    /api/films                      → 分页列表；q/status/kind/genre/year_from/year_to/in_emby/min_rating/sort
+POST   /api/films                      → 手工添加（tmdb_id+kind 或 title+year）
+POST   /api/films/records/batch        → 批量标记（content_id | tmdb_id | title+year 定位）
+GET    /api/films/{id}                 → 详情（元数据 + emby 事实 + record）
+PUT    /api/films/{id}/record          → 更新用户标记
+PUT    /api/films/{id}/note            → 更新长评 (user_note)
+DELETE /api/films/{id}                 → 删除资料库记录（不触碰 Emby）
+GET    /api/films/{id}/poster          → 海报代理（Emby → TMDb），免认证 GET
+```
+数据模型与覆盖规则见 `docs/design_film_library.md`；用户标记表 `watch_records`。
 
 #### Sync (统一同步管理)
 ```
@@ -1253,7 +1270,7 @@ docker compose exec -T postgres psql -U allinone allinone < data/backups/backup_
 
 ### 10.2 工具清单
 
-共 14 个工具，按读写属性分类：
+共 17 个工具，按读写属性分类：
 
 **只读工具 (readOnlyHint=True)**
 
@@ -1267,6 +1284,8 @@ docker compose exec -T postgres psql -U allinone allinone < data/backups/backup_
 | `get_stock_quote` | 个股实时行情查询 | symbols / keyword / market (A/HK/US/crypto) / limit |
 | `get_kline` | 历史 K 线数据 | symbol / market (A/HK/US/index/etf) / period (daily/weekly/monthly) / count / adjust |
 | `get_macro_indicator` | 中国宏观经济指标 | indicator (cpi/ppi/pmi/gdp/m2/shibor) / count |
+| `list_films` | 影视资料库列表（元数据 + Emby 事实 + 用户标记），推荐前先拉全库 | status / kind / genre / year_from / year_to / in_emby / keyword / limit / offset |
+| `search_film` | TMDb 搜索取 tmdb_id（需 `tmdb_api_key`） | q / year |
 
 金融数据工具以蚂蚁 financial-data API 为主数据源，akshare/雪球/腾讯/新浪为降级路径（crypto 走 CoinGecko），带内存缓存（TTL 按工具类型区分）和超时保护，不写入本地数据库。响应含 `data_source` 字段标识实际来源。详见 §10.5。
 
@@ -1280,6 +1299,7 @@ docker compose exec -T postgres psql -U allinone allinone < data/backups/backup_
 | `update_source` | False | True | 更新数据源配置 |
 | `delete_source` | True | False | 删除数据源（cascade 参数控制是否级联删除内容） |
 | `toggle_source` | False | True | 启用/禁用数据源 |
+| `mark_films` | False | True | 批量建/改影片观影标记（content_id / tmdb_id / title+year 定位，缺失影片先建骨架）；写入即 `status_source=manual`，Emby 同步不再覆盖 |
 
 ### 10.3 数据源定位辅助函数
 

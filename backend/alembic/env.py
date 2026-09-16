@@ -21,6 +21,7 @@ import app.models.finance  # noqa: F401
 import app.models.pipeline  # noqa: F401
 import app.models.prompt_template  # noqa: F401
 import app.models.system_setting  # noqa: F401
+import app.models.film  # noqa: F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

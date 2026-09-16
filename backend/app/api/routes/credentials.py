@@ -87,6 +87,31 @@ async def _validate_credential(cred: PlatformCredential) -> tuple[str | None, di
         status = "active" if valid else "expired"
         return status, {"_reason": reason} if reason else {}
 
+    elif cred.platform == "emby":
+        from app.services.sync.emby import emby_resolve_user_id, emby_system_info
+
+        extra = cred.extra_info if isinstance(cred.extra_info, dict) else {}
+        base_url = (extra.get("base_url") or "").rstrip("/")
+        if not base_url:
+            return "expired", {"_reason": "missing_fields"}
+        try:
+            info = await emby_system_info(base_url, plain_data)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code in (401, 403):
+                return "expired", {"_reason": "expired"}
+            raise
+        user_name = extra.get("user_name") or "emby"
+        user_id = await emby_resolve_user_id(base_url, plain_data, user_name)
+        new_extra = {**extra, "base_url": base_url, "user_name": user_name}
+        if info.get("ServerName"):
+            new_extra["server_name"] = info["ServerName"]
+        if info.get("Version"):
+            new_extra["server_version"] = info["Version"]
+        if user_id:
+            new_extra["user_id"] = user_id
+            return "active", {"extra_info": new_extra}
+        return "error", {"extra_info": new_extra, "_reason": "user_not_found"}
+
     else:
         return None, {}
 
@@ -193,12 +218,15 @@ async def create_credential(body: CredentialCreate, db: Session = Depends(get_db
     if cred.status == "expired" and validation_reason:
         resp_data["validation_reason"] = validation_reason
         if validation_reason == "missing_fields":
-            msg = "凭证已保存，但 Cookie 不完整（缺少 wr_skey/wr_vid）。请从浏览器 Network 请求头获取完整 Cookie"
+            msg = "凭证已保存，但信息不完整（微信读书缺少 wr_skey/wr_vid；Emby 缺少服务器地址）"
         elif validation_reason == "expired":
-            msg = "凭证已保存，但 Cookie 已过期（有效期约 1.5 小时），请重新获取"
+            msg = "凭证已保存，但验证未通过：Cookie/API key 已过期或无效，请重新获取"
         else:
             msg = "凭证已保存，但验证未通过"
         return {"code": 0, "data": resp_data, "message": msg}
+    if cred.status == "error" and validation_reason == "user_not_found":
+        resp_data["validation_reason"] = validation_reason
+        return {"code": 0, "data": resp_data, "message": "凭证已保存，服务器可达，但找不到指定的 Emby 用户名"}
 
     return {"code": 0, "data": resp_data, "message": "ok"}
 

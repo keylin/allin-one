@@ -87,6 +87,7 @@ const res = await listSources({ page: 1, page_size: 20 })  // res = {code, data,
 | /ebook            | EbookView.vue        | 书架管理          |
 | /ebook/:id        | ebook-detail-view.vue | 书籍详情         |
 | /sync             | SyncView.vue         | 同步管理          |
+| /films            | FilmsView.vue        | 影视资料库（Emby 同步 + 手工标记） |
 | /reading          | ReadingView.vue      | 阅读标注          |
 
 旧路由兼容: `/video-download` → `/media`, `/videos` → `/media`, `/processing` → `/pipelines`, `/prompt-templates` → `/pipelines?tab=prompts`, `/annotations` → `/reading`

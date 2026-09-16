@@ -9,8 +9,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from app.core.config import settings
 
 # 媒体流式传输路径豁免认证：浏览器原生 <video>/<audio>/<img> 标签无法携带自定义 header
+# films 仅有 GET /api/films/{id}/poster 一个子路径（海报代理）
 # 路径含 UUID content_id，不可猜测，安全风险低
-_MEDIA_PATH_RE = re.compile(r"^/api/(video|audio|media)/[a-f0-9]+/")
+_MEDIA_PATH_RE = re.compile(r"^/api/(video|audio|media|films)/[a-f0-9]+/")
 
 
 class APIKeyMiddleware(BaseHTTPMiddleware):

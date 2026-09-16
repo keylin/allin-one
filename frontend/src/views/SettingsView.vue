@@ -9,6 +9,7 @@ import NotificationSettings from '@/components/settings/notification-settings.vu
 import RetentionSettings from '@/components/settings/retention-settings.vue'
 import SchedulingSettings from '@/components/settings/scheduling-settings.vue'
 import CredentialSettings from '@/components/settings/credential-settings.vue'
+import FilmSettings from '@/components/settings/film-settings.vue'
 import FilterManager from '@/components/filter-manager.vue'
 
 const route = useRoute()
@@ -26,6 +27,7 @@ const tabs = [
   { id: 'retention', label: '内容保留' },
   { id: 'scheduling', label: '智能调度' },
   { id: 'credentials', label: '平台凭证' },
+  { id: 'films', label: '影视资料库' },
 ]
 
 const activeTab = ref(route.query.tab || 'llm')
@@ -92,6 +94,13 @@ const groups = [
       { key: 'collection_min_keep', type: 'number' },
       { key: 'execution_retention_days', type: 'number' },
       { key: 'execution_max_count', type: 'number' },
+    ],
+  },
+  {
+    id: 'films',
+    title: '影视资料库',
+    keys: [
+      { key: 'tmdb_api_key', label: 'TMDb API Key', type: 'password' },
     ],
   },
   {
@@ -457,6 +466,19 @@ onMounted(async () => {
       <!-- 平台凭证 -->
       <div v-else-if="activeTab === 'credentials'" class="flex-1 overflow-y-auto">
         <CredentialSettings />
+      </div>
+
+      <!-- 影视资料库 -->
+      <div v-else-if="activeTab === 'films'" class="flex-1 overflow-y-auto">
+        <FilmSettings
+          :form="form"
+          :field-errors="fieldErrors"
+          :is-dirty="isDirty.films"
+          :group-saving="!!groupSaving.films"
+          @update:form="handleFormUpdate"
+          @validate-field="validateField"
+          @save="saveGroup('films')"
+        />
       </div>
     </template>
   </div>

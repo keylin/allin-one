@@ -17,7 +17,7 @@ from app.core.config import settings
 from app.core.logging_config import setup_logging
 from app.core.auth import APIKeyMiddleware
 from app.core.database import init_db
-from app.api.routes import dashboard, sources, content, pipelines, templates, video, video_sync, audio, media, ebook, ebook_sync, bookmark_sync, sync, system_settings, prompt_templates, finance, credentials, opml, export as export_router, bilibili_auth
+from app.api.routes import dashboard, sources, content, pipelines, templates, video, video_sync, audio, media, ebook, ebook_sync, bookmark_sync, sync, system_settings, prompt_templates, finance, credentials, opml, export as export_router, bilibili_auth, films
 
 setup_logging("backend")
 
@@ -190,6 +190,7 @@ app.include_router(ebook.router, prefix="/api/ebook", tags=["ebook"])
 app.include_router(ebook_sync.router, prefix="/api/ebook", tags=["ebook"])
 app.include_router(bookmark_sync.router, prefix="/api/bookmark", tags=["bookmark"])
 app.include_router(sync.router, prefix="/api/sync", tags=["sync"])
+app.include_router(films.router, prefix="/api/films", tags=["films"])
 app.include_router(system_settings.router, prefix="/api/settings", tags=["settings"])
 app.include_router(prompt_templates.router, prefix="/api/prompt-templates", tags=["prompt-templates"])
 app.include_router(finance.router, prefix="/api/finance", tags=["finance"])

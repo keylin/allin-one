@@ -56,12 +56,21 @@ SYNC_PLUGINS = [
         "credential_required": True,
         "sync_mode": "internal",
     },
+    {
+        "source_type": "sync.emby",
+        "name": "Emby",
+        "category": "film",
+        "description": "从 Emby 媒体库同步电影/剧集与观看状态到影视资料库（只读，手动触发）",
+        "credential_required": True,
+        "sync_mode": "internal",
+    },
 ]
 
 # 平台 → credential platform 映射
 _PLATFORM_MAP = {
     "sync.bilibili": "bilibili",
     "sync.wechat_read": "wechat_read",
+    "sync.emby": "emby",
 }
 
 
@@ -101,6 +110,20 @@ def get_sync_status(db: Session = Depends(get_db)):
                 .scalar() or 0
             )
             stats["total_annotations"] = total_annotations
+
+        # film 类：统计仍在 Emby 库内的条目数（含手工添加后被 Emby 同步命中的记录）
+        if plugin["category"] == "film":
+            from app.services.film_library import FILM_SOURCE_TYPES
+            in_emby = (
+                db.query(func.count(ContentItem.id))
+                .join(SourceConfig, ContentItem.source_id == SourceConfig.id)
+                .filter(
+                    SourceConfig.source_type.in_(FILM_SOURCE_TYPES),
+                    ContentItem.raw_data["emby"]["in_library"].astext == "true",
+                )
+                .scalar() or 0
+            )
+            stats["in_emby"] = in_emby
 
         last_sync = source.last_collected_at
 

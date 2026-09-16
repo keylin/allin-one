@@ -59,8 +59,10 @@ class SourceType(str, Enum):
     SYNC_ZHIHU         = "sync.zhihu"              # 知乎收藏夹同步
     SYNC_GITHUB_STARS  = "sync.github_stars"       # GitHub Star 同步
     SYNC_TWITTER       = "sync.twitter"            # Twitter/X 推文同步
+    SYNC_EMBY          = "sync.emby"               # Emby 媒体库同步（影视资料库）
     # 用户记录
     USER_NOTE = "user.note"          # 日常笔记
+    USER_FILM = "user.film"          # 手工添加的影片（影视资料库）
     SYSTEM_NOTIFICATION = "system.notification"  # 系统消息
 
 

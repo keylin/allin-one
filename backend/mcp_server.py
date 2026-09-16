@@ -767,6 +767,196 @@ def toggle_source(
         return json.dumps({"error": str(e)})
 
 
+# ============ 影视资料库 ============
+
+@mcp.tool(annotations={"readOnlyHint": True})
+def list_films(
+    status: str = "",
+    kind: str = "",
+    genre: str = "",
+    year_from: int = 0,
+    year_to: int = 0,
+    in_emby: str = "",
+    keyword: str = "",
+    limit: int = 200,
+    offset: int = 0,
+) -> str:
+    """List films/series in the personal film library (Emby-synced + manually added),
+    with the user's own marks. Use this BEFORE recommending films so you can exclude
+    what the user has already watched, and to learn their taste from ratings/comments.
+
+    Each row: content_id, tmdb_id, title, original_title, kind (movie/series), year,
+    genres, directors, countries, community_rating, in_emby, emby facts (played,
+    play_count, progress, last_played_at, episodes), and record (status, my_rating,
+    watched_at, tags, comment, status_source).
+
+    Data layers: `emby` = viewing facts from the media server (evidence);
+    `record` = the user's own claim. status_source=emby_autofill means "watched" was
+    inferred from Emby played=true, not confirmed by the user.
+
+    Args:
+        status: Filter by record.status, comma-separated: unmarked/want/watching/watched/dropped.
+        kind: "movie" or "series".
+        genre: Exact genre name (as stored, usually zh-CN from Emby/TMDb).
+        year_from: Minimum production year (0 = no bound).
+        year_to: Maximum production year (0 = no bound).
+        in_emby: "true" = only titles currently in the Emby library, "false" = only those not in Emby, "" = all.
+        keyword: Fuzzy match on title / original title / director.
+        limit: Max rows (default 200, max 500).
+        offset: Pagination offset.
+    """
+    import sqlalchemy as sa
+    from sqlalchemy import or_
+    from app.models.film import WatchRecord, WATCH_STATUSES
+    from app.services.film_library import FILM_SOURCE_TYPES, KINDS, serialize_film
+
+    limit = max(1, min(limit, 500))
+    offset = max(0, offset)
+    try:
+        with get_db() as db:
+            query = (
+                db.query(ContentItem, WatchRecord)
+                .join(SourceConfig, ContentItem.source_id == SourceConfig.id)
+                .outerjoin(WatchRecord, WatchRecord.content_id == ContentItem.id)
+                .filter(SourceConfig.source_type.in_(FILM_SOURCE_TYPES))
+            )
+            if status:
+                wanted = [x.strip() for x in status.split(",") if x.strip() in WATCH_STATUSES]
+                if wanted:
+                    if "unmarked" in wanted:
+                        query = query.filter(or_(WatchRecord.status.in_(wanted), WatchRecord.id.is_(None)))
+                    else:
+                        query = query.filter(WatchRecord.status.in_(wanted))
+            if kind in KINDS:
+                query = query.filter(ContentItem.raw_data["kind"].astext == kind)
+            if genre:
+                query = query.filter(ContentItem.raw_data["genres"].contains([genre]))
+            if year_from:
+                query = query.filter(ContentItem.raw_data["year"].astext.cast(sa.Integer) >= year_from)
+            if year_to:
+                query = query.filter(ContentItem.raw_data["year"].astext.cast(sa.Integer) <= year_to)
+            if in_emby.lower() == "true":
+                query = query.filter(ContentItem.raw_data["emby"]["in_library"].astext == "true")
+            elif in_emby.lower() == "false":
+                query = query.filter(or_(
+                    ContentItem.raw_data["emby"]["in_library"].astext.is_(None),
+                    ContentItem.raw_data["emby"]["in_library"].astext != "true",
+                ))
+            if keyword:
+                like = f"%{keyword}%"
+                query = query.filter(or_(
+                    ContentItem.title.ilike(like),
+                    ContentItem.author.ilike(like),
+                    ContentItem.raw_data["original_title"].astext.ilike(like),
+                ))
+            total = query.count()
+            rows = (
+                query.order_by(ContentItem.raw_data["year"].astext.cast(sa.Integer).desc().nulls_last(), ContentItem.title.asc())
+                .offset(offset).limit(limit).all()
+            )
+            items = []
+            for content, record in rows:
+                f = serialize_film(content, record, brief=True)
+                f.pop("poster_url", None)
+                items.append(f)
+            return json.dumps({
+                "items": items, "total_count": total, "offset": offset,
+                "returned": len(items), "has_more": offset + len(items) < total,
+            }, ensure_ascii=False, default=str)
+    except Exception as e:
+        logger.error("list_films failed: %s", e, exc_info=True)
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+def search_film(q: str, year: int = 0) -> str:
+    """Search TMDb for a film/series to get its tmdb_id before marking it.
+    Requires the TMDb API key configured in system settings; otherwise returns an error
+    and you should fall back to mark_films with title+year.
+
+    Args:
+        q: Title to search (Chinese or original title).
+        year: Optional release year to narrow results (0 = ignore).
+    """
+    from app.services.film_library import TMDB_IMAGE_BASE, get_tmdb_api_key, tmdb_search
+
+    try:
+        with get_db() as db:
+            api_key = get_tmdb_api_key(db)
+        if not api_key:
+            return json.dumps({"error": "TMDb API key not configured; use mark_films with title+year instead"})
+        results = tmdb_search(api_key, q, year or None)
+        for r in results:
+            r.pop("poster_path", None)
+        return json.dumps({"results": results}, ensure_ascii=False)
+    except Exception as e:
+        logger.error("search_film failed: %s", e, exc_info=True)
+        return json.dumps({"error": str(e)})
+
+
+@mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True})
+def mark_films(items: list[dict]) -> str:
+    """Create or update the user's watch marks for films, in batch. Films that are not
+    yet in the library are created first (via TMDb when tmdb_id is given and the key is
+    configured, otherwise as a title+year skeleton). Typical use: after a recommendation
+    round the user says "I've seen 1, 3 and 5" — call this once with those titles.
+
+    Any mark written here is a user claim (status_source=manual) and will never be
+    overwritten by Emby sync. Only call this for what the user explicitly confirmed.
+
+    Args:
+        items: List of dicts. Each locates a film by ONE of: content_id | tmdb_id (+kind:
+            "movie"/"series", default movie) | title (+year). Optional fields:
+            status (want/watching/watched/dropped/unmarked; default "watched"),
+            my_rating (1-10), watched_at ("YYYY-MM-DD"), comment (short review), tags (list).
+            Example: [{"tmdb_id": "603", "kind": "movie", "status": "watched", "my_rating": 9},
+                      {"title": "一一", "year": 2000, "status": "watched"}]
+    """
+    from app.services.film_library import apply_record_update, get_or_create_record, resolve_or_create_film
+
+    if not isinstance(items, list) or not items:
+        return json.dumps({"error": "items must be a non-empty list"})
+    results = []
+    try:
+        with get_db() as db:
+            for item in items:
+                if not isinstance(item, dict):
+                    results.append({"ok": False, "error": "item must be an object", "input": item})
+                    continue
+                content, err = resolve_or_create_film(
+                    db,
+                    content_id=item.get("content_id"),
+                    tmdb_id=str(item["tmdb_id"]) if item.get("tmdb_id") else None,
+                    kind=item.get("kind"),
+                    title=item.get("title"),
+                    year=int(item["year"]) if item.get("year") else None,
+                )
+                if err or not content:
+                    results.append({"ok": False, "error": err or "resolve failed", "input": item})
+                    continue
+                record = get_or_create_record(db, content.id)
+                update = {"status": item.get("status") or "watched"}
+                for key in ("my_rating", "watched_at", "comment", "tags"):
+                    if key in item and item[key] is not None:
+                        update[key] = item[key]
+                errors = apply_record_update(record, update)
+                if errors:
+                    db.rollback()
+                    results.append({"ok": False, "error": "; ".join(errors), "content_id": content.id, "title": content.title})
+                    continue
+                db.commit()
+                results.append({
+                    "ok": True, "content_id": content.id, "title": content.title,
+                    "year": (content.raw_data or {}).get("year"), "status": record.status,
+                    "external_id": content.external_id,
+                })
+        ok = sum(1 for r in results if r["ok"])
+        return json.dumps({"processed": len(results), "ok": ok, "results": results}, ensure_ascii=False, default=str)
+    except Exception as e:
+        logger.error("mark_films failed: %s", e, exc_info=True)
+        return json.dumps({"error": str(e)})
+
+
 @mcp.tool(annotations={"readOnlyHint": True})
 def get_favorites_summary(
     time_range: str = "all",
