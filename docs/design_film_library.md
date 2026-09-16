@@ -121,7 +121,7 @@ CREATE INDEX idx_watch_records_status ON watch_records(status);
 
 **覆盖规则（核心）**：
 - 同步**永不**修改 `watch_records` 中 `status_source = manual` 的行。
-- 同步仅在 `status = unmarked` 且 Emby `played = true` 时写入 `status = watched, status_source = emby_autofill`。
+- 同步仅在 `status = unmarked` 且 Emby `played = true` 时写入 `status = watched, status_source = emby_autofill`；已是 `emby_autofill` 且缺 `watched_at` 的行允许补日期。
 - Emby 的 0% 播放记录、playCount 不触发任何自动填充（整理库时的验证播放会污染）。
 - 用户任何一次手动修改都把 `status_source` 置回 `manual`。
 
@@ -131,7 +131,7 @@ CREATE INDEX idx_watch_records_status ON watch_records(status);
 
 ### 3.1 凭证
 
-`PlatformCredential`：`platform = "emby"`，`credential_type = "api_key"`，`credential_data` = 服务器级 API key（加密存储），`extra_info = {"base_url": "http://127.0.0.1:8096", "user_id": "<emby 用户 Guid>"}`。通过现有 `POST /api/sync/link-credential` 关联到 `sync.emby` 源。
+`PlatformCredential`：`platform = "emby"`，`credential_type = "api_key"`，`credential_data` = 服务器级 API key（加密存储），`extra_info = {"base_url": "http://192.168.1.103:8096", "user_name": "emby", "user_id": "<emby 用户 Guid>"}`。base_url 必须是容器可达的 LAN 地址（allin-one 走 bridge 网络，127.0.0.1 是容器自身）。通过现有 `POST /api/sync/link-credential` 关联到 `sync.emby` 源。
 
 ### 3.2 拉取
 
@@ -143,6 +143,7 @@ GET {base}/emby/Users/{user_id}/Items
     &Fields=ProviderIds,Genres,People,Overview,ProductionYear,PremiereDate,RunTimeTicks,
             CommunityRating,OfficialRating,ProductionLocations,DateCreated,OriginalTitle,UserData
     &StartIndex=0&Limit=200          （分页）
+GET {base}/emby/Users/{user_id}/Items/{id}                                    （逐条补全完整 UserData）
 GET {base}/emby/Shows/{series_id}/Episodes?UserId={user_id}&Fields=UserData   （series 计已看集数）
 ```
 
@@ -228,6 +229,7 @@ GET    /api/films/stats               按状态/类型/年代计数（页面头�
 
 ## 10. 待确认 / 风险
 
-- `Users/{uid}/Items` 用服务器级 API key 是否正常返回 UserData：the-one 记录 `/Users/{id}/Views` 用服务器 key 恒为空，Items 未验证；若同样为空，改用 `emby` 用户的会话 token 作凭证。
+- ~~`Users/{uid}/Items` 用服务器级 API key 是否正常返回 UserData~~ 2026-09-16 实测：**列表接口**的 UserData 是精简版（无 `LastPlayedDate`，`PlayCount` 不准），**单条接口** `/Users/{uid}/Items/{id}` 才完整。Fetcher 列表后逐条补全（并发 8）。
+- 部署注意：`deploy-home-server.sh` 先 `up -d` 再 `alembic upgrade`，而应用启动会 `Base.metadata.create_all`，新表在迁移前已被建出来 → `create_table` 报 DuplicateTable。首次上线 0021 时用 `alembic stamp 0021_add_watch_records` 收尾。后续含建表的迁移同样会撞上，要么迁移用 `IF NOT EXISTS`，要么部署脚本先迁移再起容器。
 - TMDb API key 需申请（免费）；home-server 出网走 Emby 同一路径，可达性已被 Emby 刮削证明。
 - 海报代理需注意 Emby 图片接口的缓存头，避免每次列表都打 Emby。

@@ -320,6 +320,15 @@ def upsert_films(db: Session, source: SourceConfig, films: list[dict]) -> dict:
             record.watched_at = last.date() if last else None
             record.updated_at = utcnow()
             stats["autofilled"] += 1
+        elif (
+            emby_block and record.status_source == "emby_autofill"
+            and record.watched_at is None and emby_block.get("last_played_at")
+        ):
+            # 自动填过"看过"但当时没拿到日期：补日期（仍属自动填充，不碰 manual 行）
+            last = _parse_dt(emby_block.get("last_played_at"))
+            if last:
+                record.watched_at = last.date()
+                record.updated_at = utcnow()
 
         stats["content_ids"].append(content.id)
 

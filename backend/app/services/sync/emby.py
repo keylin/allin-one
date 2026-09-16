@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections import defaultdict
 
@@ -227,6 +228,11 @@ class EmbyFetcher(BaseSyncFetcher):
         return SyncResult(success=True, stats=result_stats)
 
     async def _fetch_all_items(self, base_url, api_key, user_id, on_progress=None) -> list[dict]:
+        """分页列出 Movie/Series，再逐条补全 UserData。
+
+        列表接口返回的 UserData 是精简版（缺 LastPlayedDate、PlayCount 不准，2026-09-16 实测），
+        单条接口 /Users/{uid}/Items/{id} 才是完整的，所以每条再查一次（本机调用，几十条秒级完成）。
+        """
         items: list[dict] = []
         start = 0
         async with httpx.AsyncClient(timeout=60, headers=_headers(api_key)) as client:
@@ -255,6 +261,24 @@ class EmbyFetcher(BaseSyncFetcher):
                 start += len(page)
                 if not page or start >= total:
                     break
+
+            # 逐条补全 UserData（限并发 8）
+            sem = asyncio.Semaphore(8)
+
+            async def _enrich(item: dict):
+                async with sem:
+                    try:
+                        resp = await client.get(f"{base_url}/emby/Users/{user_id}/Items/{item['Id']}")
+                        resp.raise_for_status()
+                        full = resp.json() or {}
+                        if isinstance(full.get("UserData"), dict):
+                            item["UserData"] = full["UserData"]
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning(f"Emby UserData enrich failed for {item.get('Name')}: {e}")
+
+            if on_progress:
+                await on_progress(SyncProgress(phase="fetching", message=f"正在补全 {len(items)} 条观看记录...", current=0, total=len(items)))
+            await asyncio.gather(*(_enrich(it) for it in items))
         return items
 
     async def _episode_counts(self, base_url, api_key, user_id, series_id) -> tuple[int, int]:

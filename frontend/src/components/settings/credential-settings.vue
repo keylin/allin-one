@@ -239,7 +239,7 @@ async function handleSaveWechat() {
 }
 
 // Emby 凭证（影视资料库同步）
-const embyBaseUrl = ref('http://127.0.0.1:8096')
+const embyBaseUrl = ref('')
 const embyApiKey = ref('')
 const embyUserName = ref('emby')
 const embySaving = ref(false)
@@ -486,7 +486,7 @@ onBeforeUnmount(() => {
         <input
           v-model="embyBaseUrl"
           type="url"
-          placeholder="服务器地址，如 http://127.0.0.1:8096"
+          placeholder="服务器地址，如 http://192.168.1.103:8096"
           class="min-w-0 px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-sm text-slate-700 placeholder-slate-300 focus:ring-2 focus:ring-violet-500/20 focus:border-violet-400 outline-none transition-all duration-200"
         />
         <input
@@ -512,7 +512,7 @@ onBeforeUnmount(() => {
         </button>
       </div>
       <p class="mt-2 text-xs text-slate-400">
-        获取方式：Emby 管理后台 → 高级 → API 密钥 → 新建。用户名决定同步谁的观看记录。只做只读拉取，不会改动 Emby。
+        获取方式：Emby 管理后台 → 高级 → API 密钥 → 新建。用户名决定同步谁的观看记录。只做只读拉取，不会改动 Emby。地址要填 allin-one 容器能访问到的 LAN 地址，不能用 127.0.0.1（那是容器自己）。
       </p>
       <Transition
         enter-active-class="transition-all duration-300 ease-out"
