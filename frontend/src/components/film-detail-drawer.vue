@@ -199,6 +199,12 @@ const embyProgressLabel = computed(() => {
   return '未播放'
 })
 
+// 豆瓣没有可用的公开接口，只做跳转：按片名 + 年份搜索电影分类
+const doubanUrl = computed(() => {
+  const q = [film.value?.title, film.value?.year].filter(Boolean).join(' ')
+  return `https://www.douban.com/search?cat=1002&q=${encodeURIComponent(q)}`
+})
+
 const sourceLabel = computed(() => {
   const map = { emby: 'Emby', tmdb: 'TMDb', manual: '手工', douban: '豆瓣', emby_search: 'Emby 搜索' }
   return (film.value?.sources || []).map(s => map[s] || s).join(' · ')
@@ -240,7 +246,8 @@ function fmt(iso) {
             <span v-for="g in film.genres" :key="g" class="px-1.5 py-0.5 text-[10px] font-medium bg-indigo-50 text-indigo-600 rounded">{{ g }}</span>
           </div>
           <p class="mt-2 text-[11px] text-slate-400">
-            来源 {{ sourceLabel || '—' }}<template v-if="film.url"> · <a :href="film.url" target="_blank" rel="noopener" class="text-indigo-400 hover:underline">TMDb 页面</a></template>
+            来源 {{ sourceLabel || '—' }}<template v-if="film.url"> · <a :href="film.url" target="_blank" rel="noopener" class="text-indigo-400 hover:underline">TMDb</a></template>
+            · <a :href="doubanUrl" target="_blank" rel="noopener" class="text-emerald-600 hover:underline" title="在豆瓣搜索这部片">豆瓣</a>
             · <button class="text-indigo-400 hover:underline disabled:opacity-50" :disabled="enriching" @click="handleEnrich">{{ enriching ? '补全中...' : '补全元数据' }}</button>
           </p>
         </div>
