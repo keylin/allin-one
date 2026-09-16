@@ -54,7 +54,7 @@ async function load() {
       noteDirty.value = false
       // 日期精度控件初始化
       const p = r.watched_precision
-      dateMode.value = !r.watched_at ? 'unknown' : (p === 'year' ? 'year' : p === 'month' ? 'month' : 'day')
+      dateMode.value = (!r.watched_at || p === 'release') ? 'unknown' : (p === 'year' ? 'year' : p === 'month' ? 'month' : 'day')
       dateYear.value = r.watched_at ? r.watched_at.slice(0, 4) : ''
       dateMonth.value = r.watched_at ? r.watched_at.slice(0, 7) : ''
     }
@@ -332,10 +332,10 @@ function fmt(iso) {
 
         <div class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div v-if="form.status === 'watched'">
-            <span class="text-[11px] text-slate-400">什么时候看的</span>
+            <span class="text-[11px] text-slate-400">什么时候看的<span v-if="film.record?.watched_label" class="text-slate-300"> · {{ film.record.watched_label }}</span></span>
             <div class="mt-1 flex flex-wrap items-center gap-1.5">
               <div class="flex bg-slate-100 rounded-lg p-0.5">
-                <button v-for="m in [['unknown','不记得'],['year','只记年'],['month','记到月'],['day','具体日期']]" :key="m[0]"
+                <button v-for="m in [['unknown','不记得（按上映）'],['year','只记年'],['month','记到月'],['day','具体日期']]" :key="m[0]"
                   class="px-2 py-1 text-[11px] rounded-md transition-all"
                   :class="dateMode === m[0] ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'"
                   @click="setDateMode(m[0])">{{ m[1] }}</button>

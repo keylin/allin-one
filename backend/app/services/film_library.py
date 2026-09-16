@@ -639,6 +639,22 @@ def get_or_create_record(db: Session, content_id: str) -> WatchRecord:
     return record
 
 
+def release_watched_at(content: ContentItem | None) -> tuple[date, str] | None:
+    """「不记得」的取值：按上映时间近似（precision=release），没有上映信息则 None"""
+    if content is None:
+        return None
+    raw = content.raw_data if isinstance(content.raw_data, dict) else {}
+    rel = raw.get("release_date")
+    if rel:
+        try:
+            return date.fromisoformat(str(rel)[:10]), "release"
+        except ValueError:
+            pass
+    if raw.get("year"):
+        return date(int(raw["year"]), 1, 1), "release"
+    return None
+
+
 def parse_watched_at(value: str) -> tuple[date, str] | None:
     """看过日期支持三种精度：YYYY → (YYYY-01-01, year)，YYYY-MM → (YYYY-MM-01, month)，YYYY-MM-DD → (date, day)"""
     v = value.strip()
@@ -659,6 +675,8 @@ def watched_label(record: WatchRecord | None) -> str | None:
     if not record.watched_at:
         return "时间不详"
     p = record.watched_precision or "day"
+    if p == "release":
+        return f"≈{record.watched_at.year}（上映）"
     if p == "year":
         return str(record.watched_at.year)
     if p == "month":
@@ -669,7 +687,7 @@ def watched_label(record: WatchRecord | None) -> str | None:
 def apply_record_update(record: WatchRecord, data: dict, content: ContentItem | None = None) -> list[str]:
     """把用户提交的字段写入 record（任何手动修改都把 status_source 置回 manual）。返回错误列表
 
-    看过日期不默认、不伪造：没给就是"时间不详"。content 参数保留给后续规则用。"""
+    看过日期：手填 YYYY / YYYY-MM / YYYY-MM-DD 记对应精度；没给或传空 = 「不记得」→ 按上映时间近似（precision=release）。"""
     errors: list[str] = []
     touched = False
     if "status" in data and data["status"] is not None:
@@ -688,8 +706,9 @@ def apply_record_update(record: WatchRecord, data: dict, content: ContentItem | 
     if "watched_at" in data:
         value = data["watched_at"]
         if value in (None, ""):
-            record.watched_at = None            # 时间不详，不伪造
-            record.watched_precision = None
+            # 「不记得」：按上映时间近似，精度标为 release 与手填日期区分
+            approx = release_watched_at(content)
+            record.watched_at, record.watched_precision = approx if approx else (None, None)
         else:
             parsed = parse_watched_at(str(value))
             if not parsed:
@@ -706,6 +725,11 @@ def apply_record_update(record: WatchRecord, data: dict, content: ContentItem | 
     if touched and not errors:
         record.status_source = "manual"
         record.updated_at = utcnow()
+        # 标看过但没给时间 → 视为「不记得」，按上映时间近似
+        if record.status == "watched" and record.watched_at is None:
+            approx = release_watched_at(content)
+            if approx:
+                record.watched_at, record.watched_precision = approx
     return errors
 
 
