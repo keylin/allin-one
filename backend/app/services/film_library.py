@@ -360,17 +360,34 @@ def douban_url_for(raw: dict, title: str) -> str:
     return f"https://www.douban.com/search?cat=1002&q={quote(q)}"
 
 
-def resolve_douban_for(db: Session, content: ContentItem) -> tuple[bool, str]:
-    """给一条记录补豆瓣 id；失败记 raw_data.douban_failed 避免批量重试"""
+class DoubanThrottled(Exception):
+    """豆瓣联想接口被限流：对已知存在的片也返回空列表。此时不得把记录标成 douban_failed。"""
+
+
+def douban_probe() -> bool:
+    """探针：查一部必定存在的片，返回空即视为被限流"""
+    try:
+        with httpx.Client(timeout=15, headers=_DOUBAN_HEADERS) as client:
+            resp = client.get(_DOUBAN_SUGGEST, params={"q": "霸王别姬"})
+            resp.raise_for_status()
+            data = resp.json()
+            return isinstance(data, list) and len(data) > 0
+    except (httpx.HTTPError, ValueError):
+        return False
+
+
+def resolve_douban_for(db: Session, content: ContentItem, *, mark_failed: bool = True) -> tuple[bool, str]:
+    """给一条记录补豆瓣 id；mark_failed 时把真正没匹配的记 raw_data.douban_failed 避免批量重试"""
     raw = dict(content.raw_data) if isinstance(content.raw_data, dict) else {}
     pids = dict(raw.get("provider_ids") or {})
     if pids.get("douban"):
         return False, "already"
     douban_id = douban_resolve(content.title, raw.get("original_title"), raw.get("year"))
     if not douban_id:
-        raw["douban_failed"] = True
-        content.raw_data = raw
-        db.commit()
+        if mark_failed:
+            raw["douban_failed"] = True
+            content.raw_data = raw
+            db.commit()
         return False, "豆瓣没有匹配条目"
     pids["douban"] = douban_id
     raw["provider_ids"] = pids

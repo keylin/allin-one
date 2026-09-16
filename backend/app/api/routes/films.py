@@ -28,6 +28,7 @@ from app.services.film_library import (
     apply_record_update,
     enrich_film,
     enrichment_state,
+    douban_probe,
     find_douban_missing,
     find_unenriched,
     resolve_douban_for,
@@ -288,15 +289,32 @@ def enrich_missing(limit: int = Query(30, ge=1, le=200), db: Session = Depends(g
     targets = find_unenriched(db, limit) if tmdb_ok else []
     results = []
     if not targets:
-        # 第二阶段：豆瓣直链（软依赖，限速 0.3s/条）
-        for content in find_douban_missing(db, limit):
+        # 第二阶段：豆瓣直链（软依赖）。先探针：被限流就整批中止、不标记；每条 2s，单批最多 20 条
+        douban_targets = find_douban_missing(db, min(limit, 20))
+        if douban_targets and not douban_probe():
+            remaining = len(find_douban_missing(db, 1000))
+            return {"code": 0, "data": {"processed": 0, "ok": 0, "remaining": remaining, "phase": "douban", "throttled": True, "results": []},
+                    "message": f"豆瓣接口当前限流（对已知影片也返回空），剩余 {remaining} 条稍后再试"}
+        for i, content in enumerate(douban_targets):
             try:
                 ok, reason = resolve_douban_for(db, content)
             except Exception as e:  # noqa: BLE001
                 db.rollback()
                 ok, reason = False, str(e)
             results.append({"content_id": content.id, "title": content.title, "ok": ok, "reason": reason, "phase": "douban"})
-            _time.sleep(0.3)
+            # 连续 3 条空结果 → 复查探针，被限流则停止并撤销这几条的失败标记
+            if i >= 2 and all(not r["ok"] for r in results[-3:]) and not douban_probe():
+                for r in results[-3:]:
+                    c = db.get(ContentItem, r["content_id"])
+                    if c and isinstance(c.raw_data, dict) and c.raw_data.get("douban_failed"):
+                        rd = dict(c.raw_data); rd.pop("douban_failed", None); c.raw_data = rd
+                db.commit()
+                results = results[:-3]
+                remaining = len(find_douban_missing(db, 1000))
+                ok_n = sum(1 for r in results if r["ok"])
+                return {"code": 0, "data": {"processed": len(results), "ok": ok_n, "remaining": remaining, "phase": "douban", "throttled": True, "results": results},
+                        "message": f"豆瓣直链 {ok_n}/{len(results)}，随后被限流，剩余 {remaining} 条稍后再试"}
+            _time.sleep(2)
         remaining = len(find_douban_missing(db, 1000)) + (len(find_unenriched(db, 1000)) if tmdb_ok else 0)
         ok = sum(1 for r in results if r["ok"])
         return {"code": 0, "data": {"processed": len(results), "ok": ok, "remaining": remaining, "phase": "douban", "results": results},
@@ -339,7 +357,7 @@ def enrich_one(content_id: str, db: Session = Depends(get_db)):
         db.commit()
         return error_response(400, reason)
     try:
-        douban_ok, douban_reason = resolve_douban_for(db, content)
+        douban_ok, douban_reason = resolve_douban_for(db, content, mark_failed=douban_probe())
     except Exception as e:  # noqa: BLE001
         douban_ok, douban_reason = False, str(e)
     if not changed and not douban_ok:
