@@ -72,8 +72,11 @@ def film_stats(db: Session = Depends(get_db)):
     by_kind = {k: 0 for k in KINDS}
     in_emby = 0
     genres: dict[str, int] = {}
+    tags: dict[str, int] = {}
     years: set[int] = set()
     for content, record in rows:
+        for t in (record.tags if record and record.tags else []):
+            tags[t] = tags.get(t, 0) + 1
         by_status[(record.status if record else "unmarked")] = by_status.get(record.status if record else "unmarked", 0) + 1
         raw = content.raw_data if isinstance(content.raw_data, dict) else {}
         kind = raw.get("kind") or "movie"
@@ -92,6 +95,7 @@ def film_stats(db: Session = Depends(get_db)):
             "by_kind": by_kind,
             "in_emby": in_emby,
             "genres": [g for g, _ in sorted(genres.items(), key=lambda kv: (-kv[1], kv[0]))],
+            "tags": [t for t, _ in sorted(tags.items(), key=lambda kv: (-kv[1], kv[0]))],
             "years": sorted(years, reverse=True),
             "tmdb_configured": bool(get_tmdb_api_key(db)),
             "emby_configured": get_emby_connection(db) is not None,

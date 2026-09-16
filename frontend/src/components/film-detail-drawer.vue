@@ -1,7 +1,7 @@
 <script setup>
 import { ref, watch, computed } from 'vue'
 import DetailDrawer from '@/components/detail-drawer.vue'
-import { getFilm, updateWatchRecord, updateFilmNote, deleteFilm, enrichFilm, WATCH_STATUS_OPTIONS, statusMeta } from '@/api/films'
+import { getFilm, getFilmStats, updateWatchRecord, updateFilmNote, deleteFilm, enrichFilm, WATCH_STATUS_OPTIONS, statusMeta } from '@/api/films'
 import { formatTimeShort } from '@/utils/time'
 import { useToast } from '@/composables/useToast'
 
@@ -18,7 +18,9 @@ const film = ref(null)
 const saving = ref(false)
 
 // editable form
-const form = ref({ status: 'unmarked', my_rating: null, watched_at: '', tags: '', comment: '' })
+const form = ref({ status: 'unmarked', my_rating: null, watched_at: '', tags: [], comment: '' })
+const tagInput = ref('')
+const knownTags = ref([])
 const note = ref('')
 const noteDirty = ref(false)
 const deleteConfirm = ref(false)
@@ -36,7 +38,7 @@ async function load() {
         status: r.status || 'unmarked',
         my_rating: r.my_rating ?? null,
         watched_at: r.watched_at || '',
-        tags: (r.tags || []).join(', '),
+        tags: [...(r.tags || [])],
         comment: r.comment || '',
       }
       note.value = res.data.user_note || ''
@@ -45,6 +47,14 @@ async function load() {
   } finally {
     loading.value = false
   }
+  loadKnownTags()
+}
+
+async function loadKnownTags() {
+  try {
+    const res = await getFilmStats()
+    if (res.code === 0) knownTags.value = res.data.tags || []
+  } catch { /* ignore */ }
 }
 
 watch(() => [props.visible, props.contentId], ([v]) => {
@@ -92,10 +102,20 @@ function saveWatchedAt() {
   saveRecord({ watched_at: form.value.watched_at || '' })
 }
 
-function saveTags() {
-  const tags = form.value.tags.split(/[,，]/).map(t => t.trim()).filter(Boolean)
-  saveRecord({ tags })
+function addTag(raw) {
+  const tag = (raw ?? tagInput.value).trim()
+  tagInput.value = ''
+  if (!tag || form.value.tags.includes(tag)) return
+  form.value.tags = [...form.value.tags, tag]
+  saveRecord({ tags: form.value.tags })
 }
+
+function removeTag(tag) {
+  form.value.tags = form.value.tags.filter(t => t !== tag)
+  saveRecord({ tags: form.value.tags })
+}
+
+const tagSuggestions = computed(() => knownTags.value.filter(t => !form.value.tags.includes(t)).slice(0, 12))
 
 function saveComment() {
   saveRecord({ comment: form.value.comment })
@@ -251,17 +271,37 @@ function fmt(iso) {
               @change="saveWatchedAt"
             />
           </label>
-          <label class="block">
-            <span class="text-[11px] text-slate-400">标签（逗号分隔）</span>
+        </div>
+
+        <div class="mt-4">
+          <p class="text-[11px] text-slate-400 mb-1.5">标签</p>
+          <div class="flex flex-wrap items-center gap-1.5 min-h-[2rem] px-2 py-1.5 bg-white border border-slate-200 rounded-lg focus-within:ring-2 focus-within:ring-indigo-500/20 focus-within:border-indigo-300 transition-all">
+            <span
+              v-for="t in form.tags"
+              :key="t"
+              class="inline-flex items-center gap-1 pl-2 pr-1 py-0.5 text-xs bg-indigo-50 text-indigo-700 rounded-md"
+            >
+              {{ t }}
+              <button class="w-4 h-4 rounded hover:bg-indigo-100 text-indigo-400 hover:text-indigo-700 leading-none" :title="`移除 ${t}`" @click="removeTag(t)">×</button>
+            </span>
             <input
-              v-model="form.tags"
+              v-model="tagInput"
               type="text"
-              placeholder="如：影院, 二刷, 推荐给朋友"
-              class="mt-1 w-full px-3 py-1.5 text-sm bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 outline-none"
-              @blur="saveTags"
-              @keydown.enter.prevent="saveTags"
+              :placeholder="form.tags.length ? '' : '输入后回车添加'"
+              class="flex-1 min-w-[6rem] px-1 py-0.5 text-sm bg-transparent outline-none placeholder-slate-300"
+              @keydown.enter.prevent="addTag()"
+              @keydown.backspace="!tagInput && form.tags.length && removeTag(form.tags[form.tags.length - 1])"
+              @blur="tagInput && addTag()"
             />
-          </label>
+          </div>
+          <div v-if="tagSuggestions.length" class="mt-1.5 flex flex-wrap gap-1">
+            <button
+              v-for="t in tagSuggestions"
+              :key="t"
+              class="px-1.5 py-0.5 text-[11px] text-slate-500 bg-slate-100 hover:bg-indigo-50 hover:text-indigo-600 rounded transition-all"
+              @click="addTag(t)"
+            >+ {{ t }}</button>
+          </div>
         </div>
 
         <label class="block mt-3">
