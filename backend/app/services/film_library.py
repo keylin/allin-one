@@ -687,7 +687,7 @@ def watched_label(record: WatchRecord | None) -> str | None:
 def apply_record_update(record: WatchRecord, data: dict, content: ContentItem | None = None) -> list[str]:
     """把用户提交的字段写入 record（任何手动修改都把 status_source 置回 manual）。返回错误列表
 
-    看过日期：手填 YYYY / YYYY-MM / YYYY-MM-DD 记对应精度；没给或传空 = 「不记得」→ 按上映时间近似（precision=release）。"""
+    看过日期：手填 YYYY / YYYY-MM / YYYY-MM-DD 记对应精度；传 "release" = 详情页主动选「不记得（按上映）」；传空 = 清空（时间不详）。自动规则从不填日期。"""
     errors: list[str] = []
     touched = False
     if "status" in data and data["status"] is not None:
@@ -705,14 +705,17 @@ def apply_record_update(record: WatchRecord, data: dict, content: ContentItem | 
             touched = True
     if "watched_at" in data:
         value = data["watched_at"]
-        if value in (None, ""):
-            # 「不记得」：按上映时间近似，精度标为 release 与手填日期区分
+        if value == "release":
+            # 详情页主动选「不记得（按上映）」：按上映时间近似，精度标为 release 与手填日期区分
             approx = release_watched_at(content)
             record.watched_at, record.watched_precision = approx if approx else (None, None)
+        elif value in (None, ""):
+            record.watched_at = None            # 时间不详（空着，以后补）
+            record.watched_precision = None
         else:
             parsed = parse_watched_at(str(value))
             if not parsed:
-                errors.append(f"watched_at 格式错误: {value}（支持 YYYY / YYYY-MM / YYYY-MM-DD）")
+                errors.append(f"watched_at 格式错误: {value}（支持 YYYY / YYYY-MM / YYYY-MM-DD / release）")
             else:
                 record.watched_at, record.watched_precision = parsed
         touched = True
@@ -725,14 +728,9 @@ def apply_record_update(record: WatchRecord, data: dict, content: ContentItem | 
     if touched and not errors:
         record.status_source = "manual"
         record.updated_at = utcnow()
-        # 评分蕴含看过：给未标记/想看的片打分，即记为看过（只在这次主动打分时触发）
-        if "my_rating" in data and record.my_rating is not None and record.status in ("unmarked", "want"):
+        # 评分蕴含看过：打分即记为看过（任何非看过状态，含弃了）；日期空着，留给详情页处理
+        if "my_rating" in data and "status" not in data and record.my_rating is not None and record.status != "watched":
             record.status = "watched"
-        # 标看过但没给时间 → 视为「不记得」，按上映时间近似
-        if record.status == "watched" and record.watched_at is None:
-            approx = release_watched_at(content)
-            if approx:
-                record.watched_at, record.watched_precision = approx
     return errors
 
 
