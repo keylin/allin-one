@@ -297,6 +297,109 @@ def find_unenriched(db: Session, limit: int = 50) -> list[ContentItem]:
     return out
 
 
+# ─── 豆瓣条目解析（只为拼直达链接；软依赖，失败退回搜索页） ─────────────────────
+
+_DOUBAN_SUGGEST = "https://movie.douban.com/j/subject_suggest"
+_DOUBAN_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    "Referer": "https://movie.douban.com/",
+    "Accept": "application/json",
+}
+
+
+def douban_resolve(title: str, original_title: str | None, year: int | None) -> str | None:
+    """用豆瓣的联想接口按片名（其次原名）找条目 id；年份差 >1 不认。找不到返回 None。"""
+    def _query(q: str) -> list[dict]:
+        with httpx.Client(timeout=15, headers=_DOUBAN_HEADERS) as client:
+            resp = client.get(_DOUBAN_SUGGEST, params={"q": q})
+            resp.raise_for_status()
+            data = resp.json()
+            return data if isinstance(data, list) else []
+
+    def _pick(results: list[dict], q: str) -> str | None:
+        cands = []
+        for r in results:
+            if r.get("type") not in ("movie", "tv", None):
+                continue
+            ry = r.get("year")
+            try:
+                ry = int(ry) if ry else None
+            except ValueError:
+                ry = None
+            if year and ry and abs(ry - int(year)) > 1:
+                continue
+            score = 0
+            if (r.get("title") or "").strip() == q.strip() or (r.get("sub_title") or "").strip() == q.strip():
+                score += 2
+            if year and ry == int(year):
+                score += 1
+            cands.append((score, r))
+        if not cands:
+            return None
+        cands.sort(key=lambda c: -c[0])
+        best = cands[0][1]
+        return str(best.get("id")) if best.get("id") else None
+
+    for q in [t for t in (title, original_title) if t]:
+        try:
+            hit = _pick(_query(q), q)
+        except (httpx.HTTPError, ValueError):
+            return None
+        if hit:
+            return hit
+    return None
+
+
+def douban_url_for(raw: dict, title: str) -> str:
+    """有豆瓣 id 直达条目页；否则按 IMDb id（豆瓣能索引）或片名+年份进搜索页"""
+    pids = raw.get("provider_ids") or {}
+    if pids.get("douban"):
+        return f"https://movie.douban.com/subject/{pids['douban']}/"
+    q = pids.get("imdb") or " ".join(str(x) for x in (title, raw.get("year")) if x)
+    from urllib.parse import quote
+    return f"https://www.douban.com/search?cat=1002&q={quote(q)}"
+
+
+def resolve_douban_for(db: Session, content: ContentItem) -> tuple[bool, str]:
+    """给一条记录补豆瓣 id；失败记 raw_data.douban_failed 避免批量重试"""
+    raw = dict(content.raw_data) if isinstance(content.raw_data, dict) else {}
+    pids = dict(raw.get("provider_ids") or {})
+    if pids.get("douban"):
+        return False, "already"
+    douban_id = douban_resolve(content.title, raw.get("original_title"), raw.get("year"))
+    if not douban_id:
+        raw["douban_failed"] = True
+        content.raw_data = raw
+        db.commit()
+        return False, "豆瓣没有匹配条目"
+    pids["douban"] = douban_id
+    raw["provider_ids"] = pids
+    raw.pop("douban_failed", None)
+    content.raw_data = raw
+    content.updated_at = utcnow()
+    db.commit()
+    return True, douban_id
+
+
+def find_douban_missing(db: Session, limit: int = 50) -> list[ContentItem]:
+    rows = (
+        db.query(ContentItem)
+        .join(SourceConfig, ContentItem.source_id == SourceConfig.id)
+        .filter(SourceConfig.source_type.in_(FILM_SOURCE_TYPES))
+        .order_by(ContentItem.created_at.asc())
+        .all()
+    )
+    out = []
+    for c in rows:
+        raw = c.raw_data if isinstance(c.raw_data, dict) else {}
+        if (raw.get("provider_ids") or {}).get("douban") or raw.get("douban_failed"):
+            continue
+        out.append(c)
+        if len(out) >= limit:
+            break
+    return out
+
+
 # ─── Upsert ───────────────────────────────────────────────────────────────────
 
 _META_FIELDS = (
@@ -630,6 +733,8 @@ def serialize_film(content: ContentItem, record: WatchRecord | None, *, brief: b
         "runtime_min": raw.get("runtime_min"),
         "community_rating": raw.get("community_rating"),
         "poster_url": f"/api/films/{content.id}/poster" if has_poster else None,
+        "douban_url": douban_url_for(raw, content.title),
+        "douban_id": (raw.get("provider_ids") or {}).get("douban"),
         "sources": raw.get("sources") or ([raw["source"]] if raw.get("source") else []),
         "in_emby": bool(emby and emby.get("in_library")),
         "emby": None if emby is None else {

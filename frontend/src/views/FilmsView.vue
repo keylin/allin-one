@@ -227,8 +227,9 @@ const enrichHint = computed(() => {
   const n = stats.value?.unenriched ?? 0
   const p = stats.value?.partial ?? 0
   const f = stats.value?.enrich_failed ?? 0
-  if (!stats.value?.tmdb_configured) return `未配置 TMDb API Key，无法补全${p ? `（${p} 部只有海报和 ID）` : ''}；去系统设置 · 影视资料库填写`
-  if (n > 0) return `${n} 部可补全，点击开始`
+  const dm = stats.value?.douban_missing ?? 0
+  if (!stats.value?.tmdb_configured && (stats.value?.tmdb_missing ?? 0) > 0) return `未配置 TMDb API Key，无法补全${p ? `（${p} 部只有海报和 ID）` : ''}；去系统设置 · 影视资料库填写`
+  if (n > 0) return `${n} 部可补全（${stats.value?.tmdb_missing ?? 0} 部元数据，${dm} 部豆瓣直链），点击开始`
   if (f > 0) return `没有可批量补全的记录；${f} 部 TMDb 搜不到，可在详情里单条重试`
   return '所有记录都有完整元数据'
 })
@@ -248,11 +249,11 @@ async function runEnrich() {
       if (res.code !== 0) { showError(res.message || '补全失败'); break }
       totalOk += res.data.ok
       totalFailed += res.data.processed - res.data.ok
-      enrichProgress.value = `已补全 ${totalOk}，剩余 ${res.data.remaining}`
+      enrichProgress.value = `${res.data.phase === 'douban' ? '豆瓣直链' : '元数据'} 已补全 ${totalOk}，剩余 ${res.data.remaining}`
       if (res.data.remaining === 0 || res.data.processed === 0) break
     }
-    if (totalFailed) showToast(`补全完成：${totalOk} 部拿到元数据，${totalFailed} 部搜不到（详情里可单条重试）`, { type: 'warning', duration: 6000 })
-    else success(`补全完成：${totalOk} 部拿到元数据`)
+    if (totalFailed) showToast(`补全完成：${totalOk} 部成功，${totalFailed} 部搜不到（详情里可单条重试）`, { type: 'warning', duration: 6000 })
+    else success(`补全完成：${totalOk} 部`)
     reload()
   } catch {
     showError('补全失败')
@@ -350,7 +351,7 @@ onUnmounted(() => {
             v-for="opt in WATCH_STATUS_OPTIONS"
             :key="opt.value"
             class="px-2 py-1 text-[11px] rounded-md transition-all whitespace-nowrap"
-            :class="filterStatus === opt.value ? 'bg-slate-800 text-white' : 'text-slate-500 hover:bg-slate-100'"
+            :class="filterStatus === opt.value ? opt.color : 'text-slate-500 hover:bg-slate-100'"
             @click="filterStatus = filterStatus === opt.value ? '' : opt.value"
           >{{ opt.label }} <span class="opacity-60 tabular-nums">{{ statusCount(opt.value) }}</span></button>
         </div>
@@ -431,7 +432,7 @@ onUnmounted(() => {
                 </div>
                 <span
                   v-if="film.record?.status && film.record.status !== 'unmarked'"
-                  class="absolute top-1.5 left-1.5 px-1.5 py-0.5 text-[10px] font-medium rounded backdrop-blur-sm"
+                  class="absolute top-1.5 left-1.5 px-1.5 py-0.5 text-[10px] font-medium rounded shadow-sm"
                   :class="statusMeta(film.record.status).color"
                 >{{ statusMeta(film.record.status).label }}</span>
                 <span v-if="film.in_emby" class="absolute top-1.5 right-1.5 px-1.5 py-0.5 text-[10px] font-medium bg-black/60 text-white rounded" title="在 Emby 库内">E</span>
@@ -452,16 +453,16 @@ onUnmounted(() => {
               </div>
 
               <!-- quick actions (desktop 常显；移动端长按走面板) -->
-              <div class="hidden sm:block px-1.5 pb-1.5">
-                <div class="flex items-center justify-center mb-1">
-                  <StarRating :model-value="film.record?.my_rating" size="sm" @update:model-value="quickRating(film, $event)" />
+              <div class="hidden sm:block px-2 pb-2">
+                <div class="flex items-center justify-center py-1">
+                  <StarRating :model-value="film.record?.my_rating" size="md" @update:model-value="quickRating(film, $event)" />
                 </div>
-                <div class="flex items-center gap-0.5">
+                <div class="flex items-center justify-center gap-1">
                   <button
                     v-for="opt in QUICK_STATUSES"
                     :key="opt.value"
-                    class="flex-1 px-1 py-1 text-[10px] rounded-md transition-all"
-                    :class="film.record?.status === opt.value ? 'bg-slate-800 text-white' : 'text-slate-400 hover:bg-slate-100 hover:text-slate-700'"
+                    class="px-1.5 py-0.5 text-[10px] rounded transition-all"
+                    :class="film.record?.status === opt.value ? opt.color : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600'"
                     :title="film.record?.status === opt.value ? `取消「${opt.label}」` : `标为「${opt.label}」`"
                     @click.stop="quickStatus(film, opt.value)"
                   >{{ opt.label }}</button>
@@ -514,7 +515,7 @@ onUnmounted(() => {
                     v-for="opt in WATCH_STATUS_OPTIONS.filter(o => o.value !== 'unmarked')"
                     :key="opt.value"
                     class="flex-1 py-2 text-xs rounded-lg border transition-all"
-                    :class="sheetFilm.record?.status === opt.value ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-600 border-slate-200 active:bg-slate-100'"
+                    :class="sheetFilm.record?.status === opt.value ? opt.active : 'bg-white text-slate-600 border-slate-200 active:bg-slate-100'"
                     @click="quickStatus(sheetFilm, opt.value)"
                   >{{ opt.label }}</button>
                 </div>

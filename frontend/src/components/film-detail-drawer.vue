@@ -199,11 +199,8 @@ const embyProgressLabel = computed(() => {
   return '未播放'
 })
 
-// 豆瓣没有可用的公开接口，只做跳转：按片名 + 年份搜索电影分类
-const doubanUrl = computed(() => {
-  const q = [film.value?.title, film.value?.year].filter(Boolean).join(' ')
-  return `https://www.douban.com/search?cat=1002&q=${encodeURIComponent(q)}`
-})
+// 后端解析到豆瓣条目 id 时直达条目页，否则退到搜索页（后端已按 IMDb id / 片名年份拼好）
+const doubanUrl = computed(() => film.value?.douban_url || `https://www.douban.com/search?cat=1002&q=${encodeURIComponent(film.value?.title || '')}`)
 
 const sourceLabel = computed(() => {
   const map = { emby: 'Emby', tmdb: 'TMDb', manual: '手工', douban: '豆瓣', emby_search: 'Emby 搜索（旧）' }
@@ -247,7 +244,7 @@ function fmt(iso) {
           </div>
           <p class="mt-2 text-[11px] text-slate-400">
             来源 {{ sourceLabel || '—' }}<template v-if="film.url"> · <a :href="film.url" target="_blank" rel="noopener" class="text-indigo-400 hover:underline">TMDb</a></template>
-            · <a :href="doubanUrl" target="_blank" rel="noopener" class="text-emerald-600 hover:underline" title="在豆瓣搜索这部片">豆瓣</a>
+            · <a :href="doubanUrl" target="_blank" rel="noopener" class="text-emerald-600 hover:underline" :title="film.douban_id ? '豆瓣条目' : '豆瓣搜索（未解析到条目）'">豆瓣{{ film.douban_id ? '' : '搜索' }}</a>
             · <button class="text-indigo-400 hover:underline disabled:opacity-50" :disabled="enriching" @click="handleEnrich">{{ enriching ? '补全中...' : '补全元数据' }}</button>
           </p>
         </div>
@@ -266,7 +263,7 @@ function fmt(iso) {
             v-for="opt in WATCH_STATUS_OPTIONS.filter(o => o.value !== 'unmarked')"
             :key="opt.value"
             class="px-3 py-1.5 text-xs font-medium rounded-lg border transition-all"
-            :class="form.status === opt.value ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400'"
+            :class="form.status === opt.value ? opt.active : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400'"
             @click="setStatus(opt.value)"
           >{{ opt.label }}</button>
         </div>
