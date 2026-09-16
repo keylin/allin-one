@@ -979,6 +979,8 @@ DELETE /api/films/{id}                 → 删除资料库记录（不触碰 Emb
 POST   /api/films/enrich-missing?limit= → 批量补全元数据（TMDb 详情；需 tmdb_api_key），返回 remaining
 POST   /api/films/{id}/enrich          → 单条补全
 POST   /api/films/{id}/douban          → 解析/手填豆瓣条目 id（详情页手动触发）；DELETE 清除
+PUT    /api/films/{id}/meta            → 修正片名/年份/类型（骨架顺手重搜 TMDb）
+POST   /api/films/{id}/relink          → 重新识别：关联指定 TMDb 条目，元数据整体替换，标记与 Emby 事实保留
 GET    /api/films/{id}/poster          → 海报代理（Emby → TMDb），免认证 GET
 ```
 数据模型与覆盖规则见 `docs/design_film_library.md`；用户标记表 `watch_records`。

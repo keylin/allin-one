@@ -50,6 +50,19 @@ class FilmNoteUpdate(BaseModel):
     user_note: Optional[str] = None
 
 
+class FilmMetaUpdate(BaseModel):
+    """手工修正片名/年份/类型（骨架或错配时用）"""
+    title: Optional[str] = None
+    year: Optional[int] = None
+    kind: Optional[str] = None
+
+
+class FilmRelinkRequest(BaseModel):
+    """重新识别：关联到指定 TMDb 条目，元数据整体替换，用户标记保留"""
+    tmdb_id: str
+    kind: str = "movie"
+
+
 class DoubanLinkRequest(BaseModel):
     """手动设置豆瓣直达：粘链接或 id；都为空则自动解析"""
     url: Optional[str] = None

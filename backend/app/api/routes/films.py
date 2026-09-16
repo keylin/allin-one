@@ -19,6 +19,8 @@ from app.schemas import error_response
 from app.schemas.film import (
     BatchRecordRequest,
     DoubanLinkRequest,
+    FilmMetaUpdate,
+    FilmRelinkRequest,
     FilmCreate,
     FilmNoteUpdate,
     WatchRecordUpdate,
@@ -39,7 +41,11 @@ from app.services.film_library import (
     get_tmdb_api_key,
     resolve_or_create_film,
     serialize_film,
+    tmdb_details,
+    tmdb_external_id,
     tmdb_search,
+    upsert_films,
+    _find_film,
 )
 
 logger = logging.getLogger(__name__)
@@ -328,6 +334,76 @@ def enrich_one(content_id: str, db: Session = Depends(get_db)):
     db.refresh(content)
     record = db.query(WatchRecord).filter(WatchRecord.content_id == content.id).first()
     return {"code": 0, "data": serialize_film(content, record, emby_conn=get_emby_connection(db)), "message": f"已补全（{reason}）"}
+
+
+# ─── 修正元数据 / 重新识别 ───────────────────────────────────────────────────
+
+@router.put("/{content_id}/meta")
+def update_meta(content_id: str, body: FilmMetaUpdate, db: Session = Depends(get_db)):
+    """改片名/年份/类型；没有 TMDb ID 的记录改完顺手按新片名再搜一次"""
+    row = _base_query(db).filter(ContentItem.id == content_id).first()
+    if not row:
+        return error_response(404, "影片不存在")
+    content, record = row
+    raw = dict(content.raw_data or {})
+    if body.title and body.title.strip():
+        content.title = body.title.strip()
+    if body.year is not None:
+        raw["year"] = int(body.year)
+        raw.pop("release_date", None) if raw.get("release_date", "")[:4] != str(body.year) else None
+    if body.kind in KINDS:
+        raw["kind"] = body.kind
+    raw.pop("enrich_failed", None)
+    content.raw_data = raw
+    content.updated_at = utcnow()
+    db.commit()
+    note = "已保存"
+    if not (raw.get("provider_ids") or {}).get("tmdb") and get_tmdb_api_key(db):
+        try:
+            changed, reason = enrich_film(db, content)
+            note = "已保存并识别" if changed else f"已保存（TMDb 仍未匹配：{reason}）"
+        except Exception as e:  # noqa: BLE001
+            db.rollback()
+            note = f"已保存（识别失败：{e}）"
+    db.refresh(content)
+    record = db.query(WatchRecord).filter(WatchRecord.content_id == content.id).first()
+    return {"code": 0, "data": serialize_film(content, record, emby_conn=get_emby_connection(db)), "message": note}
+
+
+@router.post("/{content_id}/relink")
+def relink_film(content_id: str, body: FilmRelinkRequest, db: Session = Depends(get_db)):
+    """重新识别：改关联到指定 TMDb 条目。元数据、海报、片名整体替换；watch_records 与 Emby 事实保留"""
+    row = _base_query(db).filter(ContentItem.id == content_id).first()
+    if not row:
+        return error_response(404, "影片不存在")
+    content, record = row
+    api_key = get_tmdb_api_key(db)
+    if not api_key:
+        return error_response(400, "未配置 TMDb API Key")
+    kind = body.kind if body.kind in KINDS else "movie"
+    new_ext = tmdb_external_id(kind, body.tmdb_id)
+    other = _find_film(db, new_ext)
+    if other and other.id != content.id:
+        return error_response(409, f"该 TMDb 条目已对应库里的「{other.title}」，请改在那条上标记")
+    try:
+        film = tmdb_details(api_key, kind, body.tmdb_id)
+    except httpx.HTTPError as e:
+        return error_response(502, f"TMDb 请求失败: {e}")
+    raw = dict(content.raw_data or {})
+    emby_block = raw.get("emby")
+    # 清掉旧元数据，只保留 Emby 事实与来源
+    raw = {k: v for k, v in raw.items() if k in ("emby", "sources")}
+    raw.pop("enrich_failed", None)
+    content.raw_data = raw
+    content.external_id = new_ext
+    db.flush()
+    source = db.get(SourceConfig, content.source_id)
+    if emby_block is not None:
+        film["emby"] = emby_block
+    upsert_films(db, source, [film])   # title 用 TMDb 的
+    db.refresh(content)
+    record = db.query(WatchRecord).filter(WatchRecord.content_id == content.id).first()
+    return {"code": 0, "data": serialize_film(content, record, emby_conn=get_emby_connection(db)), "message": f"已重新识别为「{content.title}」"}
 
 
 # ─── 豆瓣直达（详情页手动触发，一次生效永久保存） ────────────────────────────

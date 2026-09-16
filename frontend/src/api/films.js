@@ -44,6 +44,14 @@ export function enrichFilm(contentId) {
   return api.post(`/films/${contentId}/enrich`, null, { timeout: 60000 })
 }
 
+export function updateFilmMeta(contentId, data) {
+  return api.put(`/films/${contentId}/meta`, data, { timeout: 60000 })
+}
+
+export function relinkFilm(contentId, tmdbId, kind = 'movie') {
+  return api.post(`/films/${contentId}/relink`, { tmdb_id: tmdbId, kind }, { timeout: 60000 })
+}
+
 export function setDoubanLink(contentId, payload = {}) {
   return api.post(`/films/${contentId}/douban`, payload, { timeout: 60000 })
 }

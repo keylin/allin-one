@@ -1,7 +1,7 @@
 <script setup>
 import { ref, watch, computed } from 'vue'
 import DetailDrawer from '@/components/detail-drawer.vue'
-import { getFilm, getFilmStats, updateWatchRecord, updateFilmNote, deleteFilm, enrichFilm, setDoubanLink, clearDoubanLink, WATCH_STATUS_OPTIONS, statusMeta } from '@/api/films'
+import { getFilm, getFilmStats, updateWatchRecord, updateFilmNote, deleteFilm, enrichFilm, setDoubanLink, clearDoubanLink, updateFilmMeta, relinkFilm, searchTmdb, WATCH_STATUS_OPTIONS, statusMeta } from '@/api/films'
 import { formatTimeShort } from '@/utils/time'
 import { useToast } from '@/composables/useToast'
 import { useDoubleTapClose } from '@/composables/useDoubleTapClose'
@@ -216,7 +216,7 @@ const doubanBusy = ref(false)
 const doubanPaste = ref('')
 const doubanPasteOpen = ref(false)
 
-async function resolveDouban(payload = {}) {
+async function resolveDouban(payload = {}, openAfter = false) {
   if (!film.value || doubanBusy.value) return
   doubanBusy.value = true
   try {
@@ -226,15 +226,110 @@ async function resolveDouban(payload = {}) {
       emit('updated', res.data)
       doubanPasteOpen.value = false
       doubanPaste.value = ''
-      success('豆瓣直达已保存')
+      if (openAfter) window.open(res.data.douban_url, '_blank', 'noopener')
+      else success('豆瓣直达已保存')
     } else {
       showError(res.message || '解析失败')
-      if (res.code === 404 || res.code === 503) doubanPasteOpen.value = true
+      doubanPasteOpen.value = true
+      if (openAfter) window.open(doubanUrl.value, '_blank', 'noopener')   // 退回搜索页
     }
   } catch {
     showError('解析失败')
+    doubanPasteOpen.value = true
   } finally {
     doubanBusy.value = false
+  }
+}
+
+// 「豆瓣」一个动作：有直达直接开；没有就先解析再开，失败退回搜索页并出现粘贴框
+function openDouban() {
+  if (!film.value) return
+  if (film.value.douban_id) window.open(film.value.douban_url, '_blank', 'noopener')
+  else resolveDouban({}, true)
+}
+
+// ---- 编辑片名/年份 与 重新识别 ----
+const editOpen = ref(false)
+const editTitle = ref('')
+const editYear = ref('')
+const editKind = ref('movie')
+const editBusy = ref(false)
+const relinkOpen = ref(false)
+const relinkQuery = ref('')
+const relinkYear = ref('')
+const relinkResults = ref([])
+const relinkBusy = ref(false)
+
+function startEdit() {
+  editTitle.value = film.value?.title || ''
+  editYear.value = film.value?.year || ''
+  editKind.value = film.value?.kind || 'movie'
+  editOpen.value = true
+}
+
+async function saveEdit() {
+  if (!film.value || editBusy.value) return
+  editBusy.value = true
+  try {
+    const res = await updateFilmMeta(film.value.content_id, {
+      title: editTitle.value.trim() || undefined,
+      year: editYear.value ? Number(editYear.value) : undefined,
+      kind: editKind.value,
+    })
+    if (res.code === 0) {
+      film.value = res.data
+      emit('updated', res.data)
+      editOpen.value = false
+      success(res.message || '已保存')
+    } else {
+      showError(res.message || '保存失败')
+    }
+  } catch {
+    showError('保存失败')
+  } finally {
+    editBusy.value = false
+  }
+}
+
+function startRelink() {
+  relinkQuery.value = film.value?.title || ''
+  relinkYear.value = film.value?.year || ''
+  relinkResults.value = []
+  relinkOpen.value = true
+  doRelinkSearch()
+}
+
+async function doRelinkSearch() {
+  if (!relinkQuery.value.trim()) return
+  relinkBusy.value = true
+  try {
+    const res = await searchTmdb(relinkQuery.value.trim(), relinkYear.value ? Number(relinkYear.value) : null)
+    relinkResults.value = res.code === 0 ? res.data : []
+    if (res.code !== 0) showError(res.message || '搜索失败')
+  } catch {
+    showError('搜索失败')
+  } finally {
+    relinkBusy.value = false
+  }
+}
+
+async function pickRelink(item) {
+  if (!film.value || relinkBusy.value) return
+  relinkBusy.value = true
+  try {
+    const res = await relinkFilm(film.value.content_id, item.tmdb_id, item.kind)
+    if (res.code === 0) {
+      film.value = res.data
+      emit('updated', res.data)
+      relinkOpen.value = false
+      success(res.message || '已重新识别')
+    } else {
+      showError(res.message || '识别失败')
+    }
+  } catch {
+    showError('识别失败')
+  } finally {
+    relinkBusy.value = false
   }
 }
 
@@ -286,19 +381,41 @@ function fmt(iso) {
           </div>
           <p class="mt-2 text-[11px] text-slate-400">
             来源 {{ sourceLabel || '—' }}<template v-if="film.url"> · <a :href="film.url" target="_blank" rel="noopener" class="text-indigo-400 hover:underline">TMDb</a></template>
-            · <a :href="doubanUrl" target="_blank" rel="noopener" class="text-emerald-600 hover:underline" :title="film.douban_id ? '豆瓣条目页' : '豆瓣搜索页'">豆瓣{{ film.douban_id ? '' : '搜索' }}</a>
-            <template v-if="!film.douban_id">
-              · <button class="text-emerald-600 hover:underline disabled:opacity-50" :disabled="doubanBusy" title="解析豆瓣条目，保存后直达" @click="resolveDouban()">{{ doubanBusy ? '解析中...' : '解析直达' }}</button>
-              · <button class="text-slate-400 hover:underline" @click="doubanPasteOpen = !doubanPasteOpen">粘贴链接</button>
-            </template>
-            <button v-else class="ml-0.5 text-slate-300 hover:text-slate-500" title="清除豆瓣直达" @click="unlinkDouban">×</button>
+            · <button class="text-emerald-600 hover:underline disabled:opacity-50" :disabled="doubanBusy" :title="film.douban_id ? '打开豆瓣条目页' : '解析豆瓣条目并打开；失败则打开搜索页'" @click="openDouban">{{ doubanBusy ? '豆瓣解析中...' : '豆瓣' }}</button><button v-if="film.douban_id" class="ml-0.5 text-slate-300 hover:text-slate-500" title="清除豆瓣直达" @click="unlinkDouban">×</button>
+            · <button class="text-slate-400 hover:text-slate-600 hover:underline" @click="startEdit">编辑</button>
+            · <button class="text-slate-400 hover:text-slate-600 hover:underline" @click="startRelink">重新识别</button>
             · <button class="text-indigo-400 hover:underline disabled:opacity-50" :disabled="enriching" @click="handleEnrich">{{ enriching ? '补全中...' : '补全元数据' }}</button>
           </p>
+          <!-- 编辑片名/年份/类型 -->
+          <div v-if="editOpen" class="mt-2 flex flex-wrap items-center gap-1.5">
+            <input v-model="editTitle" type="text" placeholder="片名" class="flex-1 min-w-[10rem] px-2 py-1 text-xs bg-white border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300" @keydown.enter.prevent="saveEdit" />
+            <input v-model="editYear" type="number" placeholder="年份" class="w-20 px-2 py-1 text-xs bg-white border border-slate-200 rounded-lg outline-none tabular-nums" />
+            <select v-model="editKind" class="px-2 py-1 text-xs bg-white border border-slate-200 rounded-lg outline-none"><option value="movie">电影</option><option value="series">剧集</option></select>
+            <button class="px-2.5 py-1 text-xs text-white bg-indigo-500 rounded-lg hover:bg-indigo-600 disabled:opacity-50" :disabled="editBusy" @click="saveEdit">{{ editBusy ? '保存中...' : '保存' }}</button>
+            <button class="text-xs text-slate-400 hover:text-slate-600" @click="editOpen = false">取消</button>
+          </div>
+          <!-- 重新识别：搜 TMDb 候选，点选即关联 -->
+          <div v-if="relinkOpen" class="mt-2">
+            <div class="flex gap-1.5">
+              <input v-model="relinkQuery" type="text" placeholder="按片名搜 TMDb" class="flex-1 min-w-0 px-2 py-1 text-xs bg-white border border-slate-200 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300" @keydown.enter.prevent="doRelinkSearch" />
+              <input v-model="relinkYear" type="number" placeholder="年份" class="w-20 px-2 py-1 text-xs bg-white border border-slate-200 rounded-lg outline-none tabular-nums" @change="doRelinkSearch" />
+              <button class="px-2.5 py-1 text-xs text-slate-700 bg-slate-100 rounded-lg hover:bg-slate-200" @click="doRelinkSearch">搜索</button>
+              <button class="text-xs text-slate-400 hover:text-slate-600" @click="relinkOpen = false">取消</button>
+            </div>
+            <div v-if="relinkBusy" class="text-[11px] text-slate-400 mt-1.5">搜索中...</div>
+            <ul v-else-if="relinkResults.length" class="mt-1.5 divide-y divide-slate-100 border border-slate-100 rounded-lg overflow-hidden max-h-56 overflow-y-auto">
+              <li v-for="item in relinkResults" :key="item.kind + item.tmdb_id" class="flex gap-2 p-2 hover:bg-indigo-50/60 cursor-pointer" @click="pickRelink(item)">
+                <div class="w-8 h-11 shrink-0 rounded bg-slate-100 overflow-hidden"><img v-if="item.poster_url" :src="item.poster_url" class="w-full h-full object-cover" /></div>
+                <div class="min-w-0"><p class="text-xs font-medium text-slate-800 truncate">{{ item.title }} <span v-if="item.year" class="text-slate-400 font-normal tabular-nums">({{ item.year }})</span></p><p v-if="item.original_title && item.original_title !== item.title" class="text-[11px] text-slate-400 truncate">{{ item.original_title }}</p><p class="text-[10px] text-slate-400"><span class="px-1 rounded bg-slate-100">{{ item.kind === 'series' ? '剧集' : '电影' }}</span><span v-if="item.tmdb_id === film.tmdb_id" class="ml-1 text-emerald-600">当前</span></p></div>
+              </li>
+            </ul>
+            <div v-else-if="relinkQuery && !relinkBusy" class="text-[11px] text-slate-400 mt-1.5">TMDb 没有结果，换个写法再搜（例如去掉标点、用原名）</div>
+          </div>
           <div v-if="doubanPasteOpen && !film.douban_id" class="mt-1.5 flex gap-1.5">
             <input
               v-model="doubanPaste"
               type="text"
-              placeholder="粘贴豆瓣条目链接，如 https://movie.douban.com/subject/1291839/"
+              placeholder="自动解析没成功：粘贴豆瓣条目链接，如 https://movie.douban.com/subject/1291839/"
               class="flex-1 min-w-0 px-2 py-1 text-xs bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-300 outline-none"
               @keydown.enter.prevent="doubanPaste.trim() && resolveDouban({ url: doubanPaste.trim() })"
             />
