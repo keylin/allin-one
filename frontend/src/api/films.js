@@ -44,6 +44,14 @@ export function enrichFilm(contentId) {
   return api.post(`/films/${contentId}/enrich`, null, { timeout: 60000 })
 }
 
+export function setDoubanLink(contentId, payload = {}) {
+  return api.post(`/films/${contentId}/douban`, payload, { timeout: 60000 })
+}
+
+export function clearDoubanLink(contentId) {
+  return api.delete(`/films/${contentId}/douban`)
+}
+
 export function setupFilmSync() {
   return api.post('/films/sync/setup')
 }

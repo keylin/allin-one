@@ -1,7 +1,7 @@
 <script setup>
 import { ref, watch, computed } from 'vue'
 import DetailDrawer from '@/components/detail-drawer.vue'
-import { getFilm, getFilmStats, updateWatchRecord, updateFilmNote, deleteFilm, enrichFilm, WATCH_STATUS_OPTIONS, statusMeta } from '@/api/films'
+import { getFilm, getFilmStats, updateWatchRecord, updateFilmNote, deleteFilm, enrichFilm, setDoubanLink, clearDoubanLink, WATCH_STATUS_OPTIONS, statusMeta } from '@/api/films'
 import { formatTimeShort } from '@/utils/time'
 import { useToast } from '@/composables/useToast'
 import { useDoubleTapClose } from '@/composables/useDoubleTapClose'
@@ -199,8 +199,39 @@ const embyProgressLabel = computed(() => {
   return '未播放'
 })
 
-// 后端解析到豆瓣条目 id 时直达条目页，否则退到搜索页（后端已按 IMDb id / 片名年份拼好）
+// 豆瓣：解析到条目 id 后直达条目页，否则退到搜索页。解析是手动触发、一次生效永久保存。
 const doubanUrl = computed(() => film.value?.douban_url || `https://www.douban.com/search?cat=1002&q=${encodeURIComponent(film.value?.title || '')}`)
+const doubanBusy = ref(false)
+const doubanPaste = ref('')
+const doubanPasteOpen = ref(false)
+
+async function resolveDouban(payload = {}) {
+  if (!film.value || doubanBusy.value) return
+  doubanBusy.value = true
+  try {
+    const res = await setDoubanLink(film.value.content_id, payload)
+    if (res.code === 0) {
+      film.value = res.data
+      emit('updated', res.data)
+      doubanPasteOpen.value = false
+      doubanPaste.value = ''
+      success('豆瓣直达已保存')
+    } else {
+      showError(res.message || '解析失败')
+      if (res.code === 404 || res.code === 503) doubanPasteOpen.value = true
+    }
+  } catch {
+    showError('解析失败')
+  } finally {
+    doubanBusy.value = false
+  }
+}
+
+async function unlinkDouban() {
+  if (!film.value) return
+  const res = await clearDoubanLink(film.value.content_id)
+  if (res.code === 0) { film.value = res.data; emit('updated', res.data) }
+}
 
 const sourceLabel = computed(() => {
   const map = { emby: 'Emby', tmdb: 'TMDb', manual: '手工', douban: '豆瓣', emby_search: 'Emby 搜索（旧）' }
@@ -244,9 +275,24 @@ function fmt(iso) {
           </div>
           <p class="mt-2 text-[11px] text-slate-400">
             来源 {{ sourceLabel || '—' }}<template v-if="film.url"> · <a :href="film.url" target="_blank" rel="noopener" class="text-indigo-400 hover:underline">TMDb</a></template>
-            · <a :href="doubanUrl" target="_blank" rel="noopener" class="text-emerald-600 hover:underline" :title="film.douban_id ? '豆瓣条目' : '豆瓣搜索（未解析到条目）'">豆瓣{{ film.douban_id ? '' : '搜索' }}</a>
+            · <a :href="doubanUrl" target="_blank" rel="noopener" class="text-emerald-600 hover:underline" :title="film.douban_id ? '豆瓣条目页' : '豆瓣搜索页'">豆瓣{{ film.douban_id ? '' : '搜索' }}</a>
+            <template v-if="!film.douban_id">
+              · <button class="text-emerald-600 hover:underline disabled:opacity-50" :disabled="doubanBusy" title="解析豆瓣条目，保存后直达" @click="resolveDouban()">{{ doubanBusy ? '解析中...' : '解析直达' }}</button>
+              · <button class="text-slate-400 hover:underline" @click="doubanPasteOpen = !doubanPasteOpen">粘贴链接</button>
+            </template>
+            <button v-else class="ml-0.5 text-slate-300 hover:text-slate-500" title="清除豆瓣直达" @click="unlinkDouban">×</button>
             · <button class="text-indigo-400 hover:underline disabled:opacity-50" :disabled="enriching" @click="handleEnrich">{{ enriching ? '补全中...' : '补全元数据' }}</button>
           </p>
+          <div v-if="doubanPasteOpen && !film.douban_id" class="mt-1.5 flex gap-1.5">
+            <input
+              v-model="doubanPaste"
+              type="text"
+              placeholder="粘贴豆瓣条目链接，如 https://movie.douban.com/subject/1291839/"
+              class="flex-1 min-w-0 px-2 py-1 text-xs bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-300 outline-none"
+              @keydown.enter.prevent="doubanPaste.trim() && resolveDouban({ url: doubanPaste.trim() })"
+            />
+            <button class="px-2 py-1 text-xs text-white bg-emerald-600 rounded-lg hover:bg-emerald-700 disabled:opacity-50" :disabled="!doubanPaste.trim() || doubanBusy" @click="resolveDouban({ url: doubanPaste.trim() })">保存</button>
+          </div>
         </div>
       </div>
 

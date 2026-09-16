@@ -48,3 +48,9 @@ class BatchRecordRequest(BaseModel):
 
 class FilmNoteUpdate(BaseModel):
     user_note: Optional[str] = None
+
+
+class DoubanLinkRequest(BaseModel):
+    """手动设置豆瓣直达：粘链接或 id；都为空则自动解析"""
+    url: Optional[str] = None
+    douban_id: Optional[str] = None

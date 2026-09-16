@@ -167,7 +167,7 @@ SyncView 现有"运行"按钮 → `POST /api/sync/run/sync.emby`。不注册 per
 - `POST /api/films` 传 `{tmdb_id, kind}` 或 `{title, year}`：有 TMDb key 则拉详情落 raw_data；无 key 时只建标题+年份的骨架记录，`external_id = manual:<uuid5(title+year)>`，后续可补 ID。
 - Emby 后来出现同一 TMDb ID 的条目时，upsert 命中已有手工记录，补 `raw_data.emby`，`source_id` 保持不变、`raw_data.source` 加 `emby`。
 - **元数据唯一来源是 TMDb**（2026-09-16 定案）：曾用 Emby 的 `RemoteSearch` 接口做无 key 时的替代，实测它只给片名/年份/ProviderIds/海报/英文简介，拿不到导演、主演、类型、中文简介（`MetadataLanguage` 无效），且有误匹配（"首"→首尔之春、"碁盘斩"→格斗片 Bushido），已整体移除。没有 TMDb key 时手工添加只建骨架、补全按钮禁用并提示配 key。`POST /api/films/enrich-missing?limit=` 批量、`POST /api/films/{id}/enrich` 单条，搜不到的记 `raw_data.enrich_failed`。剧集导演 `created_by` 为空时退到 `aggregate_credits` 的 Director。`enrichment_state()`：full（sources 含 emby/tmdb）/ partial / skeleton / failed。
-- **豆瓣直达链接**（2026-09-16 加）：豆瓣无公开 API，只用它的联想接口 `movie.douban.com/j/subject_suggest?q=` 按片名（其次原名）解析条目 id，年份差 >1 不认，存 `provider_ids.douban`；`enrich-missing` 在 TMDb 阶段无事可做时进入豆瓣阶段（0.3s/条限速），失败记 `douban_failed`。软依赖：解析不到就退回按 IMDb id 或片名+年份的豆瓣搜索页链接，接口失效不影响任何功能。
+- **豆瓣直达链接**（2026-09-16）：豆瓣无公开 API，用其联想接口 `movie.douban.com/j/subject_suggest?q=` 按片名（其次原名）解析条目 id，年份差 >1 不认，存 `provider_ids.douban`。**详情页手动触发、一次生效永久保存**（`POST /api/films/{id}/douban`，body 可粘豆瓣链接/ID 手填；`DELETE` 清除）；不做批量，因为该接口连续请求几条后即被限流（对已知影片也返回空）。`douban_probe()` 先查一部必定存在的片判断限流，限流/无匹配都不持久标记，可重试。解析不到时详情页链接退回按 IMDb id 或片名+年份的豆瓣搜索页。
 - **Emby 的职责收敛为一件事**：库存与观看事实（sync.emby + 库内条目海报）。它不可用时搜索/添加/补全不受影响。
 - 页面：卡片底部常显快捷操作（想看/看过/弃、评分条、删除二次确认），移动端长按卡片弹操作面板；列表无限滚动（sentinel + IntersectionObserver）；详情抽屉移动端空白处双击关闭。
 

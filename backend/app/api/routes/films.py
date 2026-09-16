@@ -1,6 +1,7 @@
 """影视资料库 API — 列表/详情/手工添加/标记/海报代理/TMDb 搜索/统计"""
 
 import logging
+import re
 from typing import Optional
 
 import httpx
@@ -17,6 +18,7 @@ from app.models.film import WatchRecord, WATCH_STATUSES
 from app.schemas import error_response
 from app.schemas.film import (
     BatchRecordRequest,
+    DoubanLinkRequest,
     FilmCreate,
     FilmNoteUpdate,
     WatchRecordUpdate,
@@ -29,9 +31,8 @@ from app.services.film_library import (
     enrich_film,
     enrichment_state,
     douban_probe,
-    find_douban_missing,
+    douban_resolve,
     find_unenriched,
-    resolve_douban_for,
     get_emby_connection,
     get_or_create_film_source,
     get_or_create_record,
@@ -96,7 +97,7 @@ def film_stats(db: Session = Depends(get_db)):
             genres[g] = genres.get(g, 0) + 1
         if raw.get("year"):
             years.add(int(raw["year"]))
-        if not (raw.get("provider_ids") or {}).get("douban") and not raw.get("douban_failed"):
+        if not (raw.get("provider_ids") or {}).get("douban"):
             douban_missing += 1
         state = enrichment_state(raw, tmdb_configured)
         if state == "failed":
@@ -117,9 +118,8 @@ def film_stats(db: Session = Depends(get_db)):
             "genres": [g for g, _ in sorted(genres.items(), key=lambda kv: (-kv[1], kv[0]))],
             "tags": [t for t, _ in sorted(tags.items(), key=lambda kv: (-kv[1], kv[0]))],
             "years": sorted(years, reverse=True),
-            "unenriched": unenriched + douban_missing,   # 「补全元数据」可处理的记录数（TMDb 缺失 + 豆瓣直链缺失）
-            "tmdb_missing": unenriched,
-            "douban_missing": douban_missing,
+            "unenriched": unenriched,          # 「补全元数据」可处理的记录数（TMDb 详情缺失）
+            "douban_missing": douban_missing,  # 尚无豆瓣直达链接的记录数（详情页手动解析）
             "partial": partial,                # 有 ID/海报但缺导演/类型/简介的记录数（需 TMDb key）
             "enrich_failed": enrich_failed,    # 补全失败过、等单条重试的记录数
             "tmdb_configured": tmdb_configured,
@@ -284,41 +284,10 @@ def batch_records(body: BatchRecordRequest, db: Session = Depends(get_db)):
 @router.post("/enrich-missing")
 def enrich_missing(limit: int = Query(30, ge=1, le=200), db: Session = Depends(get_db)):
     """用 TMDb 详情补全记录元数据，每次最多 limit 条；返回 remaining 供前端循环"""
-    import time as _time
-    tmdb_ok = bool(get_tmdb_api_key(db))
-    targets = find_unenriched(db, limit) if tmdb_ok else []
+    if not get_tmdb_api_key(db):
+        return error_response(400, "未配置 TMDb API Key，请在系统设置 · 影视资料库中填写")
+    targets = find_unenriched(db, limit)
     results = []
-    if not targets:
-        # 第二阶段：豆瓣直链（软依赖）。先探针：被限流就整批中止、不标记；每条 2s，单批最多 20 条
-        douban_targets = find_douban_missing(db, min(limit, 20))
-        if douban_targets and not douban_probe():
-            remaining = len(find_douban_missing(db, 1000))
-            return {"code": 0, "data": {"processed": 0, "ok": 0, "remaining": remaining, "phase": "douban", "throttled": True, "results": []},
-                    "message": f"豆瓣接口当前限流（对已知影片也返回空），剩余 {remaining} 条稍后再试"}
-        for i, content in enumerate(douban_targets):
-            try:
-                ok, reason = resolve_douban_for(db, content)
-            except Exception as e:  # noqa: BLE001
-                db.rollback()
-                ok, reason = False, str(e)
-            results.append({"content_id": content.id, "title": content.title, "ok": ok, "reason": reason, "phase": "douban"})
-            # 连续 3 条空结果 → 复查探针，被限流则停止并撤销这几条的失败标记
-            if i >= 2 and all(not r["ok"] for r in results[-3:]) and not douban_probe():
-                for r in results[-3:]:
-                    c = db.get(ContentItem, r["content_id"])
-                    if c and isinstance(c.raw_data, dict) and c.raw_data.get("douban_failed"):
-                        rd = dict(c.raw_data); rd.pop("douban_failed", None); c.raw_data = rd
-                db.commit()
-                results = results[:-3]
-                remaining = len(find_douban_missing(db, 1000))
-                ok_n = sum(1 for r in results if r["ok"])
-                return {"code": 0, "data": {"processed": len(results), "ok": ok_n, "remaining": remaining, "phase": "douban", "throttled": True, "results": results},
-                        "message": f"豆瓣直链 {ok_n}/{len(results)}，随后被限流，剩余 {remaining} 条稍后再试"}
-            _time.sleep(2)
-        remaining = len(find_douban_missing(db, 1000)) + (len(find_unenriched(db, 1000)) if tmdb_ok else 0)
-        ok = sum(1 for r in results if r["ok"])
-        return {"code": 0, "data": {"processed": len(results), "ok": ok, "remaining": remaining, "phase": "douban", "results": results},
-                "message": f"豆瓣直链 {ok}/{len(results)}，剩余 {remaining}"}
     for content in targets:
         try:
             changed, reason = enrich_film(db, content)
@@ -332,9 +301,9 @@ def enrich_missing(limit: int = Query(30, ge=1, le=200), db: Session = Depends(g
             content.raw_data = raw
             db.commit()
         results.append({"content_id": content.id, "title": content.title, "ok": changed, "reason": reason})
-    remaining = len(find_unenriched(db, 1000)) + len(find_douban_missing(db, 1000))
+    remaining = len(find_unenriched(db, 1000))
     ok = sum(1 for r in results if r["ok"])
-    return {"code": 0, "data": {"processed": len(results), "ok": ok, "remaining": remaining, "phase": "tmdb", "results": results},
+    return {"code": 0, "data": {"processed": len(results), "ok": ok, "remaining": remaining, "results": results},
             "message": f"补全 {ok}/{len(results)}，剩余 {remaining}"}
 
 
@@ -346,27 +315,72 @@ def enrich_one(content_id: str, db: Session = Depends(get_db)):
     content, record = row
     raw = dict(content.raw_data or {})
     raw.pop("enrich_failed", None)
-    raw.pop("douban_failed", None)
     content.raw_data = raw
     try:
         changed, reason = enrich_film(db, content)
     except Exception as e:  # noqa: BLE001
         db.rollback()
         return error_response(502, f"补全失败: {e}")
-    if not changed and reason.startswith("未配置"):
+    if not changed:
         db.commit()
-        return error_response(400, reason)
-    try:
-        douban_ok, douban_reason = resolve_douban_for(db, content, mark_failed=douban_probe())
-    except Exception as e:  # noqa: BLE001
-        douban_ok, douban_reason = False, str(e)
-    if not changed and not douban_ok:
-        db.commit()
-        return error_response(404, f"补全失败: {reason}；豆瓣：{douban_reason}")
-    reason = f"{reason}{'，豆瓣直链已解析' if douban_ok else ''}"
+        return error_response(400 if reason.startswith("未配置") else 404, f"补全失败: {reason}")
     db.refresh(content)
     record = db.query(WatchRecord).filter(WatchRecord.content_id == content.id).first()
     return {"code": 0, "data": serialize_film(content, record), "message": f"已补全（{reason}）"}
+
+
+# ─── 豆瓣直达（详情页手动触发，一次生效永久保存） ────────────────────────────
+
+@router.post("/{content_id}/douban")
+def set_douban(content_id: str, body: DoubanLinkRequest = DoubanLinkRequest(), db: Session = Depends(get_db)):
+    """解析或手填豆瓣条目：body.url/douban_id 为空时按片名自动解析；限流或没匹配都不做持久标记，可随时重试"""
+    row = _base_query(db).filter(ContentItem.id == content_id).first()
+    if not row:
+        return error_response(404, "影片不存在")
+    content, record = row
+    raw = dict(content.raw_data or {})
+    pids = dict(raw.get("provider_ids") or {})
+
+    douban_id = None
+    if body.douban_id:
+        douban_id = body.douban_id.strip()
+    elif body.url:
+        m = re.search(r"subject/(\d+)", body.url)
+        if not m:
+            return error_response(400, "豆瓣链接格式不对，应包含 /subject/<数字>/")
+        douban_id = m.group(1)
+    if douban_id and not douban_id.isdigit():
+        return error_response(400, "豆瓣 id 应为数字")
+
+    if not douban_id:
+        if not douban_probe():
+            return error_response(503, "豆瓣接口当前限流，稍后再试；也可以把豆瓣条目链接粘进来")
+        douban_id = douban_resolve(content.title, raw.get("original_title"), raw.get("year"))
+        if not douban_id:
+            return error_response(404, "豆瓣没有匹配到条目，可以把豆瓣条目链接粘进来")
+
+    pids["douban"] = douban_id
+    raw["provider_ids"] = pids
+    raw.pop("douban_failed", None)
+    content.raw_data = raw
+    content.updated_at = utcnow()
+    db.commit()
+    return {"code": 0, "data": serialize_film(content, record), "message": "豆瓣直达已保存"}
+
+
+@router.delete("/{content_id}/douban")
+def clear_douban(content_id: str, db: Session = Depends(get_db)):
+    row = _base_query(db).filter(ContentItem.id == content_id).first()
+    if not row:
+        return error_response(404, "影片不存在")
+    content, record = row
+    raw = dict(content.raw_data or {})
+    pids = dict(raw.get("provider_ids") or {})
+    pids.pop("douban", None)
+    raw["provider_ids"] = pids
+    content.raw_data = raw
+    db.commit()
+    return {"code": 0, "data": serialize_film(content, record), "message": "已清除豆瓣直达"}
 
 
 # ─── 详情 / 标记 / 长评 ───────────────────────────────────────────────────────

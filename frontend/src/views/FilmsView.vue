@@ -227,9 +227,8 @@ const enrichHint = computed(() => {
   const n = stats.value?.unenriched ?? 0
   const p = stats.value?.partial ?? 0
   const f = stats.value?.enrich_failed ?? 0
-  const dm = stats.value?.douban_missing ?? 0
-  if (!stats.value?.tmdb_configured && (stats.value?.tmdb_missing ?? 0) > 0) return `未配置 TMDb API Key，无法补全${p ? `（${p} 部只有海报和 ID）` : ''}；去系统设置 · 影视资料库填写`
-  if (n > 0) return `${n} 部可补全（${stats.value?.tmdb_missing ?? 0} 部元数据，${dm} 部豆瓣直链），点击开始`
+  if (!stats.value?.tmdb_configured && n > 0) return `未配置 TMDb API Key，无法补全${p ? `（${p} 部只有海报和 ID）` : ''}；去系统设置 · 影视资料库填写`
+  if (n > 0) return `${n} 部可补全，点击开始`
   if (f > 0) return `没有可批量补全的记录；${f} 部 TMDb 搜不到，可在详情里单条重试`
   return '所有记录都有完整元数据'
 })
@@ -249,7 +248,7 @@ async function runEnrich() {
       if (res.code !== 0) { showError(res.message || '补全失败'); break }
       totalOk += res.data.ok
       totalFailed += res.data.processed - res.data.ok
-      enrichProgress.value = `${res.data.phase === 'douban' ? '豆瓣直链' : '元数据'} 已补全 ${totalOk}，剩余 ${res.data.remaining}`
+      enrichProgress.value = `已补全 ${totalOk}，剩余 ${res.data.remaining}`
       if (res.data.remaining === 0 || res.data.processed === 0) break
     }
     if (totalFailed) showToast(`补全完成：${totalOk} 部成功，${totalFailed} 部搜不到（详情里可单条重试）`, { type: 'warning', duration: 6000 })

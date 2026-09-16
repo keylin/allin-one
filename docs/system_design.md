@@ -978,6 +978,7 @@ PUT    /api/films/{id}/note            → 更新长评 (user_note)
 DELETE /api/films/{id}                 → 删除资料库记录（不触碰 Emby）
 POST   /api/films/enrich-missing?limit= → 批量补全元数据（TMDb 详情；需 tmdb_api_key），返回 remaining
 POST   /api/films/{id}/enrich          → 单条补全
+POST   /api/films/{id}/douban          → 解析/手填豆瓣条目 id（详情页手动触发）；DELETE 清除
 GET    /api/films/{id}/poster          → 海报代理（Emby → TMDb），免认证 GET
 ```
 数据模型与覆盖规则见 `docs/design_film_library.md`；用户标记表 `watch_records`。

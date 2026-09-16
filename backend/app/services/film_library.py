@@ -376,47 +376,6 @@ def douban_probe() -> bool:
         return False
 
 
-def resolve_douban_for(db: Session, content: ContentItem, *, mark_failed: bool = True) -> tuple[bool, str]:
-    """给一条记录补豆瓣 id；mark_failed 时把真正没匹配的记 raw_data.douban_failed 避免批量重试"""
-    raw = dict(content.raw_data) if isinstance(content.raw_data, dict) else {}
-    pids = dict(raw.get("provider_ids") or {})
-    if pids.get("douban"):
-        return False, "already"
-    douban_id = douban_resolve(content.title, raw.get("original_title"), raw.get("year"))
-    if not douban_id:
-        if mark_failed:
-            raw["douban_failed"] = True
-            content.raw_data = raw
-            db.commit()
-        return False, "豆瓣没有匹配条目"
-    pids["douban"] = douban_id
-    raw["provider_ids"] = pids
-    raw.pop("douban_failed", None)
-    content.raw_data = raw
-    content.updated_at = utcnow()
-    db.commit()
-    return True, douban_id
-
-
-def find_douban_missing(db: Session, limit: int = 50) -> list[ContentItem]:
-    rows = (
-        db.query(ContentItem)
-        .join(SourceConfig, ContentItem.source_id == SourceConfig.id)
-        .filter(SourceConfig.source_type.in_(FILM_SOURCE_TYPES))
-        .order_by(ContentItem.created_at.asc())
-        .all()
-    )
-    out = []
-    for c in rows:
-        raw = c.raw_data if isinstance(c.raw_data, dict) else {}
-        if (raw.get("provider_ids") or {}).get("douban") or raw.get("douban_failed"):
-            continue
-        out.append(c)
-        if len(out) >= limit:
-            break
-    return out
-
-
 # ─── Upsert ───────────────────────────────────────────────────────────────────
 
 _META_FIELDS = (
