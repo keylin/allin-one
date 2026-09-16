@@ -125,7 +125,7 @@ CREATE INDEX idx_watch_records_status ON watch_records(status);
 - 同步仅在 `status = unmarked` 且 Emby `played = true` 时写入 `status = watched, status_source = emby_autofill`；已是 `emby_autofill` 且缺 `watched_at` 的行允许补日期。
 - Emby 的 0% 播放记录、playCount 不触发任何自动填充（整理库时的验证播放会污染）。
 - 用户任何一次手动修改都把 `status_source` 置回 `manual`。
-- 看过日期带精度（迁移 0022，`watched_precision`）：手填 `YYYY` / `YYYY-MM` / `YYYY-MM-DD` → year / month / day；**「不记得」（含标看过未给时间）→ 按上映时间近似，precision=release**，展示为「≈2019（上映）」，与真实日期区分而不是留空（2026-09-17 定）。Emby 自动填充用真实播放日期（day）。评分与状态互不联动。
+- 看过日期带精度（迁移 0022，`watched_precision`）：手填 `YYYY` / `YYYY-MM` / `YYYY-MM-DD` → year / month / day；**「不记得」（含标看过未给时间）→ 按上映时间近似，precision=release**，展示为「≈2019（上映）」，与真实日期区分而不是留空（2026-09-17 定）。Emby 自动填充用真实播放日期（day）。**评分蕴含看过**：给未标记/想看的片打分即记为看过（2026-09-17 定，仅在主动打分时触发）。
 - 卡片坑位（桌面/手机同一套，手机两列，无长按面板）：星评一行 + 第二行按状态切换——未标记/想看/在看显示 想看/看过/弃了 按钮；看过/弃了显示短评入口（原地编辑、回车保存）和「⋯」改状态菜单。
 
 ---

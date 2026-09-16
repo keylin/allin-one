@@ -725,6 +725,9 @@ def apply_record_update(record: WatchRecord, data: dict, content: ContentItem | 
     if touched and not errors:
         record.status_source = "manual"
         record.updated_at = utcnow()
+        # 评分蕴含看过：给未标记/想看的片打分，即记为看过（只在这次主动打分时触发）
+        if "my_rating" in data and record.my_rating is not None and record.status in ("unmarked", "want"):
+            record.status = "watched"
         # 标看过但没给时间 → 视为「不记得」，按上映时间近似
         if record.status == "watched" and record.watched_at is None:
             approx = release_watched_at(content)

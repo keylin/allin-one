@@ -203,7 +203,7 @@ function quickStatus(film, value) {
 }
 
 function quickRating(film, value) {
-  // StarRating 给的是 1~10 或 null（再点同一值即清除）；评分与状态各管各的
+  // StarRating 给的是 1~10 或 null（再点同一值即清除）；后端规则：给未标记/想看的片打分即记为看过
   quickRecord(film, { my_rating: value })
 }
 
