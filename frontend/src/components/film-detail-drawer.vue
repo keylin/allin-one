@@ -206,7 +206,7 @@ const doubanUrl = computed(() => {
 })
 
 const sourceLabel = computed(() => {
-  const map = { emby: 'Emby', tmdb: 'TMDb', manual: '手工', douban: '豆瓣', emby_search: 'Emby 搜索' }
+  const map = { emby: 'Emby', tmdb: 'TMDb', manual: '手工', douban: '豆瓣', emby_search: 'Emby 搜索（旧）' }
   return (film.value?.sources || []).map(s => map[s] || s).join(' · ')
 })
 
@@ -238,9 +238,9 @@ function fmt(iso) {
             <span v-if="film.countries?.length">{{ film.countries.join(' / ') }}</span>
           </div>
           <p v-if="film.directors?.length" class="mt-2 text-sm text-slate-600"><span class="text-slate-400">导演</span> {{ film.directors.join(' / ') }}</p>
-          <p v-else-if="film.metadata_state === 'partial' && !tmdbConfigured" class="mt-2 text-[11px] text-amber-600/90 leading-relaxed">
-            导演、主演、类型和中文简介 Emby 的搜索接口给不了，需要 TMDb 数据：在
-            <router-link to="/settings?tab=films" class="underline">系统设置 · 影视资料库</router-link> 填 TMDb API Key 后点「补全元数据」即可全部补齐。
+          <p v-else-if="film.metadata_state !== 'full' && !tmdbConfigured" class="mt-2 text-[11px] text-amber-600/90 leading-relaxed">
+            导演、主演、类型和中文简介来自 TMDb：在
+            <router-link to="/settings?tab=films" class="underline">系统设置 · 影视资料库</router-link> 填 TMDb API Key 后点「补全元数据」即可补齐。
           </p>
           <div v-if="film.genres?.length" class="mt-2 flex flex-wrap gap-1">
             <span v-for="g in film.genres" :key="g" class="px-1.5 py-0.5 text-[10px] font-medium bg-indigo-50 text-indigo-600 rounded">{{ g }}</span>

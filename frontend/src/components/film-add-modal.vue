@@ -97,7 +97,7 @@ async function submit(payload) {
           <div class="px-5 pt-5 pb-3 border-b border-slate-100">
             <h3 class="text-base font-bold tracking-tight text-slate-900">添加影片</h3>
             <p class="text-xs text-slate-400 mt-0.5">
-              {{ tmdbConfigured ? '输入片名从 TMDb 搜索，点选候选即添加' : '未配置 TMDb Key，只能按片名 + 年份建骨架记录' }}
+              {{ tmdbConfigured ? '输入片名从 TMDb 搜索，点选候选即添加' : '未配置 TMDb API Key，只能按片名 + 年份建骨架记录（系统设置 · 影视资料库）' }}
             </p>
           </div>
 

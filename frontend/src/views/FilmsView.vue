@@ -227,11 +227,10 @@ const enrichHint = computed(() => {
   const n = stats.value?.unenriched ?? 0
   const p = stats.value?.partial ?? 0
   const f = stats.value?.enrich_failed ?? 0
+  if (!stats.value?.tmdb_configured) return `未配置 TMDb API Key，无法补全${p ? `（${p} 部只有海报和 ID）` : ''}；去系统设置 · 影视资料库填写`
   if (n > 0) return `${n} 部可补全，点击开始`
-  const parts = []
-  if (p > 0 && !stats.value?.tmdb_configured) parts.push(`${p} 部只有海报和 ID，导演/主演/类型/中文简介需要在系统设置里填 TMDb API Key 后再补全`)
-  if (f > 0) parts.push(`${f} 部之前搜不到，可在详情里单条重试`)
-  return parts.join('；') || '所有记录都有完整元数据'
+  if (f > 0) return `没有可批量补全的记录；${f} 部 TMDb 搜不到，可在详情里单条重试`
+  return '所有记录都有完整元数据'
 })
 
 async function runEnrich() {

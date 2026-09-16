@@ -151,7 +151,8 @@ def tmdb_search(api_key: str, q: str, year: int | None = None, limit: int = 10) 
 def tmdb_details(api_key: str, kind: str, tmdb_id: str | int) -> dict:
     """TMDb 详情 → 规范化影片 dict（见 normalize_film 的字段）"""
     path = f"/movie/{tmdb_id}" if kind == "movie" else f"/tv/{tmdb_id}"
-    data = _tmdb_get(api_key, path, {"append_to_response": "credits,external_ids"})
+    extra = "credits,external_ids" if kind == "movie" else "credits,aggregate_credits,external_ids"
+    data = _tmdb_get(api_key, path, {"append_to_response": extra})
     credits = data.get("credits") or {}
     if kind == "movie":
         directors = [p["name"] for p in credits.get("crew", []) if p.get("job") == "Director"]
@@ -159,14 +160,24 @@ def tmdb_details(api_key: str, kind: str, tmdb_id: str | int) -> dict:
         runtime = data.get("runtime")
         title = data.get("title") or ""
         original_title = data.get("original_title") or ""
+        cast = [p["name"] for p in credits.get("cast", [])[:10] if p.get("name")]
     else:
+        # 剧集：created_by 常为空（尤其国产剧），退到 aggregate_credits 里的导演
         directors = [p["name"] for p in data.get("created_by", []) if p.get("name")]
+        if not directors:
+            agg = data.get("aggregate_credits") or {}
+            seen: list[str] = []
+            for p in agg.get("crew", []):
+                if any((j.get("job") or "") == "Director" for j in p.get("jobs", [])) and p.get("name") and p["name"] not in seen:
+                    seen.append(p["name"])
+            directors = seen[:3]
         release = data.get("first_air_date") or ""
         runtimes = data.get("episode_run_time") or []
         runtime = runtimes[0] if runtimes else None
         title = data.get("name") or ""
         original_title = data.get("original_name") or ""
-    cast = [p["name"] for p in credits.get("cast", [])[:10] if p.get("name")]
+        agg_cast = (data.get("aggregate_credits") or {}).get("cast") or credits.get("cast", [])
+        cast = [p["name"] for p in agg_cast[:10] if p.get("name")]
     countries = [c.get("iso_3166_1") for c in data.get("production_countries", []) if c.get("iso_3166_1")]
     if not countries and kind == "series":
         countries = data.get("origin_country") or []
@@ -196,82 +207,28 @@ def tmdb_details(api_key: str, kind: str, tmdb_id: str | int) -> dict:
     }
 
 
-# ─── Emby 远程搜索（只搜不写：RemoteSearch/Movie|Series，走 Emby 已配置的 TMDb/TVDB 刮削器） ────
-
-_ALLOWED_IMAGE_HOSTS = ("image.tmdb.org", "artworks.thetvdb.com", "www.thetvdb.com")
-
-
-def emby_remote_search(conn: dict, title: str, year: int | None, kind: str) -> dict | None:
-    """POST {base}/emby/Items/RemoteSearch/{Movie|Series} → 首条结果规范化为影片 dict；无结果返回 None。
-
-    只读接口（与写元数据的 RemoteSearch/Apply 无关），供无 TMDb key 时补全 ID/海报。
-    """
-    endpoint = "Series" if kind == "series" else "Movie"
-    body = {"SearchInfo": {"Name": title}, "IncludeDisabledProviders": False}
-    if year:
-        body["SearchInfo"]["Year"] = int(year)
-    with httpx.Client(timeout=40) as client:
-        resp = client.post(
-            f"{conn['base_url']}/emby/Items/RemoteSearch/{endpoint}",
-            json=body, headers={"X-Emby-Token": conn["api_key"]},
-        )
-        resp.raise_for_status()
-        results = resp.json() or []
-    if not results:
-        return None
-    # 年份匹配优先
-    hit = next((r for r in results if year and r.get("ProductionYear") == int(year)), results[0])
-    pids = {k.lower(): str(v) for k, v in (hit.get("ProviderIds") or {}).items() if v}
-    tmdb = pids.get("tmdb")
-    image_url = hit.get("ImageUrl") or None
-    if image_url and not any(h in image_url for h in _ALLOWED_IMAGE_HOSTS):
-        image_url = None
-    poster: dict = {}
-    if image_url and "image.tmdb.org/t/p/" in image_url:
-        poster["tmdb_path"] = "/" + image_url.rsplit("/", 1)[-1]
-    elif image_url:
-        poster["image_url"] = image_url
-    return {
-        "external_id": tmdb_external_id(kind, tmdb) if tmdb else None,
-        "kind": kind,
-        "title": hit.get("Name") or title,
-        "year": hit.get("ProductionYear") or year,
-        "overview": hit.get("Overview") or None,
-        "provider_ids": {"tmdb": tmdb, "imdb": pids.get("imdb"), "tvdb": pids.get("tvdb")},
-        "poster": poster,
-        "source": "emby_search",
-    }
-
-
 def enrich_film(db: Session, content: ContentItem) -> tuple[bool, str]:
-    """为骨架记录补全 ID/海报/简介：有 TMDb key 走 TMDb，否则走 Emby 远程搜索。返回 (changed, reason)"""
+    """为记录补全元数据（TMDb 详情：ID/海报/导演/主演/类型/中文简介）。返回 (changed, reason)"""
     raw = content.raw_data if isinstance(content.raw_data, dict) else {}
     kind = raw.get("kind") or "movie"
     year = raw.get("year")
     tmdb = (raw.get("provider_ids") or {}).get("tmdb")
-    film: dict | None = None
 
     api_key = get_tmdb_api_key(db)
-    if api_key:
-        try:
-            if tmdb:
-                film = tmdb_details(api_key, kind, tmdb)
-            else:
-                hits = tmdb_search(api_key, content.title, year, limit=1)
-                if hits:
-                    film = tmdb_details(api_key, hits[0]["kind"], hits[0]["tmdb_id"])
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"TMDb enrich failed for {content.title!r}: {e}")
+    if not api_key:
+        return False, "未配置 TMDb API Key（系统设置 · 影视资料库）"
+    film: dict | None = None
+    try:
+        if tmdb:
+            film = tmdb_details(api_key, kind, tmdb)
+        else:
+            hits = tmdb_search(api_key, content.title, year, limit=1)
+            if hits:
+                film = tmdb_details(api_key, hits[0]["kind"], hits[0]["tmdb_id"])
+    except httpx.HTTPError as e:
+        return False, f"TMDb 请求失败: {e}"
     if film is None:
-        conn = get_emby_connection(db)
-        if not conn:
-            return False, "未配置 TMDb key，也没有 Emby 凭证"
-        try:
-            film = emby_remote_search(conn, content.title, year, kind)
-        except Exception as e:  # noqa: BLE001
-            return False, f"Emby 远程搜索失败: {e}"
-    if film is None:
-        return False, "没有搜索结果"
+        return False, "TMDb 没有搜索结果"
 
     new_external_id = film.get("external_id")
     if new_external_id and new_external_id != content.external_id:
@@ -295,31 +252,33 @@ def enrich_film(db: Session, content: ContentItem) -> tuple[bool, str]:
 def enrichment_state(raw: dict, tmdb_configured: bool) -> str:
     """一条记录的元数据完整度：full / partial / skeleton / failed
 
-    - skeleton：缺 TMDb ID 或海报（Emby 搜索能补）
-    - partial：有 ID/海报但缺导演/类型/简介（只有 TMDb 详情能补；Emby 来源的记录本身就有，不算）
+    - skeleton：缺 TMDb ID 或海报
+    - partial：有 ID/海报但从未拉过 TMDb/Emby 完整详情（历史遗留的 Emby 搜索结果）
+    - full：来源含 emby 或 tmdb
     - failed：补全失败过，等单条重试
     """
     if raw.get("enrich_failed"):
         return "failed"
     poster = raw.get("poster") or {}
-    has_poster = bool(poster.get("emby_item_id") or poster.get("tmdb_path") or poster.get("image_url"))
+    has_poster = bool(poster.get("emby_item_id") or poster.get("tmdb_path"))
     has_tmdb = bool((raw.get("provider_ids") or {}).get("tmdb"))
     if not has_poster or not has_tmdb:
         return "skeleton"
-    if "emby" in (raw.get("sources") or []):
+    sources = raw.get("sources") or []
+    if "emby" in sources or "tmdb" in sources:
+        # 已经拉过完整详情；个别字段为空是上游数据本身没有，不再重复补
         return "full"
-    if not raw.get("directors") or not raw.get("genres") or not raw.get("overview"):
-        return "partial"
-    return "full"
+    return "partial"
 
 
 def needs_enrichment(raw: dict, tmdb_configured: bool) -> bool:
-    state = enrichment_state(raw, tmdb_configured)
-    return state == "skeleton" or (state == "partial" and tmdb_configured)
+    if not tmdb_configured:
+        return False
+    return enrichment_state(raw, tmdb_configured) in ("skeleton", "partial")
 
 
 def find_unenriched(db: Session, limit: int = 50) -> list[ContentItem]:
-    """需要补全的影视记录：骨架（Emby 搜索可补）+ 配了 TMDb key 时的 partial（TMDb 详情可补），按创建时间取前 limit 条"""
+    """需要补全的影视记录：骨架 + partial（都靠 TMDb 详情补），按创建时间取前 limit 条"""
     tmdb_configured = bool(get_tmdb_api_key(db))
     rows = (
         db.query(ContentItem)
@@ -566,25 +525,6 @@ def resolve_or_create_film(
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"TMDb search failed for {title!r}: {e}")
         kind = kind if kind in KINDS else "movie"
-        # 无 TMDb key：试 Emby 远程搜索拿 ID/海报
-        if not api_key:
-            conn = get_emby_connection(db)
-            if conn:
-                try:
-                    hit = emby_remote_search(conn, title.strip(), year, kind)
-                except Exception as e:  # noqa: BLE001
-                    logger.warning(f"Emby remote search failed for {title!r}: {e}")
-                    hit = None
-                if hit and hit.get("external_id"):
-                    existing = _find_film(db, hit["external_id"])
-                    if existing:
-                        return existing, None
-                    hit["title"] = title.strip()
-                    if year:
-                        hit["year"] = year
-                    source = get_or_create_film_source(db, SourceType.USER_FILM.value)
-                    stats = upsert_films(db, source, [hit])
-                    return db.get(ContentItem, stats["content_ids"][0]), None
         film = {
             "external_id": manual_external_id(title, year),
             "kind": kind, "title": title.strip(), "year": year, "source": "manual",
@@ -674,7 +614,7 @@ def serialize_film(content: ContentItem, record: WatchRecord | None, *, brief: b
     raw = content.raw_data if isinstance(content.raw_data, dict) else {}
     emby = raw.get("emby") or None
     poster = raw.get("poster") or {}
-    has_poster = bool(poster.get("emby_item_id") or poster.get("tmdb_path") or poster.get("image_url"))
+    has_poster = bool(poster.get("emby_item_id") or poster.get("tmdb_path"))
     parsed = parse_external_id(content.external_id)
     data: dict[str, Any] = {
         "content_id": content.id,

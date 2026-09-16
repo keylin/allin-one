@@ -271,11 +271,13 @@ def batch_records(body: BatchRecordRequest, db: Session = Depends(get_db)):
     return {"code": 0, "data": results, "message": f"已处理 {ok}/{len(results)}"}
 
 
-# ─── 元数据补全（TMDb 或 Emby 远程搜索） ─────────────────────────────────────
+# ─── 元数据补全（TMDb 详情） ─────────────────────────────────────────────────
 
 @router.post("/enrich-missing")
 def enrich_missing(limit: int = Query(30, ge=1, le=200), db: Session = Depends(get_db)):
-    """给缺 TMDb ID / 海报的记录补元数据，每次最多 limit 条；返回 remaining 供前端循环"""
+    """用 TMDb 详情补全记录元数据，每次最多 limit 条；返回 remaining 供前端循环"""
+    if not get_tmdb_api_key(db):
+        return error_response(400, "未配置 TMDb API Key，请在系统设置 · 影视资料库中填写")
     targets = find_unenriched(db, limit)
     results = []
     for content in targets:
@@ -400,11 +402,10 @@ def film_poster(content_id: str, db: Session = Depends(get_db)):
             logger.warning(f"Emby poster fetch failed for {content_id}: {e}")
 
     tmdb_path = poster.get("tmdb_path")
-    image_url = f"{TMDB_IMAGE_BASE}/w342{tmdb_path}" if tmdb_path else poster.get("image_url")
-    if image_url:
+    if tmdb_path:
         try:
             with httpx.Client(timeout=15, follow_redirects=True) as client:
-                resp = client.get(image_url)
+                resp = client.get(f"{TMDB_IMAGE_BASE}/w342{tmdb_path}")
             if resp.status_code == 200 and resp.content:
                 return Response(content=resp.content, media_type=resp.headers.get("content-type", "image/jpeg"), headers=_POSTER_HEADERS)
         except httpx.HTTPError as e:

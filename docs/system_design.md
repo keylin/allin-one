@@ -976,7 +976,7 @@ GET    /api/films/{id}                 → 详情（元数据 + emby 事实 + re
 PUT    /api/films/{id}/record          → 更新用户标记
 PUT    /api/films/{id}/note            → 更新长评 (user_note)
 DELETE /api/films/{id}                 → 删除资料库记录（不触碰 Emby）
-POST   /api/films/enrich-missing?limit= → 批量补全缺 ID/海报的记录（TMDb 或 Emby RemoteSearch），返回 remaining
+POST   /api/films/enrich-missing?limit= → 批量补全元数据（TMDb 详情；需 tmdb_api_key），返回 remaining
 POST   /api/films/{id}/enrich          → 单条补全
 GET    /api/films/{id}/poster          → 海报代理（Emby → TMDb），免认证 GET
 ```
