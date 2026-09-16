@@ -36,6 +36,14 @@ export function deleteFilm(contentId) {
   return api.delete(`/films/${contentId}`)
 }
 
+export function enrichMissing(limit = 30) {
+  return api.post('/films/enrich-missing', null, { params: { limit }, timeout: 180000 })
+}
+
+export function enrichFilm(contentId) {
+  return api.post(`/films/${contentId}/enrich`, null, { timeout: 60000 })
+}
+
 export function setupFilmSync() {
   return api.post('/films/sync/setup')
 }

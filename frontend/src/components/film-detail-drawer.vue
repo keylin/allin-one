@@ -1,7 +1,7 @@
 <script setup>
 import { ref, watch, computed } from 'vue'
 import DetailDrawer from '@/components/detail-drawer.vue'
-import { getFilm, updateWatchRecord, updateFilmNote, deleteFilm, WATCH_STATUS_OPTIONS, statusMeta } from '@/api/films'
+import { getFilm, updateWatchRecord, updateFilmNote, deleteFilm, enrichFilm, WATCH_STATUS_OPTIONS, statusMeta } from '@/api/films'
 import { formatTimeShort } from '@/utils/time'
 import { useToast } from '@/composables/useToast'
 
@@ -116,6 +116,26 @@ async function saveNote() {
   }
 }
 
+const enriching = ref(false)
+async function handleEnrich() {
+  if (!film.value || enriching.value) return
+  enriching.value = true
+  try {
+    const res = await enrichFilm(film.value.content_id)
+    if (res.code === 0) {
+      film.value = res.data
+      emit('updated', res.data)
+      success(res.message || '已补全')
+    } else {
+      showError(res.message || '补全失败')
+    }
+  } catch {
+    showError('补全失败')
+  } finally {
+    enriching.value = false
+  }
+}
+
 async function handleDelete() {
   if (!deleteConfirm.value) {
     deleteConfirm.value = true
@@ -148,7 +168,7 @@ const embyProgressLabel = computed(() => {
 })
 
 const sourceLabel = computed(() => {
-  const map = { emby: 'Emby', tmdb: 'TMDb', manual: '手工', douban: '豆瓣' }
+  const map = { emby: 'Emby', tmdb: 'TMDb', manual: '手工', douban: '豆瓣', emby_search: 'Emby 搜索' }
   return (film.value?.sources || []).map(s => map[s] || s).join(' · ')
 })
 
@@ -183,7 +203,10 @@ function fmt(iso) {
           <div v-if="film.genres?.length" class="mt-2 flex flex-wrap gap-1">
             <span v-for="g in film.genres" :key="g" class="px-1.5 py-0.5 text-[10px] font-medium bg-indigo-50 text-indigo-600 rounded">{{ g }}</span>
           </div>
-          <p class="mt-2 text-[11px] text-slate-400">来源 {{ sourceLabel || '—' }}<template v-if="film.url"> · <a :href="film.url" target="_blank" rel="noopener" class="text-indigo-400 hover:underline">TMDb 页面</a></template></p>
+          <p class="mt-2 text-[11px] text-slate-400">
+            来源 {{ sourceLabel || '—' }}<template v-if="film.url"> · <a :href="film.url" target="_blank" rel="noopener" class="text-indigo-400 hover:underline">TMDb 页面</a></template>
+            · <button class="text-indigo-400 hover:underline disabled:opacity-50" :disabled="enriching" @click="handleEnrich">{{ enriching ? '补全中...' : '补全元数据' }}</button>
+          </p>
         </div>
       </div>
 

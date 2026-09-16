@@ -1,12 +1,14 @@
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { listFilms, getFilmStats, statusMeta, WATCH_STATUS_OPTIONS } from '@/api/films'
+import { listFilms, getFilmStats, enrichMissing, statusMeta, WATCH_STATUS_OPTIONS } from '@/api/films'
+import { useToast } from '@/composables/useToast'
 import FilmDetailDrawer from '@/components/film-detail-drawer.vue'
 import FilmAddModal from '@/components/film-add-modal.vue'
 
 const route = useRoute()
 const router = useRouter()
+const { success, error: showError } = useToast()
 
 // ---- state ----
 const loading = ref(false)
@@ -143,6 +145,31 @@ function onFilmAdded(film) {
   drawerVisible.value = true
 }
 
+// 补全元数据（循环调用直到 remaining=0）
+const enriching = ref(false)
+const enrichProgress = ref('')
+async function runEnrich() {
+  if (enriching.value) return
+  enriching.value = true
+  let totalOk = 0
+  try {
+    for (let i = 0; i < 20; i++) {
+      const res = await enrichMissing(30)
+      if (res.code !== 0) { showError(res.message || '补全失败'); break }
+      totalOk += res.data.ok
+      enrichProgress.value = `已补全 ${totalOk}，剩余 ${res.data.remaining}`
+      if (res.data.remaining === 0 || res.data.processed === 0) break
+    }
+    success(`补全完成：${totalOk} 部拿到了元数据`)
+    reload()
+  } catch {
+    showError('补全失败')
+  } finally {
+    enriching.value = false
+    enrichProgress.value = ''
+  }
+}
+
 function statusCount(value) {
   return stats.value?.by_status?.[value] ?? 0
 }
@@ -191,6 +218,14 @@ onMounted(() => {
         >
           同步
         </router-link>
+        <button
+          class="hidden sm:inline-flex items-center gap-1 px-2.5 py-1.5 text-xs text-slate-500 hover:text-slate-700 bg-slate-50 hover:bg-slate-100 rounded-lg transition-all disabled:opacity-50"
+          :disabled="enriching"
+          title="给缺海报/ID 的记录补元数据（TMDb 或 Emby 搜索）"
+          @click="runEnrich"
+        >
+          {{ enriching ? (enrichProgress || '补全中...') : '补全元数据' }}
+        </button>
         <button
           class="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-white bg-indigo-500 hover:bg-indigo-600 rounded-lg transition-all"
           @click="addVisible = true"

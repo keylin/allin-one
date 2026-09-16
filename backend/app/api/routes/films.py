@@ -26,6 +26,8 @@ from app.services.film_library import (
     KINDS,
     TMDB_IMAGE_BASE,
     apply_record_update,
+    enrich_film,
+    find_unenriched,
     get_emby_connection,
     get_or_create_film_source,
     get_or_create_record,
@@ -248,6 +250,54 @@ def batch_records(body: BatchRecordRequest, db: Session = Depends(get_db)):
     return {"code": 0, "data": results, "message": f"已处理 {ok}/{len(results)}"}
 
 
+# ─── 元数据补全（TMDb 或 Emby 远程搜索） ─────────────────────────────────────
+
+@router.post("/enrich-missing")
+def enrich_missing(limit: int = Query(30, ge=1, le=200), db: Session = Depends(get_db)):
+    """给缺 TMDb ID / 海报的记录补元数据，每次最多 limit 条；返回 remaining 供前端循环"""
+    targets = find_unenriched(db, limit)
+    results = []
+    for content in targets:
+        try:
+            changed, reason = enrich_film(db, content)
+        except Exception as e:  # noqa: BLE001
+            db.rollback()
+            changed, reason = False, str(e)
+        if not changed:
+            # 标记失败，避免每次都重试同一批；用户可在详情里单条重试
+            raw = dict(content.raw_data or {})
+            raw["enrich_failed"] = reason
+            content.raw_data = raw
+            db.commit()
+        results.append({"content_id": content.id, "title": content.title, "ok": changed, "reason": reason})
+    remaining = len(find_unenriched(db, 1000))
+    ok = sum(1 for r in results if r["ok"])
+    return {"code": 0, "data": {"processed": len(results), "ok": ok, "remaining": remaining, "results": results},
+            "message": f"补全 {ok}/{len(results)}，剩余 {remaining}"}
+
+
+@router.post("/{content_id}/enrich")
+def enrich_one(content_id: str, db: Session = Depends(get_db)):
+    row = _base_query(db).filter(ContentItem.id == content_id).first()
+    if not row:
+        return error_response(404, "影片不存在")
+    content, record = row
+    raw = dict(content.raw_data or {})
+    raw.pop("enrich_failed", None)
+    content.raw_data = raw
+    try:
+        changed, reason = enrich_film(db, content)
+    except Exception as e:  # noqa: BLE001
+        db.rollback()
+        return error_response(502, f"补全失败: {e}")
+    if not changed:
+        db.commit()
+        return error_response(404, f"补全失败: {reason}")
+    db.refresh(content)
+    record = db.query(WatchRecord).filter(WatchRecord.content_id == content.id).first()
+    return {"code": 0, "data": serialize_film(content, record), "message": f"已补全（{reason}）"}
+
+
 # ─── 详情 / 标记 / 长评 ───────────────────────────────────────────────────────
 
 @router.get("/{content_id}")
@@ -329,13 +379,14 @@ def film_poster(content_id: str, db: Session = Depends(get_db)):
             logger.warning(f"Emby poster fetch failed for {content_id}: {e}")
 
     tmdb_path = poster.get("tmdb_path")
-    if tmdb_path:
+    image_url = f"{TMDB_IMAGE_BASE}/w342{tmdb_path}" if tmdb_path else poster.get("image_url")
+    if image_url:
         try:
-            with httpx.Client(timeout=15) as client:
-                resp = client.get(f"{TMDB_IMAGE_BASE}/w342{tmdb_path}")
+            with httpx.Client(timeout=15, follow_redirects=True) as client:
+                resp = client.get(image_url)
             if resp.status_code == 200 and resp.content:
                 return Response(content=resp.content, media_type=resp.headers.get("content-type", "image/jpeg"), headers=_POSTER_HEADERS)
         except httpx.HTTPError as e:
-            logger.warning(f"TMDb poster fetch failed for {content_id}: {e}")
+            logger.warning(f"Poster fetch failed for {content_id}: {e}")
 
     return Response(status_code=404)
