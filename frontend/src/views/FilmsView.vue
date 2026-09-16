@@ -273,7 +273,7 @@ onMounted(() => {
           <option v-for="opt in WATCH_STATUS_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
         </select>
         <select v-model="filterKind" class="text-xs text-slate-600 bg-white border border-slate-200 rounded-lg px-2 py-1.5 outline-none cursor-pointer">
-          <option value="">电影 + 剧集</option>
+          <option value="">全部</option>
           <option value="movie">电影</option>
           <option value="series">剧集</option>
         </select>

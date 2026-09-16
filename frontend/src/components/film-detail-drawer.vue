@@ -85,9 +85,12 @@ function setStatus(value) {
   form.value.status = next
   const payload = { status: next }
   if (next === 'watched' && !form.value.watched_at) {
-    const today = new Date().toISOString().slice(0, 10)
-    form.value.watched_at = today
-    payload.watched_at = today
+    // 记不起什么时候看的很常见，默认上映日期而不是今天；后端同样兜底
+    const fallback = film.value?.release_date || (film.value?.year ? `${film.value.year}-01-01` : '')
+    if (fallback) {
+      form.value.watched_at = fallback
+      payload.watched_at = fallback
+    }
   }
   saveRecord(payload)
 }
@@ -263,7 +266,7 @@ function fmt(iso) {
 
         <div class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
           <label class="block">
-            <span class="text-[11px] text-slate-400">看过日期</span>
+            <span class="text-[11px] text-slate-400">看过日期 <span class="text-slate-300">· 记不清就留上映日期</span></span>
             <input
               v-model="form.watched_at"
               type="date"

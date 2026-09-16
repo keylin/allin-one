@@ -939,7 +939,7 @@ def mark_films(items: list[dict]) -> str:
                 for key in ("my_rating", "watched_at", "comment", "tags"):
                     if key in item and item[key] is not None:
                         update[key] = item[key]
-                errors = apply_record_update(record, update)
+                errors = apply_record_update(record, update, content)
                 if errors:
                     db.rollback()
                     results.append({"ok": False, "error": "; ".join(errors), "content_id": content.id, "title": content.title})

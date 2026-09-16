@@ -124,6 +124,7 @@ CREATE INDEX idx_watch_records_status ON watch_records(status);
 - 同步仅在 `status = unmarked` 且 Emby `played = true` 时写入 `status = watched, status_source = emby_autofill`；已是 `emby_autofill` 且缺 `watched_at` 的行允许补日期。
 - Emby 的 0% 播放记录、playCount 不触发任何自动填充（整理库时的验证播放会污染）。
 - 用户任何一次手动修改都把 `status_source` 置回 `manual`。
+- 标"看过"未给日期时，`watched_at` 默认**上映日期**（其次年份 1 月 1 日），不是当天：老片大多记不起观看时间（`default_watched_at`，前后端同一规则）。
 
 ---
 

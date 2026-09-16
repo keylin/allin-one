@@ -215,7 +215,7 @@ def create_film(body: FilmCreate, db: Session = Depends(get_db)):
     record = get_or_create_record(db, content.id)
     update = {k: v for k, v in body.model_dump().items() if k in ("status", "my_rating", "watched_at", "comment") and v is not None}
     if update:
-        errors = apply_record_update(record, update)
+        errors = apply_record_update(record, update, content)
         if errors:
             db.rollback()
             return error_response(400, "; ".join(errors))
@@ -244,7 +244,7 @@ def batch_records(body: BatchRecordRequest, db: Session = Depends(get_db)):
             **({"comment": item.comment} if item.comment is not None else {}),
             **({"tags": item.tags} if item.tags is not None else {}),
         }
-        errors = apply_record_update(record, update)
+        errors = apply_record_update(record, update, content)
         if errors:
             results.append({"ok": False, "error": "; ".join(errors), "content_id": content.id, "title": content.title})
             continue
@@ -321,7 +321,7 @@ def update_record(content_id: str, body: WatchRecordUpdate, db: Session = Depend
     content, record = row
     if not record:
         record = get_or_create_record(db, content.id)
-    errors = apply_record_update(record, body.model_dump(exclude_unset=True))
+    errors = apply_record_update(record, body.model_dump(exclude_unset=True), content)
     if errors:
         db.rollback()
         return error_response(400, "; ".join(errors))

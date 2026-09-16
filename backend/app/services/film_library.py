@@ -585,8 +585,28 @@ def get_or_create_record(db: Session, content_id: str) -> WatchRecord:
     return record
 
 
-def apply_record_update(record: WatchRecord, data: dict) -> list[str]:
-    """把用户提交的字段写入 record（任何手动修改都把 status_source 置回 manual）。返回错误列表"""
+def default_watched_at(content: ContentItem | None) -> date | None:
+    """标"看过"但没给日期时的默认值：上映日期，其次年份的 1 月 1 日。很多老片记不起观看时间，不该默认当天。"""
+    if content is None:
+        return None
+    raw = content.raw_data if isinstance(content.raw_data, dict) else {}
+    rel = raw.get("release_date")
+    if rel:
+        try:
+            return date.fromisoformat(str(rel)[:10])
+        except ValueError:
+            pass
+    if content.published_at:
+        return content.published_at.date()
+    if raw.get("year"):
+        return date(int(raw["year"]), 1, 1)
+    return None
+
+
+def apply_record_update(record: WatchRecord, data: dict, content: ContentItem | None = None) -> list[str]:
+    """把用户提交的字段写入 record（任何手动修改都把 status_source 置回 manual）。返回错误列表
+
+    传入 content 时：状态变为 watched 且没有日期 → 默认上映日期（见 default_watched_at）。"""
     errors: list[str] = []
     touched = False
     if "status" in data and data["status"] is not None:
@@ -621,6 +641,8 @@ def apply_record_update(record: WatchRecord, data: dict) -> list[str]:
     if touched and not errors:
         record.status_source = "manual"
         record.updated_at = utcnow()
+        if record.status == "watched" and record.watched_at is None and content is not None:
+            record.watched_at = default_watched_at(content)
     return errors
 
 
