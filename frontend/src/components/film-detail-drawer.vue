@@ -4,6 +4,7 @@ import DetailDrawer from '@/components/detail-drawer.vue'
 import { getFilm, getFilmStats, updateWatchRecord, updateFilmNote, deleteFilm, enrichFilm, WATCH_STATUS_OPTIONS, statusMeta } from '@/api/films'
 import { formatTimeShort } from '@/utils/time'
 import { useToast } from '@/composables/useToast'
+import { useDoubleTapClose } from '@/composables/useDoubleTapClose'
 
 const props = defineProps({
   visible: { type: Boolean, default: false },
@@ -21,6 +22,10 @@ const saving = ref(false)
 const form = ref({ status: 'unmarked', my_rating: null, watched_at: '', tags: [], comment: '' })
 const tagInput = ref('')
 const knownTags = ref([])
+const tmdbConfigured = ref(false)
+const bodyRef = ref(null)
+// 移动端：空白处双击关闭抽屉
+useDoubleTapClose(bodyRef, { onClose: () => emit('close') })
 const note = ref('')
 const noteDirty = ref(false)
 const deleteConfirm = ref(false)
@@ -53,7 +58,10 @@ async function load() {
 async function loadKnownTags() {
   try {
     const res = await getFilmStats()
-    if (res.code === 0) knownTags.value = res.data.tags || []
+    if (res.code === 0) {
+      knownTags.value = res.data.tags || []
+      tmdbConfigured.value = !!res.data.tmdb_configured
+    }
   } catch { /* ignore */ }
 }
 
@@ -206,7 +214,7 @@ function fmt(iso) {
       <svg class="w-6 h-6 animate-spin text-slate-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>
     </div>
 
-    <div v-else-if="film" class="pb-10">
+    <div v-else-if="film" ref="bodyRef" class="pb-10">
       <!-- Hero -->
       <div class="flex gap-4 p-5 sm:p-6 border-b border-slate-100">
         <div class="w-28 sm:w-36 shrink-0 aspect-[2/3] rounded-xl overflow-hidden bg-gradient-to-br from-slate-100 to-slate-200 shadow-sm">
@@ -223,6 +231,10 @@ function fmt(iso) {
             <span v-if="film.countries?.length">{{ film.countries.join(' / ') }}</span>
           </div>
           <p v-if="film.directors?.length" class="mt-2 text-sm text-slate-600"><span class="text-slate-400">导演</span> {{ film.directors.join(' / ') }}</p>
+          <p v-else-if="film.metadata_state === 'partial' && !tmdbConfigured" class="mt-2 text-[11px] text-amber-600/90 leading-relaxed">
+            导演、主演、类型和中文简介 Emby 的搜索接口给不了，需要 TMDb 数据：在
+            <router-link to="/settings?tab=films" class="underline">系统设置 · 影视资料库</router-link> 填 TMDb API Key 后点「补全元数据」即可全部补齐。
+          </p>
           <div v-if="film.genres?.length" class="mt-2 flex flex-wrap gap-1">
             <span v-for="g in film.genres" :key="g" class="px-1.5 py-0.5 text-[10px] font-medium bg-indigo-50 text-indigo-600 rounded">{{ g }}</span>
           </div>
@@ -345,10 +357,14 @@ function fmt(iso) {
       </section>
 
       <!-- 简介 -->
-      <section v-if="film.overview || film.cast?.length" class="p-5 sm:p-6 border-b border-slate-100">
+      <section v-if="film.overview || film.cast?.length || film.release_date" class="p-5 sm:p-6 border-b border-slate-100">
         <h3 class="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">简介</h3>
         <p v-if="film.overview" class="text-sm text-slate-600 leading-relaxed whitespace-pre-line">{{ film.overview }}</p>
-        <p v-if="film.cast?.length" class="mt-2 text-xs text-slate-400"><span class="text-slate-300">主演</span> {{ film.cast.join(' / ') }}</p>
+        <dl class="mt-3 grid grid-cols-[3.5rem_1fr] gap-y-1 text-xs">
+          <template v-if="film.cast?.length"><dt class="text-slate-300">主演</dt><dd class="text-slate-500">{{ film.cast.join(' / ') }}</dd></template>
+          <template v-if="film.release_date"><dt class="text-slate-300">上映</dt><dd class="text-slate-500 tabular-nums">{{ film.release_date }}</dd></template>
+          <template v-if="film.provider_ids?.imdb"><dt class="text-slate-300">IMDb</dt><dd><a :href="`https://www.imdb.com/title/${film.provider_ids.imdb}/`" target="_blank" rel="noopener" class="text-indigo-400 hover:underline">{{ film.provider_ids.imdb }}</a></dd></template>
+        </dl>
       </section>
 
       <!-- 长评 -->

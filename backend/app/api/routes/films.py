@@ -27,6 +27,7 @@ from app.services.film_library import (
     TMDB_IMAGE_BASE,
     apply_record_update,
     enrich_film,
+    enrichment_state,
     find_unenriched,
     get_emby_connection,
     get_or_create_film_source,
@@ -75,7 +76,9 @@ def film_stats(db: Session = Depends(get_db)):
     tags: dict[str, int] = {}
     years: set[int] = set()
     unenriched = 0
+    partial = 0
     enrich_failed = 0
+    tmdb_configured = bool(get_tmdb_api_key(db))
     for content, record in rows:
         for t in (record.tags if record and record.tags else []):
             tags[t] = tags.get(t, 0) + 1
@@ -89,13 +92,15 @@ def film_stats(db: Session = Depends(get_db)):
             genres[g] = genres.get(g, 0) + 1
         if raw.get("year"):
             years.add(int(raw["year"]))
-        poster = raw.get("poster") or {}
-        has_poster = bool(poster.get("emby_item_id") or poster.get("tmdb_path") or poster.get("image_url"))
-        has_tmdb = bool((raw.get("provider_ids") or {}).get("tmdb"))
-        if raw.get("enrich_failed"):
+        state = enrichment_state(raw, tmdb_configured)
+        if state == "failed":
             enrich_failed += 1
-        elif not has_poster or not has_tmdb:
+        elif state == "skeleton":
             unenriched += 1
+        elif state == "partial":
+            partial += 1
+            if tmdb_configured:
+                unenriched += 1
     return {
         "code": 0,
         "data": {
@@ -106,9 +111,10 @@ def film_stats(db: Session = Depends(get_db)):
             "genres": [g for g, _ in sorted(genres.items(), key=lambda kv: (-kv[1], kv[0]))],
             "tags": [t for t, _ in sorted(tags.items(), key=lambda kv: (-kv[1], kv[0]))],
             "years": sorted(years, reverse=True),
-            "unenriched": unenriched,          # 缺 ID/海报且未标失败的记录数（「补全元数据」按钮用）
+            "unenriched": unenriched,          # 「补全元数据」可处理的记录数（骨架 + 配了 TMDb key 时的 partial）
+            "partial": partial,                # 有 ID/海报但缺导演/类型/简介的记录数（需 TMDb key）
             "enrich_failed": enrich_failed,    # 补全失败过、等单条重试的记录数
-            "tmdb_configured": bool(get_tmdb_api_key(db)),
+            "tmdb_configured": tmdb_configured,
             "emby_configured": get_emby_connection(db) is not None,
         },
         "message": "ok",

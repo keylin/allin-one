@@ -1,7 +1,7 @@
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { listFilms, getFilmStats, enrichMissing, statusMeta, WATCH_STATUS_OPTIONS } from '@/api/films'
+import { listFilms, getFilmStats, enrichMissing, updateWatchRecord, deleteFilm, statusMeta, WATCH_STATUS_OPTIONS } from '@/api/films'
 import { useToast } from '@/composables/useToast'
 import FilmDetailDrawer from '@/components/film-detail-drawer.vue'
 import FilmAddModal from '@/components/film-add-modal.vue'
@@ -12,11 +12,14 @@ const { success, error: showError, showToast } = useToast()
 
 // ---- state ----
 const loading = ref(false)
+const loadingMore = ref(false)
 const films = ref([])
 const totalCount = ref(0)
 const page = ref(1)
 const pageSize = 60
 const stats = ref(null)
+const sentinelRef = ref(null)
+let observer = null
 
 const searchQuery = ref(route.query.q || '')
 const filterStatus = ref(route.query.status || '')
@@ -31,7 +34,16 @@ const drawerVisible = ref(false)
 const addVisible = ref(false)
 const showFilters = ref(false)
 
+// 卡片快捷操作
+const ratingOpenId = ref(null)       // 正在展开评分条的卡片
+const sheetFilm = ref(null)          // 移动端操作面板
+const deleteConfirmId = ref(null)
+const busyId = ref(null)
 let searchTimer = null
+let longPressTimer = null
+let deleteConfirmTimer = null
+
+const QUICK_STATUSES = WATCH_STATUS_OPTIONS.filter(o => ['want', 'watched', 'dropped'].includes(o.value))
 
 const decades = computed(() => {
   const years = stats.value?.years || []
@@ -58,7 +70,8 @@ function buildParams() {
 }
 
 async function fetchFilms(append = false) {
-  loading.value = true
+  if (append) loadingMore.value = true
+  else loading.value = true
   try {
     const res = await listFilms(buildParams())
     if (res.code === 0) {
@@ -67,6 +80,7 @@ async function fetchFilms(append = false) {
     }
   } finally {
     loading.value = false
+    loadingMore.value = false
   }
 }
 
@@ -83,12 +97,24 @@ function reload() {
   fetchStats()
 }
 
+const hasMore = computed(() => films.value.length < totalCount.value)
+
 function loadMore() {
+  if (!hasMore.value || loading.value || loadingMore.value) return
   page.value += 1
   fetchFilms(true)
 }
 
-const hasMore = computed(() => films.value.length < totalCount.value)
+// 无限滚动：sentinel 进入视口 300px 内即加载下一页（移动端不用点按钮）
+watch(sentinelRef, (el) => {
+  if (observer) { observer.disconnect(); observer = null }
+  if (el && 'IntersectionObserver' in window) {
+    observer = new IntersectionObserver((entries) => {
+      if (entries[0].isIntersecting) loadMore()
+    }, { rootMargin: '300px' })
+    observer.observe(el)
+  }
+})
 
 function syncQuery() {
   const query = {}
@@ -116,7 +142,9 @@ function clearFilters() {
   filterDecade.value = ''
 }
 
+// ---- 详情 ----
 function openFilm(film) {
+  if (sheetFilm.value) return
   selectedId.value = film.content_id
   drawerVisible.value = true
 }
@@ -125,9 +153,13 @@ function closeDrawer() {
   drawerVisible.value = false
 }
 
-function onFilmUpdated(updated) {
+function patchFilm(updated) {
   const idx = films.value.findIndex(f => f.content_id === updated.content_id)
   if (idx >= 0) films.value[idx] = { ...films.value[idx], ...updated }
+}
+
+function onFilmUpdated(updated) {
+  patchFilm(updated)
   fetchStats()
 }
 
@@ -145,22 +177,101 @@ function onFilmAdded(film) {
   drawerVisible.value = true
 }
 
-// 补全元数据（循环调用直到 remaining=0）
+// ---- 卡片快捷操作 ----
+async function quickRecord(film, partial) {
+  busyId.value = film.content_id
+  try {
+    const res = await updateWatchRecord(film.content_id, partial)
+    if (res.code === 0) {
+      patchFilm(res.data)
+      if (sheetFilm.value?.content_id === res.data.content_id) sheetFilm.value = { ...sheetFilm.value, ...res.data }
+      fetchStats()
+    } else {
+      showError(res.message || '保存失败')
+    }
+  } catch {
+    showError('保存失败')
+  } finally {
+    busyId.value = null
+  }
+}
+
+function quickStatus(film, value) {
+  const next = film.record?.status === value ? 'unmarked' : value
+  quickRecord(film, { status: next })   // 看过且无日期时后端默认上映日期
+}
+
+function quickRating(film, n) {
+  const next = film.record?.my_rating === n ? null : n
+  ratingOpenId.value = null
+  quickRecord(film, { my_rating: next })
+}
+
+function toggleRating(film) {
+  ratingOpenId.value = ratingOpenId.value === film.content_id ? null : film.content_id
+}
+
+async function quickDelete(film) {
+  if (deleteConfirmId.value !== film.content_id) {
+    deleteConfirmId.value = film.content_id
+    clearTimeout(deleteConfirmTimer)
+    deleteConfirmTimer = setTimeout(() => { deleteConfirmId.value = null }, 3000)
+    return
+  }
+  deleteConfirmId.value = null
+  try {
+    const res = await deleteFilm(film.content_id)
+    if (res.code === 0) {
+      success(`已删除「${film.title}」（Emby 不受影响）`)
+      onFilmDeleted(film.content_id)
+      sheetFilm.value = null
+    } else {
+      showError(res.message || '删除失败')
+    }
+  } catch {
+    showError('删除失败')
+  }
+}
+
+// 移动端长按 → 操作面板
+function onPointerDown(film, event) {
+  if (event.pointerType !== 'touch') return
+  longPressTimer = setTimeout(() => {
+    sheetFilm.value = film
+    longPressTimer = null
+  }, 450)
+}
+function cancelLongPress() {
+  if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null }
+}
+function closeSheet() {
+  sheetFilm.value = null
+  deleteConfirmId.value = null
+}
+
+function onDocClick(e) {
+  if (ratingOpenId.value && !e.target.closest('[data-rating-pop]')) ratingOpenId.value = null
+}
+
+// ---- 补全元数据 ----
 const enriching = ref(false)
 const enrichProgress = ref('')
+
 const enrichHint = computed(() => {
   const n = stats.value?.unenriched ?? 0
+  const p = stats.value?.partial ?? 0
   const f = stats.value?.enrich_failed ?? 0
-  if (n > 0) return `${n} 部缺海报或 ID，点击补全`
-  if (f > 0) return `没有可批量补全的记录；${f} 部之前搜不到，可在详情里换名后单条重试`
-  return '所有记录都有元数据'
+  if (n > 0) return `${n} 部可补全，点击开始`
+  const parts = []
+  if (p > 0 && !stats.value?.tmdb_configured) parts.push(`${p} 部只有海报和 ID，导演/主演/类型/中文简介需要在系统设置里填 TMDb API Key 后再补全`)
+  if (f > 0) parts.push(`${f} 部之前搜不到，可在详情里单条重试`)
+  return parts.join('；') || '所有记录都有完整元数据'
 })
 
 async function runEnrich() {
   if (enriching.value) return
-  const pending = stats.value?.unenriched ?? 0
-  if (pending === 0) {
-    showToast(enrichHint.value, { type: 'info', duration: 5000 })
+  if ((stats.value?.unenriched ?? 0) === 0) {
+    showToast(enrichHint.value, { type: 'info', duration: 6000 })
     return
   }
   enriching.value = true
@@ -193,6 +304,11 @@ function statusCount(value) {
 onMounted(() => {
   fetchFilms()
   fetchStats()
+  document.addEventListener('click', onDocClick)
+})
+onUnmounted(() => {
+  document.removeEventListener('click', onDocClick)
+  if (observer) observer.disconnect()
 })
 </script>
 
@@ -200,12 +316,11 @@ onMounted(() => {
   <div class="flex flex-col h-full">
     <!-- Header -->
     <div class="px-4 pt-3 pb-2.5 space-y-2 sticky top-0 bg-white/95 backdrop-blur-sm z-10 border-b border-slate-100 shrink-0">
-      <!-- Row 1: count + emby badge + actions -->
-      <div class="flex items-center gap-2.5">
+      <div class="flex items-center gap-2">
         <span class="text-xs text-slate-400 tabular-nums shrink-0">{{ totalCount }} 部</span>
         <span
           v-if="stats"
-          class="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-full"
+          class="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] rounded-full shrink-0"
           :class="stats.emby_configured ? 'text-emerald-600 bg-emerald-50' : 'text-slate-400 bg-slate-100'"
           :title="stats.emby_configured ? `${stats.in_emby} 部在 Emby 库内` : 'Emby 未配置，去同步管理绑定凭证'"
         >
@@ -217,7 +332,7 @@ onMounted(() => {
 
         <select
           v-model="sortBy"
-          class="text-xs text-slate-600 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 outline-none cursor-pointer transition-all"
+          class="text-xs text-slate-600 bg-white border border-slate-200 rounded-lg px-2 py-1.5 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 outline-none cursor-pointer transition-all"
         >
           <option value="updated_at">最近更新</option>
           <option value="year">年份</option>
@@ -229,11 +344,9 @@ onMounted(() => {
 
         <router-link
           to="/sync"
-          class="hidden sm:inline-flex items-center gap-1 px-2.5 py-1.5 text-xs text-slate-500 hover:text-slate-700 bg-slate-50 hover:bg-slate-100 rounded-lg transition-all"
+          class="hidden sm:inline-flex items-center px-2.5 py-1.5 text-xs text-slate-500 hover:text-slate-700 bg-slate-50 hover:bg-slate-100 rounded-lg transition-all"
           title="去同步管理触发 Emby 同步"
-        >
-          同步
-        </router-link>
+        >同步</router-link>
         <button
           class="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs rounded-lg transition-all disabled:cursor-not-allowed"
           :class="(stats?.unenriched ?? 0) > 0 ? 'text-indigo-600 bg-indigo-50 hover:bg-indigo-100' : 'text-slate-400 bg-slate-50'"
@@ -243,7 +356,7 @@ onMounted(() => {
         >
           <svg v-if="enriching" class="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>
           <template v-if="enriching">{{ enrichProgress || '补全中...' }}</template>
-          <template v-else>补全元数据<span v-if="(stats?.unenriched ?? 0) > 0" class="ml-0.5 tabular-nums">({{ stats.unenriched }})</span></template>
+          <template v-else><span class="hidden sm:inline">补全元数据</span><span class="sm:hidden">补全</span><span v-if="(stats?.unenriched ?? 0) > 0" class="ml-0.5 tabular-nums">({{ stats.unenriched }})</span></template>
         </button>
         <button
           class="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-white bg-indigo-500 hover:bg-indigo-600 rounded-lg transition-all"
@@ -254,9 +367,9 @@ onMounted(() => {
         </button>
       </div>
 
-      <!-- Row 2: search + status chips -->
-      <div class="flex items-center gap-2 overflow-x-auto no-scrollbar">
-        <div class="relative w-full sm:w-56 shrink-0">
+      <!-- search + status chips -->
+      <div class="flex items-center gap-2">
+        <div class="relative flex-1 sm:flex-none sm:w-56">
           <svg class="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" /></svg>
           <input
             v-model="searchQuery"
@@ -279,17 +392,17 @@ onMounted(() => {
           >{{ opt.label }} <span class="opacity-60 tabular-nums">{{ statusCount(opt.value) }}</span></button>
         </div>
         <button
-          class="sm:hidden shrink-0 px-2 py-1.5 text-xs rounded-lg border transition-all"
+          class="sm:hidden shrink-0 px-2.5 py-1.5 text-xs rounded-lg border transition-all"
           :class="activeFilterCount ? 'border-indigo-300 text-indigo-600 bg-indigo-50' : 'border-slate-200 text-slate-500'"
           @click="showFilters = !showFilters"
         >筛选<span v-if="activeFilterCount"> {{ activeFilterCount }}</span></button>
       </div>
 
-      <!-- Row 3: filters -->
+      <!-- filters -->
       <div class="flex items-center gap-2 flex-wrap" :class="showFilters ? '' : 'hidden sm:flex'">
         <select v-model="filterStatus" class="sm:hidden text-xs text-slate-600 bg-white border border-slate-200 rounded-lg px-2 py-1.5 outline-none">
           <option value="">全部状态</option>
-          <option v-for="opt in WATCH_STATUS_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+          <option v-for="opt in WATCH_STATUS_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }} ({{ statusCount(opt.value) }})</option>
         </select>
         <select v-model="filterKind" class="text-xs text-slate-600 bg-white border border-slate-200 rounded-lg px-2 py-1.5 outline-none cursor-pointer">
           <option value="">全部</option>
@@ -309,11 +422,7 @@ onMounted(() => {
           <option value="yes">在 Emby 库内</option>
           <option value="no">不在 Emby</option>
         </select>
-        <button
-          v-if="activeFilterCount"
-          class="text-[11px] text-slate-400 hover:text-slate-600 transition-colors"
-          @click="clearFilters"
-        >清除筛选</button>
+        <button v-if="activeFilterCount" class="text-[11px] text-slate-400 hover:text-slate-600 transition-colors" @click="clearFilters">清除筛选</button>
       </div>
     </div>
 
@@ -336,74 +445,164 @@ onMounted(() => {
         </div>
 
         <template v-else>
-          <div class="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-7 2xl:grid-cols-8 gap-3 sm:gap-4">
+          <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 gap-3 sm:gap-4">
             <div
               v-for="film in films"
               :key="film.content_id"
-              class="group relative bg-white rounded-xl border border-slate-200/60 overflow-hidden cursor-pointer transition-all duration-200 hover:border-indigo-300 hover:shadow-md select-none"
-              @click="openFilm(film)"
+              class="group relative bg-white rounded-xl border border-slate-200/60 overflow-visible transition-all duration-200 hover:border-indigo-300 hover:shadow-md select-none"
+              :class="busyId === film.content_id ? 'opacity-70' : ''"
             >
-              <div class="aspect-[2/3] bg-gradient-to-br from-slate-100 to-slate-200 relative overflow-hidden">
-                <img
-                  v-if="film.poster_url"
-                  :src="film.poster_url"
-                  :alt="film.title"
-                  class="absolute inset-0 w-full h-full object-cover"
-                  loading="lazy"
-                />
+              <!-- poster → 详情 -->
+              <div
+                class="aspect-[2/3] bg-gradient-to-br from-slate-100 to-slate-200 relative overflow-hidden rounded-t-xl cursor-pointer"
+                @click="openFilm(film)"
+                @pointerdown="onPointerDown(film, $event)"
+                @pointerup="cancelLongPress"
+                @pointercancel="cancelLongPress"
+                @pointermove="cancelLongPress"
+                @contextmenu.prevent="sheetFilm = film"
+              >
+                <img v-if="film.poster_url" :src="film.poster_url" :alt="film.title" class="absolute inset-0 w-full h-full object-cover" loading="lazy" />
                 <div v-else class="absolute inset-0 flex flex-col items-center justify-center p-3">
                   <span class="text-xs text-slate-400 text-center line-clamp-4 leading-tight">{{ film.title }}</span>
                 </div>
-
-                <!-- status badge -->
                 <span
                   v-if="film.record?.status && film.record.status !== 'unmarked'"
                   class="absolute top-1.5 left-1.5 px-1.5 py-0.5 text-[10px] font-medium rounded backdrop-blur-sm"
                   :class="statusMeta(film.record.status).color"
                 >{{ statusMeta(film.record.status).label }}</span>
-
-                <!-- emby badge -->
-                <span
-                  v-if="film.in_emby"
-                  class="absolute top-1.5 right-1.5 px-1.5 py-0.5 text-[10px] font-medium bg-black/60 text-white rounded"
-                  title="在 Emby 库内"
-                >E</span>
-
-                <!-- rating -->
-                <span
-                  v-if="film.record?.my_rating"
-                  class="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 text-[10px] font-semibold bg-amber-400/90 text-white rounded tabular-nums"
-                >{{ film.record.my_rating }}</span>
-
-                <!-- emby progress bar -->
-                <div
-                  v-if="film.emby && film.emby.progress > 0 && film.emby.progress < 1 && !film.emby.played"
-                  class="absolute bottom-0 left-0 right-0 h-0.5 bg-black/20"
-                >
+                <span v-if="film.in_emby" class="absolute top-1.5 right-1.5 px-1.5 py-0.5 text-[10px] font-medium bg-black/60 text-white rounded" title="在 Emby 库内">E</span>
+                <span v-if="film.record?.my_rating" class="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 text-[10px] font-semibold bg-amber-400/90 text-white rounded tabular-nums">{{ film.record.my_rating }}</span>
+                <div v-if="film.emby && film.emby.progress > 0 && film.emby.progress < 1 && !film.emby.played" class="absolute bottom-0 left-0 right-0 h-0.5 bg-black/20">
                   <div class="h-full bg-indigo-400" :style="{ width: Math.round(film.emby.progress * 100) + '%' }" />
                 </div>
               </div>
-              <div class="p-2">
-                <h4 class="text-xs font-medium text-slate-800 line-clamp-2 leading-snug min-h-[2rem]">{{ film.title }}</h4>
+
+              <!-- info -->
+              <div class="p-2 pb-1.5">
+                <h4 class="text-xs font-medium text-slate-800 line-clamp-2 leading-snug min-h-[2rem] cursor-pointer" @click="openFilm(film)">{{ film.title }}</h4>
                 <div class="mt-0.5 flex items-center gap-1 text-[10px] text-slate-400">
                   <span v-if="film.year" class="tabular-nums">{{ film.year }}</span>
                   <span v-if="film.kind === 'series'" class="px-1 rounded bg-slate-100 text-slate-500">剧</span>
-                  <span v-if="film.community_rating" class="ml-auto tabular-nums">{{ Number(film.community_rating).toFixed(1) }}</span>
+                  <span v-if="film.community_rating" class="ml-auto tabular-nums" title="公共评分">{{ Number(film.community_rating).toFixed(1) }}</span>
+                </div>
+              </div>
+
+              <!-- quick actions (desktop 常显；移动端长按走面板) -->
+              <div class="hidden sm:flex items-center gap-0.5 px-1.5 pb-1.5 relative" data-rating-pop>
+                <button
+                  v-for="opt in QUICK_STATUSES"
+                  :key="opt.value"
+                  class="flex-1 px-1 py-1 text-[10px] rounded-md transition-all"
+                  :class="film.record?.status === opt.value ? 'bg-slate-800 text-white' : 'text-slate-400 hover:bg-slate-100 hover:text-slate-700'"
+                  :title="film.record?.status === opt.value ? `取消「${opt.label}」` : `标为「${opt.label}」`"
+                  @click.stop="quickStatus(film, opt.value)"
+                >{{ opt.label }}</button>
+                <button
+                  class="px-1.5 py-1 text-[10px] rounded-md transition-all tabular-nums"
+                  :class="film.record?.my_rating ? 'text-amber-600 bg-amber-50 hover:bg-amber-100' : 'text-slate-400 hover:bg-slate-100 hover:text-amber-600'"
+                  title="评分"
+                  @click.stop="toggleRating(film)"
+                >★{{ film.record?.my_rating || '' }}</button>
+                <button
+                  class="px-1 py-1 text-[10px] rounded-md transition-all"
+                  :class="deleteConfirmId === film.content_id ? 'bg-rose-600 text-white' : 'text-slate-300 hover:bg-rose-50 hover:text-rose-500'"
+                  :title="deleteConfirmId === film.content_id ? '再点一次确认删除' : '删除记录（Emby 不受影响）'"
+                  @click.stop="quickDelete(film)"
+                >{{ deleteConfirmId === film.content_id ? '确认' : '×' }}</button>
+
+                <!-- rating strip -->
+                <div
+                  v-if="ratingOpenId === film.content_id"
+                  class="absolute left-1 right-1 bottom-full mb-1 z-20 bg-white border border-slate-200 rounded-lg shadow-lg p-1.5 flex gap-0.5"
+                >
+                  <button
+                    v-for="n in 10"
+                    :key="n"
+                    class="flex-1 h-6 text-[10px] rounded transition-all tabular-nums"
+                    :class="film.record?.my_rating && n <= film.record.my_rating ? 'bg-amber-400 text-white' : 'bg-slate-100 text-slate-500 hover:bg-amber-100'"
+                    @click.stop="quickRating(film, n)"
+                  >{{ n }}</button>
                 </div>
               </div>
             </div>
           </div>
 
+          <!-- infinite scroll sentinel + fallback -->
+          <div ref="sentinelRef" class="h-1" />
           <div v-if="hasMore" class="flex justify-center py-6">
             <button
               class="px-4 py-1.5 text-xs text-slate-500 bg-slate-50 hover:bg-slate-100 rounded-lg transition-all disabled:opacity-50"
-              :disabled="loading"
+              :disabled="loadingMore"
               @click="loadMore"
-            >{{ loading ? '加载中...' : `加载更多（${films.length}/${totalCount}）` }}</button>
+            >{{ loadingMore ? '加载中...' : `加载更多（${films.length}/${totalCount}）` }}</button>
           </div>
+          <p v-else-if="films.length > pageSize" class="text-center text-[11px] text-slate-300 py-6">已经到底了</p>
         </template>
       </div>
     </div>
+
+    <!-- 移动端操作面板（长按卡片） -->
+    <Teleport to="body">
+      <Transition
+        enter-active-class="transition-opacity duration-150"
+        enter-from-class="opacity-0"
+        enter-to-class="opacity-100"
+        leave-active-class="transition-opacity duration-100"
+        leave-from-class="opacity-100"
+        leave-to-class="opacity-0"
+      >
+        <div v-if="sheetFilm" class="fixed inset-0 z-50 flex items-end sm:items-center justify-center" @click.self="closeSheet">
+          <div class="absolute inset-0 bg-black/30" @click="closeSheet" />
+          <div class="relative z-10 bg-white rounded-t-2xl sm:rounded-2xl w-full sm:w-96 shadow-2xl overflow-hidden pb-safe">
+            <div class="px-4 py-3 border-b border-slate-100 flex items-center gap-3">
+              <div class="w-10 h-14 rounded bg-slate-100 overflow-hidden shrink-0">
+                <img v-if="sheetFilm.poster_url" :src="sheetFilm.poster_url" class="w-full h-full object-cover" />
+              </div>
+              <div class="min-w-0">
+                <p class="text-sm font-medium text-slate-800 truncate">{{ sheetFilm.title }}</p>
+                <p class="text-xs text-slate-400">{{ sheetFilm.year }}<span v-if="sheetFilm.directors?.length"> · {{ sheetFilm.directors[0] }}</span></p>
+              </div>
+            </div>
+            <div class="px-4 py-3 space-y-3">
+              <div>
+                <p class="text-[11px] text-slate-400 mb-1.5">状态</p>
+                <div class="flex gap-1.5">
+                  <button
+                    v-for="opt in WATCH_STATUS_OPTIONS.filter(o => o.value !== 'unmarked')"
+                    :key="opt.value"
+                    class="flex-1 py-2 text-xs rounded-lg border transition-all"
+                    :class="sheetFilm.record?.status === opt.value ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-600 border-slate-200 active:bg-slate-100'"
+                    @click="quickStatus(sheetFilm, opt.value)"
+                  >{{ opt.label }}</button>
+                </div>
+              </div>
+              <div>
+                <p class="text-[11px] text-slate-400 mb-1.5">评分</p>
+                <div class="flex gap-1">
+                  <button
+                    v-for="n in 10"
+                    :key="n"
+                    class="flex-1 h-8 text-xs rounded-md transition-all tabular-nums"
+                    :class="sheetFilm.record?.my_rating && n <= sheetFilm.record.my_rating ? 'bg-amber-400 text-white' : 'bg-slate-100 text-slate-500 active:bg-amber-100'"
+                    @click="quickRating(sheetFilm, n)"
+                  >{{ n }}</button>
+                </div>
+              </div>
+            </div>
+            <div class="border-t border-slate-100">
+              <button class="w-full text-left px-4 py-3 text-sm text-slate-700 active:bg-slate-100" @click="openFilm({ content_id: sheetFilm.content_id }); sheetFilm = null">查看详情</button>
+              <button
+                class="w-full text-left px-4 py-3 text-sm active:bg-rose-100"
+                :class="deleteConfirmId === sheetFilm.content_id ? 'text-rose-700 bg-rose-50 font-medium' : 'text-rose-600'"
+                @click="quickDelete(sheetFilm)"
+              >{{ deleteConfirmId === sheetFilm.content_id ? '再点一次确认删除' : '删除记录（Emby 不受影响）' }}</button>
+              <button class="w-full py-3 text-sm text-slate-500 font-medium border-t border-slate-100 active:bg-slate-100" @click="closeSheet">取消</button>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
 
     <FilmDetailDrawer
       :visible="drawerVisible"

@@ -292,8 +292,35 @@ def enrich_film(db: Session, content: ContentItem) -> tuple[bool, str]:
     return True, film.get("source") or "enriched"
 
 
+def enrichment_state(raw: dict, tmdb_configured: bool) -> str:
+    """一条记录的元数据完整度：full / partial / skeleton / failed
+
+    - skeleton：缺 TMDb ID 或海报（Emby 搜索能补）
+    - partial：有 ID/海报但缺导演/类型/简介（只有 TMDb 详情能补；Emby 来源的记录本身就有，不算）
+    - failed：补全失败过，等单条重试
+    """
+    if raw.get("enrich_failed"):
+        return "failed"
+    poster = raw.get("poster") or {}
+    has_poster = bool(poster.get("emby_item_id") or poster.get("tmdb_path") or poster.get("image_url"))
+    has_tmdb = bool((raw.get("provider_ids") or {}).get("tmdb"))
+    if not has_poster or not has_tmdb:
+        return "skeleton"
+    if "emby" in (raw.get("sources") or []):
+        return "full"
+    if not raw.get("directors") or not raw.get("genres") or not raw.get("overview"):
+        return "partial"
+    return "full"
+
+
+def needs_enrichment(raw: dict, tmdb_configured: bool) -> bool:
+    state = enrichment_state(raw, tmdb_configured)
+    return state == "skeleton" or (state == "partial" and tmdb_configured)
+
+
 def find_unenriched(db: Session, limit: int = 50) -> list[ContentItem]:
-    """缺 TMDb ID 或缺海报的影视记录（骨架），按创建时间取前 limit 条"""
+    """需要补全的影视记录：骨架（Emby 搜索可补）+ 配了 TMDb key 时的 partial（TMDb 详情可补），按创建时间取前 limit 条"""
+    tmdb_configured = bool(get_tmdb_api_key(db))
     rows = (
         db.query(ContentItem)
         .join(SourceConfig, ContentItem.source_id == SourceConfig.id)
@@ -304,12 +331,7 @@ def find_unenriched(db: Session, limit: int = 50) -> list[ContentItem]:
     out = []
     for c in rows:
         raw = c.raw_data if isinstance(c.raw_data, dict) else {}
-        poster = raw.get("poster") or {}
-        has_poster = bool(poster.get("emby_item_id") or poster.get("tmdb_path") or poster.get("image_url"))
-        has_tmdb = bool((raw.get("provider_ids") or {}).get("tmdb"))
-        if raw.get("enrich_failed"):
-            continue
-        if not has_poster or not has_tmdb:
+        if needs_enrichment(raw, tmdb_configured):
             out.append(c)
             if len(out) >= limit:
                 break
@@ -692,6 +714,7 @@ def serialize_film(content: ContentItem, record: WatchRecord | None, *, brief: b
             "updated_at": record.updated_at.isoformat() if record and record.updated_at else None,
         },
         "is_favorited": content.is_favorited,
+        "metadata_state": enrichment_state(raw, False),   # full / partial / skeleton / failed
         "created_at": content.created_at.isoformat() if content.created_at else None,
         "updated_at": content.updated_at.isoformat() if content.updated_at else None,
     }

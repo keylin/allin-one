@@ -167,6 +167,8 @@ SyncView 现有"运行"按钮 → `POST /api/sync/run/sync.emby`。不注册 per
 - `POST /api/films` 传 `{tmdb_id, kind}` 或 `{title, year}`：有 TMDb key 则拉详情落 raw_data；无 key 时只建标题+年份的骨架记录，`external_id = manual:<uuid5(title+year)>`，后续可补 ID。
 - Emby 后来出现同一 TMDb ID 的条目时，upsert 命中已有手工记录，补 `raw_data.emby`，`source_id` 保持不变、`raw_data.source` 加 `emby`。
 - **无 TMDb key 的替代路径（2026-09-16 加）**：Emby 自带的远程搜索 `POST /emby/Items/RemoteSearch/Movie|Series`（只搜不写，与写元数据的 `RemoteSearch/Apply` 无关）走它已配好的 TMDb/TVDB 刮削器，返回中文片名、年份、ProviderIds、ImageUrl。`emby_remote_search()` 把它规范化后走同一 upsert；`POST /api/films/enrich-missing?limit=` 批量补全骨架记录（前端「补全元数据」按钮循环调用），`POST /api/films/{id}/enrich` 单条。搜不到的记 `raw_data.enrich_failed`，批量时跳过、单条重试会清掉。海报支持 `poster.image_url`（限 tmdb/thetvdb 域名）。手工添加与 `mark_films` 在无 key 时也先走这条路径再退到骨架。
+- **Emby 搜索的边界**：只返回片名/年份/ProviderIds/海报/英文简介，**没有导演、主演、类型、中文简介**（实测 `MetadataLanguage` 参数无效）。这些只能靠 TMDb 详情。`enrichment_state()` 把记录分为 full / partial（有 ID 海报缺人物类型简介）/ skeleton / failed；配上 TMDb key 后 partial 也进入「补全元数据」队列，`stats` 返回 `partial` 计数，详情页对 partial 记录给出配 key 的提示。
+- 页面：卡片底部常显快捷操作（想看/看过/弃、评分条、删除二次确认），移动端长按卡片弹操作面板；列表无限滚动（sentinel + IntersectionObserver）；详情抽屉移动端空白处双击关闭。
 
 ---
 
