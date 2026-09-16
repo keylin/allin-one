@@ -376,7 +376,16 @@ function fmt(iso) {
 
       <!-- Emby 事实 -->
       <section class="p-5 sm:p-6 border-b border-slate-100">
-        <h3 class="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3">Emby 记录</h3>
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-slate-400">Emby 记录</h3>
+          <a
+            v-if="film.emby_url"
+            :href="film.emby_url"
+            target="_blank"
+            rel="noopener"
+            class="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-all"
+          ><svg class="w-3 h-3" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>在 Emby 播放</a>
+        </div>
         <div v-if="film.emby" class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
           <div class="bg-slate-50 rounded-lg p-2.5">
             <p class="text-[10px] text-slate-400">库内</p>

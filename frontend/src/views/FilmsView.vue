@@ -434,7 +434,16 @@ onUnmounted(() => {
                   class="absolute top-1.5 left-1.5 px-1.5 py-0.5 text-[10px] font-medium rounded shadow-sm"
                   :class="statusMeta(film.record.status).color"
                 >{{ statusMeta(film.record.status).label }}</span>
-                <span v-if="film.in_emby" class="absolute top-1.5 right-1.5 px-1.5 py-0.5 text-[10px] font-medium bg-black/60 text-white rounded" title="在 Emby 库内">E</span>
+                <a
+                  v-if="film.in_emby && film.emby_url"
+                  :href="film.emby_url"
+                  target="_blank"
+                  rel="noopener"
+                  class="absolute top-1.5 right-1.5 inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-medium bg-emerald-600/90 hover:bg-emerald-500 text-white rounded shadow-sm transition-colors"
+                  title="在 Emby 中打开并播放"
+                  @click.stop
+                ><svg class="w-2.5 h-2.5" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>Emby</a>
+                <span v-else-if="film.in_emby" class="absolute top-1.5 right-1.5 px-1.5 py-0.5 text-[10px] font-medium bg-black/60 text-white rounded" title="在 Emby 库内">E</span>
                 <span v-if="film.record?.my_rating" class="absolute bottom-1.5 right-1.5 px-1.5 py-0.5 text-[10px] font-semibold bg-amber-400/90 text-white rounded tabular-nums">★ {{ (film.record.my_rating / 2).toFixed(1).replace('.0', '') }}</span>
                 <div v-if="film.emby && film.emby.progress > 0 && film.emby.progress < 1 && !film.emby.played" class="absolute bottom-0 left-0 right-0 h-0.5 bg-black/20">
                   <div class="h-full bg-indigo-400" :style="{ width: Math.round(film.emby.progress * 100) + '%' }" />
@@ -525,6 +534,7 @@ onUnmounted(() => {
               </div>
             </div>
             <div class="border-t border-slate-100">
+              <a v-if="sheetFilm.emby_url" :href="sheetFilm.emby_url" target="_blank" rel="noopener" class="block w-full text-left px-4 py-3 text-sm text-emerald-700 active:bg-emerald-50" @click="closeSheet">▶ 在 Emby 播放</a>
               <button class="w-full text-left px-4 py-3 text-sm text-slate-700 active:bg-slate-100" @click="openFilm({ content_id: sheetFilm.content_id }); sheetFilm = null">查看详情</button>
               <button class="w-full py-3 text-sm text-slate-500 font-medium border-t border-slate-100 active:bg-slate-100" @click="closeSheet">取消</button>
             </div>

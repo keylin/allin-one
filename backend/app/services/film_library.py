@@ -98,7 +98,18 @@ def get_emby_connection(db: Session) -> dict | None:
         "api_key": decrypt_credential(cred.credential_data),
         "user_id": extra.get("user_id"),
         "user_name": extra.get("user_name") or "emby",
+        "server_id": extra.get("server_id"),
     }
+
+
+def emby_item_url(conn: dict | None, item_id: str | None) -> str | None:
+    """Emby 网页端条目页直达链接；base_url 是 LAN 地址，浏览器同样可达"""
+    if not conn or not item_id:
+        return None
+    url = f"{conn['base_url']}/web/index.html#!/item?id={item_id}"
+    if conn.get("server_id"):
+        url += f"&serverId={conn['server_id']}"
+    return url
 
 
 def get_tmdb_api_key(db: Session) -> str:
@@ -689,7 +700,8 @@ def apply_record_update(record: WatchRecord, data: dict, content: ContentItem | 
 
 # ─── 序列化 ───────────────────────────────────────────────────────────────────
 
-def serialize_film(content: ContentItem, record: WatchRecord | None, *, brief: bool = False) -> dict:
+def serialize_film(content: ContentItem, record: WatchRecord | None, *, brief: bool = False, emby_conn: dict | None = None) -> dict:
+    """emby_conn：传入 get_emby_connection(db) 的结果时输出 emby_url（在库条目的 Emby 网页直达）"""
     raw = content.raw_data if isinstance(content.raw_data, dict) else {}
     emby = raw.get("emby") or None
     poster = raw.get("poster") or {}
@@ -713,6 +725,7 @@ def serialize_film(content: ContentItem, record: WatchRecord | None, *, brief: b
         "douban_id": (raw.get("provider_ids") or {}).get("douban"),
         "sources": raw.get("sources") or ([raw["source"]] if raw.get("source") else []),
         "in_emby": bool(emby and emby.get("in_library")),
+        "emby_url": emby_item_url(emby_conn, (emby.get("item_ids") or [None])[0]) if emby and emby.get("in_library") else None,
         "emby": None if emby is None else {
             "in_library": bool(emby.get("in_library")),
             "played": bool(emby.get("played")),

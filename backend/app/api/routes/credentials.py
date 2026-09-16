@@ -105,6 +105,8 @@ async def _validate_credential(cred: PlatformCredential) -> tuple[str | None, di
         new_extra = {**extra, "base_url": base_url, "user_name": user_name}
         if info.get("ServerName"):
             new_extra["server_name"] = info["ServerName"]
+        if info.get("Id"):
+            new_extra["server_id"] = info["Id"]
         if info.get("Version"):
             new_extra["server_version"] = info["Version"]
         if user_id:

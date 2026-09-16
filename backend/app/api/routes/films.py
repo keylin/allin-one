@@ -216,9 +216,10 @@ def list_films(
     expr = desc(col).nulls_last() if order != "asc" else asc(col).nulls_last()
     rows = query.order_by(expr, ContentItem.title.asc()).offset((page - 1) * page_size).limit(page_size).all()
 
+    emby_conn = get_emby_connection(db)
     return {
         "code": 0,
-        "data": [serialize_film(c, r, brief=True) for c, r in rows],
+        "data": [serialize_film(c, r, brief=True, emby_conn=emby_conn) for c, r in rows],
         "total": total,
         "page": page,
         "page_size": page_size,
@@ -246,7 +247,7 @@ def create_film(body: FilmCreate, db: Session = Depends(get_db)):
             return error_response(400, "; ".join(errors))
     db.commit()
     db.refresh(content)
-    return {"code": 0, "data": serialize_film(content, record), "message": "已添加"}
+    return {"code": 0, "data": serialize_film(content, record, emby_conn=get_emby_connection(db)), "message": "已添加"}
 
 
 # ─── 批量标记（推荐闭环） ─────────────────────────────────────────────────────
@@ -326,7 +327,7 @@ def enrich_one(content_id: str, db: Session = Depends(get_db)):
         return error_response(400 if reason.startswith("未配置") else 404, f"补全失败: {reason}")
     db.refresh(content)
     record = db.query(WatchRecord).filter(WatchRecord.content_id == content.id).first()
-    return {"code": 0, "data": serialize_film(content, record), "message": f"已补全（{reason}）"}
+    return {"code": 0, "data": serialize_film(content, record, emby_conn=get_emby_connection(db)), "message": f"已补全（{reason}）"}
 
 
 # ─── 豆瓣直达（详情页手动触发，一次生效永久保存） ────────────────────────────
@@ -365,7 +366,7 @@ def set_douban(content_id: str, body: DoubanLinkRequest = DoubanLinkRequest(), d
     content.raw_data = raw
     content.updated_at = utcnow()
     db.commit()
-    return {"code": 0, "data": serialize_film(content, record), "message": "豆瓣直达已保存"}
+    return {"code": 0, "data": serialize_film(content, record, emby_conn=get_emby_connection(db)), "message": "豆瓣直达已保存"}
 
 
 @router.delete("/{content_id}/douban")
@@ -380,7 +381,7 @@ def clear_douban(content_id: str, db: Session = Depends(get_db)):
     raw["provider_ids"] = pids
     content.raw_data = raw
     db.commit()
-    return {"code": 0, "data": serialize_film(content, record), "message": "已清除豆瓣直达"}
+    return {"code": 0, "data": serialize_film(content, record, emby_conn=get_emby_connection(db)), "message": "已清除豆瓣直达"}
 
 
 # ─── 详情 / 标记 / 长评 ───────────────────────────────────────────────────────
@@ -391,7 +392,7 @@ def get_film(content_id: str, db: Session = Depends(get_db)):
     if not row:
         return error_response(404, "影片不存在")
     content, record = row
-    return {"code": 0, "data": serialize_film(content, record), "message": "ok"}
+    return {"code": 0, "data": serialize_film(content, record, emby_conn=get_emby_connection(db)), "message": "ok"}
 
 
 @router.put("/{content_id}/record")
@@ -407,7 +408,7 @@ def update_record(content_id: str, body: WatchRecordUpdate, db: Session = Depend
         db.rollback()
         return error_response(400, "; ".join(errors))
     db.commit()
-    return {"code": 0, "data": serialize_film(content, record), "message": "已保存"}
+    return {"code": 0, "data": serialize_film(content, record, emby_conn=get_emby_connection(db)), "message": "已保存"}
 
 
 @router.put("/{content_id}/note")
@@ -419,7 +420,7 @@ def update_note(content_id: str, body: FilmNoteUpdate, db: Session = Depends(get
     content.user_note = body.user_note or None
     content.updated_at = utcnow()
     db.commit()
-    return {"code": 0, "data": serialize_film(content, record), "message": "已保存"}
+    return {"code": 0, "data": serialize_film(content, record, emby_conn=get_emby_connection(db)), "message": "已保存"}
 
 
 @router.delete("/{content_id}")
