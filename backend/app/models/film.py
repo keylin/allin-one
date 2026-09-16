@@ -32,7 +32,8 @@ class WatchRecord(Base):
 
     status = Column(String, nullable=False, default="unmarked")   # WATCH_STATUSES
     my_rating = Column(SmallInteger, nullable=True)                # 1~10
-    watched_at = Column(Date, nullable=True)                       # 看过日期
+    watched_at = Column(Date, nullable=True)                       # 看过日期；NULL = 时间不详
+    watched_precision = Column(String, nullable=True)              # day / month / year；watched_at 为空时为 NULL
     tags = Column(ARRAY(String), nullable=False, default=list)
     comment = Column(Text, nullable=True)                          # 短评；长评用 content_items.user_note
     status_source = Column(String, nullable=False, default="manual")  # STATUS_SOURCES

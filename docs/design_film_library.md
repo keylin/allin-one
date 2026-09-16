@@ -108,8 +108,9 @@ CREATE TABLE watch_records (
     id           TEXT PRIMARY KEY,
     content_id   TEXT NOT NULL UNIQUE REFERENCES content_items(id) ON DELETE CASCADE,
     status       TEXT NOT NULL DEFAULT 'unmarked',  -- unmarked / want / watching / watched / dropped
-    my_rating    SMALLINT,                          -- 1~10，可空
-    watched_at   DATE,                              -- 看过日期，可空、可只填年
+    my_rating    SMALLINT,                          -- 1~10，可空；页面以五星（半星=奇数）展示
+    watched_at   DATE,                              -- 看过日期，NULL = 时间不详
+    watched_precision TEXT,                         -- day / month / year（0022）
     tags         TEXT[] DEFAULT '{}',
     comment      TEXT,                              -- 短评（长评用 content_items.user_note）
     status_source TEXT DEFAULT 'manual',            -- manual / emby_autofill / douban_import
@@ -124,7 +125,8 @@ CREATE INDEX idx_watch_records_status ON watch_records(status);
 - 同步仅在 `status = unmarked` 且 Emby `played = true` 时写入 `status = watched, status_source = emby_autofill`；已是 `emby_autofill` 且缺 `watched_at` 的行允许补日期。
 - Emby 的 0% 播放记录、playCount 不触发任何自动填充（整理库时的验证播放会污染）。
 - 用户任何一次手动修改都把 `status_source` 置回 `manual`。
-- 标"看过"未给日期时，`watched_at` 默认**上映日期**（其次年份 1 月 1 日），不是当天：老片大多记不起观看时间（`default_watched_at`，前后端同一规则）。
+- 看过日期**不默认、不伪造**（2026-09-17 改，此前默认上映日期被判定为伪造数据）：`watched_at` 可空 = 时间不详；`watched_precision` 记录精度 day / month / year，接口接受 `YYYY` / `YYYY-MM` / `YYYY-MM-DD`（迁移 0022）。详情页四选一：不记得 / 只记年 / 记到月 / 具体日期。Emby 自动填充用真实播放日期（day）。评分与状态互不联动。
+- 卡片坑位（桌面/手机同一套，手机两列，无长按面板）：星评一行 + 第二行按状态切换——未标记/想看/在看显示 想看/看过/弃了 按钮；看过/弃了显示短评入口（原地编辑、回车保存）和「⋯」改状态菜单。
 
 ---
 

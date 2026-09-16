@@ -35,11 +35,16 @@ const drawerVisible = ref(false)
 const addVisible = ref(false)
 const showFilters = ref(false)
 
-// 卡片快捷操作
-const sheetFilm = ref(null)          // 移动端操作面板
+// 卡片快捷操作（桌面/手机同一套坑位，无长按面板）
 const busyId = ref(null)
+const commentEditId = ref(null)      // 正在原地编辑短评的卡片
+const commentDraft = ref('')
+const statusMenuId = ref(null)       // 看过/弃了卡片上的「改状态」小菜单
 let searchTimer = null
-let longPressTimer = null
+
+function isSettled(film) {
+  return ['watched', 'dropped'].includes(film.record?.status)
+}
 
 const QUICK_STATUSES = WATCH_STATUS_OPTIONS.filter(o => ['want', 'watched', 'dropped'].includes(o.value))
 
@@ -142,7 +147,6 @@ function clearFilters() {
 
 // ---- 详情 ----
 function openFilm(film) {
-  if (sheetFilm.value) return
   selectedId.value = film.content_id
   drawerVisible.value = true
 }
@@ -182,7 +186,6 @@ async function quickRecord(film, partial) {
     const res = await updateWatchRecord(film.content_id, partial)
     if (res.code === 0) {
       patchFilm(res.data)
-      if (sheetFilm.value?.content_id === res.data.content_id) sheetFilm.value = { ...sheetFilm.value, ...res.data }
       fetchStats()
     } else {
       showError(res.message || '保存失败')
@@ -196,28 +199,46 @@ async function quickRecord(film, partial) {
 
 function quickStatus(film, value) {
   const next = film.record?.status === value ? 'unmarked' : value
-  quickRecord(film, { status: next })   // 看过且无日期时后端默认上映日期
+  quickRecord(film, { status: next })   // 看过不带日期 = 时间不详，不伪造
 }
 
 function quickRating(film, value) {
-  // StarRating 给的是 1~10 或 null（再点同一值即清除）
+  // StarRating 给的是 1~10 或 null（再点同一值即清除）；评分与状态各管各的
   quickRecord(film, { my_rating: value })
 }
 
-// 移动端长按 → 操作面板
-function onPointerDown(film, event) {
-  if (event.pointerType !== 'touch') return
-  longPressTimer = setTimeout(() => {
-    sheetFilm.value = film
-    longPressTimer = null
-  }, 450)
+function startComment(film) {
+  commentEditId.value = film.content_id
+  commentDraft.value = film.record?.comment || ''
 }
-function cancelLongPress() {
-  if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null }
+
+async function saveComment(film) {
+  if (commentEditId.value !== film.content_id) return
+  const text = commentDraft.value.trim()
+  commentEditId.value = null
+  if (text === (film.record?.comment || '')) return
+  await quickRecord(film, { comment: text })
 }
-function closeSheet() {
-  sheetFilm.value = null
+
+function cancelComment() {
+  commentEditId.value = null
 }
+
+function toggleStatusMenu(film) {
+  statusMenuId.value = statusMenuId.value === film.content_id ? null : film.content_id
+}
+
+function menuStatus(film, value) {
+  statusMenuId.value = null
+  quickRecord(film, { status: value })
+}
+
+function onDocClick(e) {
+  if (statusMenuId.value && !e.target.closest('[data-status-menu]')) statusMenuId.value = null
+}
+
+// 自动聚焦指令（短评输入框）
+const vFocus = { mounted: (el) => el.focus() }
 
 // ---- 补全元数据 ----
 const enriching = ref(false)
@@ -269,8 +290,10 @@ function statusCount(value) {
 onMounted(() => {
   fetchFilms()
   fetchStats()
+  document.addEventListener('click', onDocClick)
 })
 onUnmounted(() => {
+  document.removeEventListener('click', onDocClick)
   if (observer) observer.disconnect()
 })
 </script>
@@ -408,7 +431,7 @@ onUnmounted(() => {
         </div>
 
         <template v-else>
-          <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 gap-3 sm:gap-4">
+          <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 gap-2.5 sm:gap-4">
             <div
               v-for="film in films"
               :key="film.content_id"
@@ -419,11 +442,6 @@ onUnmounted(() => {
               <div
                 class="aspect-[2/3] bg-gradient-to-br from-slate-100 to-slate-200 relative overflow-hidden rounded-t-xl cursor-pointer"
                 @click="openFilm(film)"
-                @pointerdown="onPointerDown(film, $event)"
-                @pointerup="cancelLongPress"
-                @pointercancel="cancelLongPress"
-                @pointermove="cancelLongPress"
-                @contextmenu.prevent="sheetFilm = film"
               >
                 <img v-if="film.poster_url" :src="film.poster_url" :alt="film.title" class="absolute inset-0 w-full h-full object-cover" loading="lazy" />
                 <div v-else class="absolute inset-0 flex flex-col items-center justify-center p-3">
@@ -460,20 +478,64 @@ onUnmounted(() => {
                 </div>
               </div>
 
-              <!-- quick actions (desktop 常显；移动端长按走面板) -->
-              <div class="hidden sm:block px-2 pb-2">
+              <!-- 快捷操作：桌面/手机同一套坑位 -->
+              <div class="px-2 pb-2">
                 <div class="flex items-center justify-center py-1">
                   <StarRating :model-value="film.record?.my_rating" size="md" @update:model-value="quickRating(film, $event)" />
                 </div>
-                <div class="flex items-center justify-center gap-1">
+
+                <!-- 未标记 / 想看 / 在看：状态按钮 -->
+                <div v-if="!isSettled(film)" class="flex items-center justify-center gap-1">
                   <button
                     v-for="opt in QUICK_STATUSES"
                     :key="opt.value"
-                    class="px-1.5 py-0.5 text-[10px] rounded transition-all"
-                    :class="film.record?.status === opt.value ? opt.color : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600'"
+                    class="px-1.5 py-1 sm:py-0.5 text-[11px] sm:text-[10px] rounded transition-all"
+                    :class="film.record?.status === opt.value ? opt.color : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600 active:bg-slate-100'"
                     :title="film.record?.status === opt.value ? `取消「${opt.label}」` : `标为「${opt.label}」`"
                     @click.stop="quickStatus(film, opt.value)"
                   >{{ opt.label }}</button>
+                </div>
+
+                <!-- 看过 / 弃了：短评入口 + 「⋯」改状态 -->
+                <div v-else class="relative flex items-center gap-1" data-status-menu>
+                  <input
+                    v-if="commentEditId === film.content_id"
+                    v-model="commentDraft"
+                    v-focus
+                    type="text"
+                    maxlength="200"
+                    placeholder="一句话，回车保存"
+                    class="flex-1 min-w-0 px-1.5 py-1 sm:py-0.5 text-[11px] bg-white border border-indigo-300 rounded focus:ring-2 focus:ring-indigo-500/20 outline-none"
+                    @keydown.enter.prevent="saveComment(film)"
+                    @keydown.esc.prevent="cancelComment"
+                    @blur="saveComment(film)"
+                    @click.stop
+                  />
+                  <button
+                    v-else
+                    class="flex-1 min-w-0 text-left text-[11px] leading-snug truncate px-1 py-1 sm:py-0.5 rounded hover:bg-slate-50 active:bg-slate-100 transition-colors"
+                    :class="film.record?.comment ? 'text-slate-600 italic' : 'text-slate-300'"
+                    :title="film.record?.comment ? '点击修改短评' : '写一句短评'"
+                    @click.stop="startComment(film)"
+                  >{{ film.record?.comment || '写一句短评…' }}</button>
+                  <button
+                    class="shrink-0 w-6 h-6 sm:w-5 sm:h-5 text-slate-300 hover:text-slate-500 hover:bg-slate-100 active:bg-slate-100 rounded transition-colors text-sm sm:text-xs leading-none"
+                    title="改状态"
+                    @click.stop="toggleStatusMenu(film)"
+                  >⋯</button>
+                  <div
+                    v-if="statusMenuId === film.content_id"
+                    class="absolute right-0 bottom-full mb-1 z-20 bg-white border border-slate-200 rounded-lg shadow-lg p-1 flex flex-col min-w-[6rem]"
+                  >
+                    <button
+                      v-for="opt in WATCH_STATUS_OPTIONS.filter(o => o.value !== 'unmarked')"
+                      :key="opt.value"
+                      class="text-left px-2 py-1.5 sm:py-1 text-[11px] rounded transition-all"
+                      :class="film.record?.status === opt.value ? opt.color : 'text-slate-600 hover:bg-slate-100 active:bg-slate-100'"
+                      @click.stop="menuStatus(film, opt.value)"
+                    >{{ opt.label }}</button>
+                    <button class="text-left px-2 py-1.5 sm:py-1 text-[11px] text-slate-400 hover:bg-slate-100 rounded" @click.stop="menuStatus(film, 'unmarked')">清除状态</button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -492,56 +554,6 @@ onUnmounted(() => {
         </template>
       </div>
     </div>
-
-    <!-- 移动端操作面板（长按卡片） -->
-    <Teleport to="body">
-      <Transition
-        enter-active-class="transition-opacity duration-150"
-        enter-from-class="opacity-0"
-        enter-to-class="opacity-100"
-        leave-active-class="transition-opacity duration-100"
-        leave-from-class="opacity-100"
-        leave-to-class="opacity-0"
-      >
-        <div v-if="sheetFilm" class="fixed inset-0 z-50 flex items-end sm:items-center justify-center" @click.self="closeSheet">
-          <div class="absolute inset-0 bg-black/30" @click="closeSheet" />
-          <div class="relative z-10 bg-white rounded-t-2xl sm:rounded-2xl w-full sm:w-96 shadow-2xl overflow-hidden pb-safe">
-            <div class="px-4 py-3 border-b border-slate-100 flex items-center gap-3">
-              <div class="w-10 h-14 rounded bg-slate-100 overflow-hidden shrink-0">
-                <img v-if="sheetFilm.poster_url" :src="sheetFilm.poster_url" class="w-full h-full object-cover" />
-              </div>
-              <div class="min-w-0">
-                <p class="text-sm font-medium text-slate-800 truncate">{{ sheetFilm.title }}</p>
-                <p class="text-xs text-slate-400">{{ sheetFilm.year }}<span v-if="sheetFilm.directors?.length"> · {{ sheetFilm.directors[0] }}</span></p>
-              </div>
-            </div>
-            <div class="px-4 py-3 space-y-3">
-              <div>
-                <p class="text-[11px] text-slate-400 mb-1.5">状态</p>
-                <div class="flex gap-1.5">
-                  <button
-                    v-for="opt in WATCH_STATUS_OPTIONS.filter(o => o.value !== 'unmarked')"
-                    :key="opt.value"
-                    class="flex-1 py-2 text-xs rounded-lg border transition-all"
-                    :class="sheetFilm.record?.status === opt.value ? opt.active : 'bg-white text-slate-600 border-slate-200 active:bg-slate-100'"
-                    @click="quickStatus(sheetFilm, opt.value)"
-                  >{{ opt.label }}</button>
-                </div>
-              </div>
-              <div>
-                <p class="text-[11px] text-slate-400 mb-1.5">评分 <span class="text-slate-300">· 点星的左半边是半星</span></p>
-                <StarRating :model-value="sheetFilm.record?.my_rating" size="lg" show-value @update:model-value="quickRating(sheetFilm, $event)" />
-              </div>
-            </div>
-            <div class="border-t border-slate-100">
-              <a v-if="sheetFilm.emby_url" :href="sheetFilm.emby_url" target="_blank" rel="noopener" class="block w-full text-left px-4 py-3 text-sm text-emerald-700 active:bg-emerald-50" @click="closeSheet">▶ 在 Emby 播放</a>
-              <button class="w-full text-left px-4 py-3 text-sm text-slate-700 active:bg-slate-100" @click="openFilm({ content_id: sheetFilm.content_id }); sheetFilm = null">查看详情</button>
-              <button class="w-full py-3 text-sm text-slate-500 font-medium border-t border-slate-100 active:bg-slate-100" @click="closeSheet">取消</button>
-            </div>
-          </div>
-        </div>
-      </Transition>
-    </Teleport>
 
     <FilmDetailDrawer
       :visible="drawerVisible"

@@ -509,6 +509,7 @@ def upsert_films(db: Session, source: SourceConfig, films: list[dict]) -> dict:
             record.status_source = "emby_autofill"
             last = _parse_dt(emby_block.get("last_played_at"))
             record.watched_at = last.date() if last else None
+            record.watched_precision = "day" if last else None
             record.updated_at = utcnow()
             stats["autofilled"] += 1
         elif (
@@ -519,6 +520,7 @@ def upsert_films(db: Session, source: SourceConfig, films: list[dict]) -> dict:
             last = _parse_dt(emby_block.get("last_played_at"))
             if last:
                 record.watched_at = last.date()
+                record.watched_precision = "day"
                 record.updated_at = utcnow()
 
         stats["content_ids"].append(content.id)
@@ -637,28 +639,37 @@ def get_or_create_record(db: Session, content_id: str) -> WatchRecord:
     return record
 
 
-def default_watched_at(content: ContentItem | None) -> date | None:
-    """标"看过"但没给日期时的默认值：上映日期，其次年份的 1 月 1 日。很多老片记不起观看时间，不该默认当天。"""
-    if content is None:
+def parse_watched_at(value: str) -> tuple[date, str] | None:
+    """看过日期支持三种精度：YYYY → (YYYY-01-01, year)，YYYY-MM → (YYYY-MM-01, month)，YYYY-MM-DD → (date, day)"""
+    v = value.strip()
+    try:
+        if len(v) == 4 and v.isdigit():
+            return date(int(v), 1, 1), "year"
+        if len(v) == 7 and v[4] == "-":
+            return date(int(v[:4]), int(v[5:7]), 1), "month"
+        return date.fromisoformat(v[:10]), "day"
+    except ValueError:
         return None
-    raw = content.raw_data if isinstance(content.raw_data, dict) else {}
-    rel = raw.get("release_date")
-    if rel:
-        try:
-            return date.fromisoformat(str(rel)[:10])
-        except ValueError:
-            pass
-    if content.published_at:
-        return content.published_at.date()
-    if raw.get("year"):
-        return date(int(raw["year"]), 1, 1)
-    return None
+
+
+def watched_label(record: WatchRecord | None) -> str | None:
+    """展示用：2019 / 2019-05 / 2019-05-03 / 时间不详（仅看过时）"""
+    if not record or record.status != "watched":
+        return None
+    if not record.watched_at:
+        return "时间不详"
+    p = record.watched_precision or "day"
+    if p == "year":
+        return str(record.watched_at.year)
+    if p == "month":
+        return record.watched_at.strftime("%Y-%m")
+    return record.watched_at.isoformat()
 
 
 def apply_record_update(record: WatchRecord, data: dict, content: ContentItem | None = None) -> list[str]:
     """把用户提交的字段写入 record（任何手动修改都把 status_source 置回 manual）。返回错误列表
 
-    传入 content 时：状态变为 watched 且没有日期 → 默认上映日期（见 default_watched_at）。"""
+    看过日期不默认、不伪造：没给就是"时间不详"。content 参数保留给后续规则用。"""
     errors: list[str] = []
     touched = False
     if "status" in data and data["status"] is not None:
@@ -677,12 +688,14 @@ def apply_record_update(record: WatchRecord, data: dict, content: ContentItem | 
     if "watched_at" in data:
         value = data["watched_at"]
         if value in (None, ""):
-            record.watched_at = None
+            record.watched_at = None            # 时间不详，不伪造
+            record.watched_precision = None
         else:
-            try:
-                record.watched_at = date.fromisoformat(str(value)[:10])
-            except ValueError:
-                errors.append(f"watched_at 日期格式错误: {value}")
+            parsed = parse_watched_at(str(value))
+            if not parsed:
+                errors.append(f"watched_at 格式错误: {value}（支持 YYYY / YYYY-MM / YYYY-MM-DD）")
+            else:
+                record.watched_at, record.watched_precision = parsed
         touched = True
     if "tags" in data and data["tags"] is not None:
         record.tags = [str(t).strip() for t in data["tags"] if str(t).strip()]
@@ -693,8 +706,6 @@ def apply_record_update(record: WatchRecord, data: dict, content: ContentItem | 
     if touched and not errors:
         record.status_source = "manual"
         record.updated_at = utcnow()
-        if record.status == "watched" and record.watched_at is None and content is not None:
-            record.watched_at = default_watched_at(content)
     return errors
 
 
@@ -742,6 +753,8 @@ def serialize_film(content: ContentItem, record: WatchRecord | None, *, brief: b
             "status": record.status if record else "unmarked",
             "my_rating": record.my_rating if record else None,
             "watched_at": record.watched_at.isoformat() if record and record.watched_at else None,
+            "watched_precision": record.watched_precision if record else None,
+            "watched_label": watched_label(record),
             "tags": list(record.tags or []) if record else [],
             "comment": record.comment if record else None,
             "status_source": record.status_source if record else "manual",

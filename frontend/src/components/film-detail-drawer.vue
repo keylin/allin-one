@@ -21,6 +21,9 @@ const saving = ref(false)
 
 // editable form
 const form = ref({ status: 'unmarked', my_rating: null, watched_at: '', tags: [], comment: '' })
+const dateMode = ref('unknown')   // unknown / year / month / day
+const dateYear = ref('')
+const dateMonth = ref('')
 const tagInput = ref('')
 const knownTags = ref([])
 const tmdbConfigured = ref(false)
@@ -49,6 +52,11 @@ async function load() {
       }
       note.value = res.data.user_note || ''
       noteDirty.value = false
+      // 日期精度控件初始化
+      const p = r.watched_precision
+      dateMode.value = !r.watched_at ? 'unknown' : (p === 'year' ? 'year' : p === 'month' ? 'month' : 'day')
+      dateYear.value = r.watched_at ? r.watched_at.slice(0, 4) : ''
+      dateMonth.value = r.watched_at ? r.watched_at.slice(0, 7) : ''
     }
   } finally {
     loading.value = false
@@ -92,16 +100,7 @@ async function saveRecord(partial) {
 function setStatus(value) {
   const next = form.value.status === value ? 'unmarked' : value
   form.value.status = next
-  const payload = { status: next }
-  if (next === 'watched' && !form.value.watched_at) {
-    // 记不起什么时候看的很常见，默认上映日期而不是今天；后端同样兜底
-    const fallback = film.value?.release_date || (film.value?.year ? `${film.value.year}-01-01` : '')
-    if (fallback) {
-      form.value.watched_at = fallback
-      payload.watched_at = fallback
-    }
-  }
-  saveRecord(payload)
+  saveRecord({ status: next })   // 看过不带日期 = 时间不详，不伪造
 }
 
 function setRating(value) {
@@ -110,9 +109,21 @@ function setRating(value) {
   saveRecord({ my_rating: value })
 }
 
-function saveWatchedAt() {
-  saveRecord({ watched_at: form.value.watched_at || '' })
+// 看过日期：unknown → 清空；year → YYYY；month → YYYY-MM；day → YYYY-MM-DD（后端按格式判精度）
+function setDateMode(mode) {
+  dateMode.value = mode
+  if (mode === 'unknown') { form.value.watched_at = ''; saveRecord({ watched_at: '' }) }
+  if (mode === 'day' && !form.value.watched_at) form.value.watched_at = new Date().toISOString().slice(0, 10)
+  if (mode === 'day' && form.value.watched_at) saveRecord({ watched_at: form.value.watched_at })
+  if (mode === 'year' && dateYear.value) saveRecord({ watched_at: dateYear.value })
+  if (mode === 'month' && dateMonth.value) saveRecord({ watched_at: dateMonth.value })
 }
+function saveWatchedAt() {
+  if (dateMode.value === 'day' && form.value.watched_at) saveRecord({ watched_at: form.value.watched_at })
+  if (dateMode.value === 'year' && /^\d{4}$/.test(dateYear.value)) saveRecord({ watched_at: dateYear.value })
+  if (dateMode.value === 'month' && /^\d{4}-\d{2}$/.test(dateMonth.value)) saveRecord({ watched_at: dateMonth.value })
+}
+const yearOptions = (() => { const y = new Date().getFullYear(); return Array.from({ length: 40 }, (_, i) => String(y - i)) })()
 
 function addTag(raw) {
   const tag = (raw ?? tagInput.value).trim()
@@ -320,15 +331,23 @@ function fmt(iso) {
         </div>
 
         <div class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <label class="block">
-            <span class="text-[11px] text-slate-400">看过日期 <span class="text-slate-300">· 记不清就留上映日期</span></span>
-            <input
-              v-model="form.watched_at"
-              type="date"
-              class="mt-1 w-full px-3 py-1.5 text-sm bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 outline-none"
-              @change="saveWatchedAt"
-            />
-          </label>
+          <div v-if="form.status === 'watched'">
+            <span class="text-[11px] text-slate-400">什么时候看的</span>
+            <div class="mt-1 flex flex-wrap items-center gap-1.5">
+              <div class="flex bg-slate-100 rounded-lg p-0.5">
+                <button v-for="m in [['unknown','不记得'],['year','只记年'],['month','记到月'],['day','具体日期']]" :key="m[0]"
+                  class="px-2 py-1 text-[11px] rounded-md transition-all"
+                  :class="dateMode === m[0] ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+                  @click="setDateMode(m[0])">{{ m[1] }}</button>
+              </div>
+              <select v-if="dateMode === 'year'" v-model="dateYear" class="px-2 py-1 text-sm bg-white border border-slate-200 rounded-lg outline-none" @change="saveWatchedAt">
+                <option value="" disabled>选年份</option>
+                <option v-for="y in yearOptions" :key="y" :value="y">{{ y }}</option>
+              </select>
+              <input v-else-if="dateMode === 'month'" v-model="dateMonth" type="month" class="px-2 py-1 text-sm bg-white border border-slate-200 rounded-lg outline-none" @change="saveWatchedAt" />
+              <input v-else-if="dateMode === 'day'" v-model="form.watched_at" type="date" class="px-2 py-1 text-sm bg-white border border-slate-200 rounded-lg outline-none" @change="saveWatchedAt" />
+            </div>
+          </div>
         </div>
 
         <div class="mt-4">

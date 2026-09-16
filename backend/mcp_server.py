@@ -908,7 +908,8 @@ def mark_films(items: list[dict]) -> str:
         items: List of dicts. Each locates a film by ONE of: content_id | tmdb_id (+kind:
             "movie"/"series", default movie) | title (+year). Optional fields:
             status (want/watching/watched/dropped/unmarked; default "watched"),
-            my_rating (1-10), watched_at ("YYYY-MM-DD"), comment (short review), tags (list).
+            my_rating (1-10), watched_at ("YYYY-MM-DD", or "YYYY-MM" / "YYYY" when only roughly
+            remembered; omit when unknown — never guess a date), comment (short review), tags (list).
             Example: [{"tmdb_id": "603", "kind": "movie", "status": "watched", "my_rating": 9},
                       {"title": "一一", "year": 2000, "status": "watched"}]
     """
