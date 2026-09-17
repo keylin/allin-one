@@ -495,7 +495,7 @@ def update_record(content_id: str, body: WatchRecordUpdate, db: Session = Depend
 
 @router.post("/{content_id}/logs")
 def add_log(content_id: str, body: WatchLogUpdate, db: Session = Depends(get_db)):
-    """再记一次观看：新建一条观看记录（片自动置为看过）"""
+    """再记一次观看：新建一条观看记录（默认日期 = 今天，可改；片自动置为看过）"""
     row = _base_query(db).filter(ContentItem.id == content_id).first()
     if not row:
         return error_response(404, "影片不存在")

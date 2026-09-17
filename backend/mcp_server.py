@@ -915,7 +915,8 @@ def mark_films(items: list[dict]) -> str:
             my_rating (1-10), watched_at ("YYYY-MM-DD", or "YYYY-MM" / "YYYY" when only roughly
             remembered; omit when unknown — never guess a date), comment (the user's note for this
             viewing, any length), tags (list, film-level), rewatch (true = record a NEW viewing
-            instead of editing the latest one; use when the user says they watched it again).
+            instead of editing the latest one; use when the user says they watched it again;
+            its date defaults to today unless watched_at is given).
             my_rating / watched_at / comment belong to a viewing; a film keeps one viewing log per
             watch, and the latest one is what list_films shows.
             Example: [{"tmdb_id": "603", "kind": "movie", "status": "watched", "my_rating": 9},

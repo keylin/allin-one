@@ -171,11 +171,16 @@ with SessionLocal() as db:
     # 重看但没打分：评分沿用最近一次打过分的
     resp = client.put(f"/api/films/{yiyi_id}/record", json={"rewatch": True, "comment": "第三次"}).json()
     r4 = resp["data"]["record"]
-    check(r4["log_count"] == 3 and r4["comment"] == "第三次" and r4["my_rating"] == 8 and r4["watched_label"] == "时间不详", f"rewatch 不填日期视为最新、未打分沿用上次评分: {r4['my_rating']} {r4['watched_label']}")
+    from datetime import date as _date
+    check(r4["log_count"] == 3 and r4["comment"] == "第三次" and r4["my_rating"] == 8 and r4["watched_label"] == _date.today().isoformat() and r4["watched_precision"] == "day",
+          f"rewatch 默认日期=今天、未打分沿用上次评分: {r4['my_rating']} {r4['watched_label']}")
+    resp = client.post(f"/api/films/{yiyi_id}/logs", json={}).json()["data"]["record"]
+    check(resp["log_count"] == 4 and resp["logs"][0]["watched_label"] == _date.today().isoformat(), "POST /logs 不带日期默认今天")
+    client.delete(f"/api/films/{yiyi_id}/logs/{resp['logs'][0]['id']}")
     bad = client.put(f"/api/films/{yiyi_id}/logs/{first_log}", json={"watched_at": "abc"}).json()
     check(bad["code"] == 400, "观看记录日期格式错误 400")
     # 删掉第三次 → 回到 2 条，缓存回到 2026-09 那次
-    third = r4["logs"][0]["id"]
+    third = next(l["id"] for l in r4["logs"] if l["note"] == "第三次")
     resp = client.delete(f"/api/films/{yiyi_id}/logs/{third}").json()
     check(resp["code"] == 0 and resp["data"]["record"]["log_count"] == 2 and resp["data"]["record"]["watched_label"] == "2026-09", "删一次观看后缓存回退")
     check(client.delete(f"/api/films/{yiyi_id}/logs/{third}").json()["code"] == 404, "重复删除 404")

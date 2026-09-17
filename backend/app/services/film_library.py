@@ -737,7 +737,9 @@ def ensure_log(db: Session, record: WatchRecord) -> WatchLog:
 
 
 def new_log(db: Session, record: WatchRecord) -> WatchLog:
-    log = WatchLog(id=uuid.uuid4().hex, record_id=record.id)
+    """主动「再记一次」：默认观看日期 = 记录当天（精度 day），可改。
+    与自动建的第一条（打分 / 点看过 → 时间不详）不同：主动新记的一次多半就是刚看完。"""
+    log = WatchLog(id=uuid.uuid4().hex, record_id=record.id, watched_at=utcnow().date(), watched_precision="day")
     record.logs.append(log)
     db.add(log)
     db.flush()
