@@ -797,10 +797,11 @@ def list_films(
     inferred from Emby played=true, not confirmed by the user.
 
     Args:
-        status: Filter by record.status, comma-separated: unmarked/want/watching/watched/dropped/unseen.
-            unseen = the user confirmed they have NOT seen it (e.g. a guessed title they rejected);
-            unmarked = not reviewed yet. When guessing what the user has seen, skip unseen; when
-            recommending, unseen titles are fair game but say they were confirmed unseen.
+        status: Filter by record.status, comma-separated: unmarked/backlog/want/watching/watched/dropped.
+            Viewing pipeline: backlog (待看, not seen, watch some day) → want (想看, not seen, higher
+            priority) → watching → watched / dropped (dropped also covers "never going to watch").
+            unmarked = not reviewed yet. When guessing what the user has already seen, skip every
+            reviewed status; when recommending, pick from want first, then backlog.
         kind: "movie" or "series".
         genre: Exact genre name (as stored, usually zh-CN from Emby/TMDb).
         year_from: Minimum production year (0 = no bound).
@@ -914,8 +915,8 @@ def mark_films(items: list[dict]) -> str:
     Args:
         items: List of dicts. Each locates a film by ONE of: content_id | tmdb_id (+kind:
             "movie"/"series", default movie) | title (+year). Optional fields:
-            status (want/watching/watched/dropped/unseen/unmarked; default "watched"; unseen = user
-            confirmed they have not seen it),
+            status (backlog/want/watching/watched/dropped/unmarked; default "watched"; backlog = queued,
+            lower priority than want),
             my_rating (1-10), watched_at ("YYYY-MM-DD", or "YYYY-MM" / "YYYY" when only roughly
             remembered; omit when unknown — never guess a date), comment (the user's note for this
             viewing, any length), tags (list, film-level), rewatch (true = record a NEW viewing

@@ -21,8 +21,8 @@ def _uuid():
     return uuid.uuid4().hex
 
 
-# unseen = 用户确认没看过（区别于 unmarked = 还没处理），推荐/猜测时据此排除重复询问
-WATCH_STATUSES = ("unmarked", "want", "watching", "watched", "dropped", "unseen")
+# 观看流程：待看(backlog，有空再看) → 想看(want，优先) → 在看 → 看过 / 弃了（弃了也含「不打算看」）
+WATCH_STATUSES = ("unmarked", "backlog", "want", "watching", "watched", "dropped")
 STATUS_SOURCES = ("manual", "emby_autofill", "douban_import")
 
 

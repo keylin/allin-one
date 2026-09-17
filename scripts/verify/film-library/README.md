@@ -1,7 +1,7 @@
 # 影视资料库验证脚本
 
 `film_test.py` 对着临时 Postgres 验证 Emby 同步归一化/合并、upsert 覆盖规则（手动标记不被 Emby 覆盖、played 只填空）、
-`emby:<id>` → `tmdb:*` 升级、in_library 回收、手工添加/批量标记、没看过（unseen）状态、观看记录（多次观看、最近一次缓存、rewatch、增删改）、列表筛选/统计、MCP 三个工具。不访问 Emby/TMDb。
+`emby:<id>` → `tmdb:*` 升级、in_library 回收、手工添加/批量标记、待看（backlog）状态与 unseen→backlog 迁移、观看记录（多次观看、最近一次缓存、rewatch、增删改）、列表筛选/统计、MCP 三个工具。不访问 Emby/TMDb。
 
 ```bash
 docker run -d --name film-test-pg -e POSTGRES_PASSWORD=x -e POSTGRES_USER=allinone -e POSTGRES_DB=allinone \

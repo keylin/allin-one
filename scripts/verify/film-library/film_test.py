@@ -89,10 +89,10 @@ with SessionLocal() as db:
     bad = client.put(f"/api/films/{c.id}/record", json={"my_rating": 11})
     check(bad.status_code == 422 or bad.json().get("code") == 400, f"评分越界被拒: http={bad.status_code}")
 
-    # 没看过（unseen）：用户确认没看过，区别于未标记；Emby played 也不自动填
+    # 待看（backlog）：没看过、排在想看之后；Emby played 也不自动填
     c, r = rec("破事儿")
-    resp = client.put(f"/api/films/{c.id}/record", json={"status": "unseen"}).json()
-    check(resp["code"] == 0 and resp["data"]["record"]["status"] == "unseen" and resp["data"]["record"]["log_count"] == 0, f"标记没看过: {resp['message']}")
+    resp = client.put(f"/api/films/{c.id}/record", json={"status": "backlog"}).json()
+    check(resp["code"] == 0 and resp["data"]["record"]["status"] == "backlog" and resp["data"]["record"]["log_count"] == 0, f"标记待看: {resp['message']}")
 
     # 第二轮：银翼杀手 played=true，破事儿补上 TMDb ID（且 played=true），奥本海默从库里消失
     items2 = [
@@ -111,7 +111,7 @@ with SessionLocal() as db:
     check(r.status == "dropped" and r.status_source == "manual" and c.raw_data["emby"]["played"] is True, "手动标记不被 Emby played 覆盖，但 emby 事实已更新")
     c, r = rec("破事儿")
     check(c.external_id == "tmdb:movie:26039" and db.query(ContentItem).filter(ContentItem.title == "破事儿").count() == 1, f"emby:<id> 升级为 tmdb 且不重复: {c.external_id}")
-    check(r.status == "unseen" and r.status_source == "manual", f"没看过不被 Emby played 自动填成看过: {r.status}")
+    check(r.status == "backlog" and r.status_source == "manual", f"待看不被 Emby played 自动填成看过: {r.status}")
     c, r = rec("奥本海默")
     check(removed == 1 and c.raw_data["emby"]["in_library"] is False, f"消失的片标 in_library=false (removed={removed})")
 
@@ -149,10 +149,10 @@ with SessionLocal() as db:
     lst = client.get("/api/films", params={"in_emby": "false"}).json()
     titles = sorted(f["title"] for f in lst["data"])
     check(titles == ["一一", "奥本海默", "牯岭街少年杀人事件"], f"in_emby=false 列表: {titles}")
-    lst = client.get("/api/films", params={"status": "unseen"}).json()
-    check([f["title"] for f in lst["data"]] == ["破事儿"], "status=unseen 列表")
+    lst = client.get("/api/films", params={"status": "backlog"}).json()
+    check([f["title"] for f in lst["data"]] == ["破事儿"], "status=backlog 列表")
     lst = client.get("/api/films", params={"status": "unmarked"}).json()
-    check("破事儿" not in [f["title"] for f in lst["data"]], "status=unmarked 不含没看过")
+    check("破事儿" not in [f["title"] for f in lst["data"]], "status=unmarked 不含待看")
     lst = client.get("/api/films", params={"kind": "series"}).json()
     check([f["title"] for f in lst["data"]] == ["汉武大帝"], "kind=series")
     lst = client.get("/api/films", params={"q": "someone"}).json()
@@ -160,7 +160,7 @@ with SessionLocal() as db:
     lst = client.get("/api/films", params={"year_from": 2000, "year_to": 2010, "sort": "year", "order": "asc"}).json()
     check([f["year"] for f in lst["data"]] == [2000, 2005, 2007], f"年份区间+排序: {[f['year'] for f in lst['data']]}")
     st = client.get("/api/films/stats").json()["data"]
-    check(st["total"] == 8 and st["by_status"]["watched"] == 3 and st["by_status"].get("unseen") == 1 and st["in_emby"] == 5 and st["by_kind"]["series"] == 1, f"stats: {st}")
+    check(st["total"] == 8 and st["by_status"]["watched"] == 3 and st["by_status"].get("backlog") == 1 and st["in_emby"] == 5 and st["by_kind"]["series"] == 1, f"stats: {st}")
     check(client.get("/api/films/search", params={"q": "x"}).json()["code"] == 400, "未配置 TMDb key → search 400")
     det = client.get(f"/api/films/{yiyi_id}").json()["data"]
     check(det["record"]["comment"] == "杨德昌" and det["poster_url"] is None, "详情含最近一次感想；骨架无海报")
@@ -198,12 +198,12 @@ with SessionLocal() as db:
     c, r = rec("牯岭街少年杀人事件")
     resp = client.put(f"/api/films/{c.id}/record", json={"my_rating": 9}).json()["data"]["record"]
     check(resp["status"] == "watched" and resp["log_count"] == 1 and resp["watched_at"] is None and resp["watched_label"] == "时间不详", f"想看+打分→看过且日期空: {resp['status']} {resp['watched_label']}")
-    # 没看过 + 打分 → 看过；再改回没看过
+    # 待看 + 打分 → 看过；再改回待看
     c, r = rec("破事儿")
     resp = client.put(f"/api/films/{c.id}/record", json={"my_rating": 6}).json()["data"]["record"]
-    check(resp["status"] == "watched", f"没看过+打分→看过: {resp['status']}")
-    resp = client.put(f"/api/films/{c.id}/record", json={"status": "unseen"}).json()["data"]["record"]
-    check(resp["status"] == "unseen", "改回没看过")
+    check(resp["status"] == "watched", f"待看+打分→看过: {resp['status']}")
+    resp = client.put(f"/api/films/{c.id}/record", json={"status": "backlog"}).json()["data"]["record"]
+    check(resp["status"] == "backlog", "改回待看")
     # 点看过不带日期 → 建一条空观看记录
     c, r = rec("汉武大帝")
     resp = client.put(f"/api/films/{c.id}/record", json={"status": "watched"}).json()["data"]["record"]
@@ -239,8 +239,8 @@ try:
     out = json.loads(mcp_server.mark_films([{"title": "海上钢琴师", "year": 1998, "rewatch": True, "watched_at": "2026-09-17", "my_rating": 10, "comment": "重看"}]))
     out = json.loads(mcp_server.list_films(keyword="海上"))
     check(out["items"][0]["record"]["log_count"] == 2 and out["items"][0]["record"]["my_rating"] == 10 and out["items"][0]["record"]["comment"] == "重看", f"MCP rewatch: {out['items'][0]['record']}")
-    out = json.loads(mcp_server.list_films(status="unseen"))
-    check(out["total_count"] == 1, f"MCP list_films unseen: {out['total_count']}")
+    out = json.loads(mcp_server.list_films(status="backlog"))
+    check(out["total_count"] == 1, f"MCP list_films backlog: {out['total_count']}")
     out = json.loads(mcp_server.search_film("x"))
     check("error" in out, "MCP search_film 无 key 报错")
 except Exception as e:  # noqa: BLE001

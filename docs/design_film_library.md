@@ -107,7 +107,7 @@ Upsert 规则：先按 `external_id` 精确匹配；Emby 条目从 `emby:<Id>` �
 CREATE TABLE watch_records (                        -- 一部片一行
     id           TEXT PRIMARY KEY,
     content_id   TEXT NOT NULL UNIQUE REFERENCES content_items(id) ON DELETE CASCADE,
-    status       TEXT NOT NULL DEFAULT 'unmarked',  -- unmarked / want / watching / watched / dropped / unseen（确认没看过）
+    status       TEXT NOT NULL DEFAULT 'unmarked',  -- unmarked / backlog(待看) / want(想看，优先) / watching / watched / dropped（含不打算看）
     tags         TEXT[] DEFAULT '{}',
     status_source TEXT DEFAULT 'manual',            -- manual / emby_autofill / douban_import
     -- 以下为「最近一次观看」的缓存（sync_record_from_logs 维护），供列表排序/筛选/卡片

@@ -46,7 +46,7 @@ function isSettled(film) {
   return ['watched', 'dropped'].includes(film.record?.status)
 }
 
-const QUICK_STATUSES = WATCH_STATUS_OPTIONS.filter(o => ['want', 'watched', 'dropped', 'unseen'].includes(o.value))
+const QUICK_STATUSES = WATCH_STATUS_OPTIONS.filter(o => ['backlog', 'want', 'watched', 'dropped'].includes(o.value))
 
 const decades = computed(() => {
   const years = stats.value?.years || []
@@ -484,7 +484,7 @@ onUnmounted(() => {
                   <StarRating :model-value="film.record?.my_rating" size="md" @update:model-value="quickRating(film, $event)" />
                 </div>
 
-                <!-- 未标记 / 想看 / 在看 / 没看过：状态按钮 -->
+                <!-- 未标记 / 待看 / 想看 / 在看：状态按钮 -->
                 <div v-if="!isSettled(film)" class="flex items-center justify-center gap-0.5 sm:gap-1">
                   <button
                     v-for="opt in QUICK_STATUSES"
