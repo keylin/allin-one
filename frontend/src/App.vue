@@ -18,7 +18,7 @@ const topNavItems = [
   { path: '/finance', label: '数据', icon: 'M3 3v18h18M7 16l4-4 3 3 5-6' },
 ]
 
-// 侧边栏项目：按 group 分段渲染；level=1 表示缩进在上一项之下（影视库属于图书馆）
+// 侧边栏项目：平铺不显示分组标题（group 只用于排序归类）；level=1 表示缩进在上一项之下（影视库属于图书馆）
 const sidebarNavItems = [
   { path: '/dashboard', label: '仪表盘', group: null, icon: 'M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z' },
   { path: '/sources', label: '信息源', group: '管理', icon: 'M8.288 15.038a5.25 5.25 0 017.424 0M5.106 11.856c3.807-3.808 9.98-3.808 13.788 0M1.924 8.674c5.565-5.565 14.587-5.565 20.152 0M12.53 18.22l-.53.53-.53-.53a.75.75 0 011.06 0z' },
@@ -149,7 +149,6 @@ watch(() => route.path, () => {
         </div>
         <nav class="sidebar-nav">
           <template v-for="group in sidebarGroups" :key="group.label || '_'">
-            <p v-if="group.label" class="sidebar-group-label">{{ group.label }}</p>
             <RouterLink
               v-for="item in group.items"
               :key="item.path"
