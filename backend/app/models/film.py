@@ -21,7 +21,8 @@ def _uuid():
     return uuid.uuid4().hex
 
 
-WATCH_STATUSES = ("unmarked", "want", "watching", "watched", "dropped")
+# unseen = 用户确认没看过（区别于 unmarked = 还没处理），推荐/猜测时据此排除重复询问
+WATCH_STATUSES = ("unmarked", "want", "watching", "watched", "dropped", "unseen")
 STATUS_SOURCES = ("manual", "emby_autofill", "douban_import")
 
 

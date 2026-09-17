@@ -46,7 +46,7 @@ function isSettled(film) {
   return ['watched', 'dropped'].includes(film.record?.status)
 }
 
-const QUICK_STATUSES = WATCH_STATUS_OPTIONS.filter(o => ['want', 'watched', 'dropped'].includes(o.value))
+const QUICK_STATUSES = WATCH_STATUS_OPTIONS.filter(o => ['want', 'watched', 'dropped', 'unseen'].includes(o.value))
 
 const decades = computed(() => {
   const years = stats.value?.years || []
@@ -484,12 +484,12 @@ onUnmounted(() => {
                   <StarRating :model-value="film.record?.my_rating" size="md" @update:model-value="quickRating(film, $event)" />
                 </div>
 
-                <!-- 未标记 / 想看 / 在看：状态按钮 -->
-                <div v-if="!isSettled(film)" class="flex items-center justify-center gap-1">
+                <!-- 未标记 / 想看 / 在看 / 没看过：状态按钮 -->
+                <div v-if="!isSettled(film)" class="flex items-center justify-center gap-0.5 sm:gap-1">
                   <button
                     v-for="opt in QUICK_STATUSES"
                     :key="opt.value"
-                    class="px-1.5 py-1 sm:py-0.5 text-[11px] sm:text-[10px] rounded transition-all"
+                    class="px-1 sm:px-1.5 py-1 sm:py-0.5 text-[11px] sm:text-[10px] rounded transition-all whitespace-nowrap"
                     :class="film.record?.status === opt.value ? opt.color : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600 active:bg-slate-100'"
                     :title="film.record?.status === opt.value ? `取消「${opt.label}」` : `标为「${opt.label}」`"
                     @click.stop="quickStatus(film, opt.value)"

@@ -22,7 +22,7 @@ class WatchRecordUpdate(BaseModel):
 
     status / tags 是片级；my_rating / watched_at / comment 落到最近一次观看记录（没有则新建一条）；
     rewatch=true 表示先新建一条观看记录再写这三项（重看）。"""
-    status: Optional[str] = None          # unmarked / want / watching / watched / dropped
+    status: Optional[str] = None          # unmarked / want / watching / watched / dropped / unseen
     my_rating: Optional[int] = Field(None, ge=1, le=10)
     watched_at: Optional[str] = None      # YYYY / YYYY-MM / YYYY-MM-DD / release，空串清除
     tags: Optional[list[str]] = None
