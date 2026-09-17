@@ -42,6 +42,7 @@ from app.services.film_library import (
     get_tmdb_api_key,
     new_log,
     poster_cache_path,
+    write_poster_cache,
     resolve_or_create_film,
     serialize_film,
     sync_record_from_logs,
@@ -624,10 +625,5 @@ async def film_poster(content_id: str, db: Session = Depends(get_db)):
     if not fetched:
         return Response(status_code=404, headers={"Cache-Control": "no-store"})
     body, media_type = fetched
-    try:
-        tmp = path.with_suffix(".tmp")
-        tmp.write_bytes(body)
-        tmp.replace(path)
-    except OSError as e:
-        logger.warning(f"poster cache write failed for {content_id}: {e}")
+    write_poster_cache(path, body)
     return Response(content=body, media_type=media_type, headers=_POSTER_HEADERS)

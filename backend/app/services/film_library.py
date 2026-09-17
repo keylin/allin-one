@@ -432,6 +432,7 @@ def upsert_films(db: Session, source: SourceConfig, films: list[dict]) -> dict:
     返回 {"new_films", "updated_films", "autofilled", "content_ids": [...]}
     """
     stats = {"new_films": 0, "updated_films": 0, "autofilled": 0, "content_ids": []}
+    emby_conn = get_emby_connection(db)   # 海报落盘用（Emby 图走本地，TMDb 图出网一次）
 
     for film in films:
         external_id = film.get("external_id")
@@ -474,6 +475,8 @@ def upsert_films(db: Session, source: SourceConfig, films: list[dict]) -> dict:
             poster = dict(raw.get("poster") or {})
             poster.update({k: v for k, v in film["poster"].items() if v})
             raw["poster"] = poster
+            if content.id:
+                cache_poster(content.id, poster, emby_conn)
         if emby_block is not None:
             raw["emby"] = emby_block
         src = film.get("source") or "manual"
@@ -869,6 +872,56 @@ def poster_cache_dir() -> Path:
 def poster_cache_path(content_id: str, poster: dict) -> Path:
     """一部片一张：来源变了（重新识别 / Emby 换图）版本号跟着变，旧文件自然失效"""
     return poster_cache_dir() / f"{content_id}-{poster_version(poster)}.jpg"
+
+
+def fetch_poster_bytes(content_id: str, poster: dict, conn: dict | None) -> tuple[bytes, str] | None:
+    """Emby Primary 图 → TMDb 海报 → None（同步版，供同步/补全时落盘；页面代理用路由里的异步版）"""
+    emby_item = poster.get("emby_item_id")
+    if emby_item and conn:
+        try:
+            with httpx.Client(timeout=15) as client:
+                resp = client.get(
+                    f"{conn['base_url']}/emby/Items/{emby_item}/Images/Primary",
+                    params={"maxWidth": 400, "quality": 85},
+                    headers={"X-Emby-Token": conn["api_key"]},
+                )
+            if resp.status_code == 200 and resp.content:
+                return resp.content, resp.headers.get("content-type", "image/jpeg")
+        except httpx.HTTPError as e:
+            logger.warning(f"Emby poster fetch failed for {content_id}: {e}")
+    tmdb_path = poster.get("tmdb_path")
+    if tmdb_path:
+        try:
+            with httpx.Client(timeout=15, follow_redirects=True) as client:
+                resp = client.get(f"{TMDB_IMAGE_BASE}/w342{tmdb_path}")
+            if resp.status_code == 200 and resp.content:
+                return resp.content, resp.headers.get("content-type", "image/jpeg")
+        except httpx.HTTPError as e:
+            logger.warning(f"Poster fetch failed for {content_id}: {e}")
+    return None
+
+
+def write_poster_cache(path: Path, body: bytes) -> None:
+    try:
+        tmp = path.with_suffix(".tmp")
+        tmp.write_bytes(body)
+        tmp.replace(path)
+    except OSError as e:
+        logger.warning(f"poster cache write failed for {path.name}: {e}")
+
+
+def cache_poster(content_id: str, poster: dict, conn: dict | None) -> bool:
+    """元数据落库时顺手把海报存下来（已有则跳过），页面不再等首次打开时出网。返回是否命中/写入成功"""
+    if not poster_source(poster):
+        return False
+    path = poster_cache_path(content_id, poster)
+    if path.is_file() and path.stat().st_size > 0:
+        return True
+    fetched = fetch_poster_bytes(content_id, poster, conn)
+    if not fetched:
+        return False
+    write_poster_cache(path, fetched[0])
+    return True
 
 
 # ─── 序列化 ───────────────────────────────────────────────────────────────────
