@@ -8,8 +8,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import uuid
+from pathlib import Path
 from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
@@ -17,6 +19,7 @@ import httpx
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.time import utcnow
 from app.models.content import ContentItem, ContentStatus, SourceConfig, SourceType
 from app.models.credential import PlatformCredential
@@ -842,6 +845,32 @@ def serialize_log(log: WatchLog) -> dict:
     }
 
 
+# ─── 海报缓存 ────────────────────────────────────────────────────────────────
+
+def poster_source(poster: dict) -> str:
+    """海报来源标识：Emby 图优先，其次 TMDb 路径；用于缓存键与 URL 版本号"""
+    if poster.get("emby_item_id"):
+        return f"emby:{poster['emby_item_id']}"
+    if poster.get("tmdb_path"):
+        return f"tmdb:{poster['tmdb_path']}"
+    return ""
+
+
+def poster_version(poster: dict) -> str:
+    return hashlib.sha1(poster_source(poster).encode()).hexdigest()[:10]
+
+
+def poster_cache_dir() -> Path:
+    d = Path(settings.DATA_DIR) / "posters"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def poster_cache_path(content_id: str, poster: dict) -> Path:
+    """一部片一张：来源变了（重新识别 / Emby 换图）版本号跟着变，旧文件自然失效"""
+    return poster_cache_dir() / f"{content_id}-{poster_version(poster)}.jpg"
+
+
 # ─── 序列化 ───────────────────────────────────────────────────────────────────
 
 def serialize_film(content: ContentItem, record: WatchRecord | None, *, brief: bool = False, emby_conn: dict | None = None) -> dict:
@@ -866,7 +895,7 @@ def serialize_film(content: ContentItem, record: WatchRecord | None, *, brief: b
         "countries": raw.get("countries") or [],
         "runtime_min": raw.get("runtime_min"),
         "community_rating": raw.get("community_rating"),
-        "poster_url": f"/api/films/{content.id}/poster" if has_poster else None,
+        "poster_url": f"/api/films/{content.id}/poster?v={poster_version(poster)}" if has_poster else None,
         "douban_url": douban_url_for(raw, content.title),
         "douban_id": (raw.get("provider_ids") or {}).get("douban"),
         "sources": raw.get("sources") or ([raw["source"]] if raw.get("source") else []),

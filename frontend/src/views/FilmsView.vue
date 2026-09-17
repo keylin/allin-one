@@ -443,7 +443,7 @@ onUnmounted(() => {
                 class="aspect-[2/3] bg-gradient-to-br from-slate-100 to-slate-200 relative overflow-hidden rounded-t-xl cursor-pointer"
                 @click="openFilm(film)"
               >
-                <img v-if="film.poster_url" :src="film.poster_url" :alt="film.title" class="absolute inset-0 w-full h-full object-cover" loading="lazy" />
+                <img v-if="film.poster_url" :src="film.poster_url" :alt="film.title" class="absolute inset-0 w-full h-full object-cover" loading="lazy" decoding="async" />
                 <div v-else class="absolute inset-0 flex flex-col items-center justify-center p-3">
                   <span class="text-xs text-slate-400 text-center line-clamp-4 leading-tight">{{ film.title }}</span>
                 </div>

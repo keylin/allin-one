@@ -7,7 +7,7 @@ from typing import Optional
 import httpx
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, Query
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from sqlalchemy import asc, desc, func, or_
 from sqlalchemy.orm import Session, selectinload
 
@@ -41,6 +41,7 @@ from app.services.film_library import (
     get_or_create_record,
     get_tmdb_api_key,
     new_log,
+    poster_cache_path,
     resolve_or_create_film,
     serialize_film,
     sync_record_from_logs,
@@ -570,41 +571,63 @@ def delete_film(content_id: str, db: Session = Depends(get_db)):
 
 # ─── 海报代理 ─────────────────────────────────────────────────────────────────
 
-_POSTER_HEADERS = {"Cache-Control": "public, max-age=86400"}
+# 海报 URL 带版本号（来源哈希），内容不变则永久可缓存；来源变了 URL 也变
+_POSTER_HEADERS = {"Cache-Control": "public, max-age=2592000, immutable"}
 
 
-@router.get("/{content_id}/poster")
-def film_poster(content_id: str, db: Session = Depends(get_db)):
-    """Emby Primary 图 → TMDb 海报 → 404。不向前端暴露 Emby key。"""
-    content = db.get(ContentItem, content_id)
-    if not content:
-        return Response(status_code=404)
-    raw = content.raw_data if isinstance(content.raw_data, dict) else {}
-    poster = raw.get("poster") or {}
-
+async def _fetch_poster_bytes(content_id: str, poster: dict, conn: dict | None) -> tuple[bytes, str] | None:
+    """Emby Primary 图 → TMDb 海报 → None。异步拉取，不占线程池"""
     emby_item = poster.get("emby_item_id")
-    conn = get_emby_connection(db) if emby_item else None
     if emby_item and conn:
         try:
-            with httpx.Client(timeout=15) as client:
-                resp = client.get(
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(
                     f"{conn['base_url']}/emby/Items/{emby_item}/Images/Primary",
                     params={"maxWidth": 400, "quality": 85},
                     headers={"X-Emby-Token": conn["api_key"]},
                 )
             if resp.status_code == 200 and resp.content:
-                return Response(content=resp.content, media_type=resp.headers.get("content-type", "image/jpeg"), headers=_POSTER_HEADERS)
+                return resp.content, resp.headers.get("content-type", "image/jpeg")
         except httpx.HTTPError as e:
             logger.warning(f"Emby poster fetch failed for {content_id}: {e}")
-
     tmdb_path = poster.get("tmdb_path")
     if tmdb_path:
         try:
-            with httpx.Client(timeout=15, follow_redirects=True) as client:
-                resp = client.get(f"{TMDB_IMAGE_BASE}/w342{tmdb_path}")
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+                resp = await client.get(f"{TMDB_IMAGE_BASE}/w342{tmdb_path}")
             if resp.status_code == 200 and resp.content:
-                return Response(content=resp.content, media_type=resp.headers.get("content-type", "image/jpeg"), headers=_POSTER_HEADERS)
+                return resp.content, resp.headers.get("content-type", "image/jpeg")
         except httpx.HTTPError as e:
             logger.warning(f"Poster fetch failed for {content_id}: {e}")
+    return None
 
-    return Response(status_code=404)
+
+@router.get("/{content_id}/poster")
+async def film_poster(content_id: str, db: Session = Depends(get_db)):
+    """海报：磁盘缓存命中直接回文件；未命中异步拉 Emby / TMDb 一次后落盘。不向前端暴露 Emby key。
+
+    之前每次请求都现拉外网（约 1s/张，同步阻塞线程池），一页 60 张把整个后端拖死，移动端表现为点开影视库卡住。"""
+    content = db.get(ContentItem, content_id)
+    if not content:
+        return Response(status_code=404)
+    raw = content.raw_data if isinstance(content.raw_data, dict) else {}
+    poster = raw.get("poster") or {}
+    if not (poster.get("emby_item_id") or poster.get("tmdb_path")):
+        return Response(status_code=404)
+
+    path = poster_cache_path(content_id, poster)
+    if path.is_file() and path.stat().st_size > 0:
+        return FileResponse(path, media_type="image/jpeg", headers=_POSTER_HEADERS)
+
+    conn = get_emby_connection(db) if poster.get("emby_item_id") else None
+    fetched = await _fetch_poster_bytes(content_id, poster, conn)
+    if not fetched:
+        return Response(status_code=404, headers={"Cache-Control": "no-store"})
+    body, media_type = fetched
+    try:
+        tmp = path.with_suffix(".tmp")
+        tmp.write_bytes(body)
+        tmp.replace(path)
+    except OSError as e:
+        logger.warning(f"poster cache write failed for {content_id}: {e}")
+    return Response(content=body, media_type=media_type, headers=_POSTER_HEADERS)
