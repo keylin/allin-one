@@ -226,7 +226,9 @@ def list_films(
     }
     col = sort_map.get(sort, sort_map["updated_at"])
     expr = desc(col).nulls_last() if order != "asc" else asc(col).nulls_last()
-    rows = query.order_by(expr, ContentItem.title.asc()).offset((page - 1) * page_size).limit(page_size).all()
+    # 「弃了」在任何排序下都沉底（片间相对顺序不变）
+    dropped_last = sa.case((WatchRecord.status == "dropped", 1), else_=0)
+    rows = query.order_by(dropped_last, expr, ContentItem.title.asc()).offset((page - 1) * page_size).limit(page_size).all()
 
     emby_conn = get_emby_connection(db)
     return {

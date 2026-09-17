@@ -161,6 +161,10 @@ with SessionLocal() as db:
     check([f["year"] for f in lst["data"]] == [2000, 2005, 2007], f"年份区间+排序: {[f['year'] for f in lst['data']]}")
     st = client.get("/api/films/stats").json()["data"]
     check(st["total"] == 8 and st["by_status"]["watched"] == 3 and st["by_status"].get("backlog") == 1 and st["in_emby"] == 5 and st["by_kind"]["series"] == 1, f"stats: {st}")
+    lst = client.get("/api/films").json()["data"]
+    check(lst[-1]["title"] == "银翼杀手2049", f"默认排序弃了沉底: {[f['title'] for f in lst]}")
+    lst = client.get("/api/films", params={"sort": "my_rating"}).json()["data"]
+    check(lst[0]["title"] == "一一" and lst[-1]["title"] == "银翼杀手2049", f"按评分排序弃了（有评分）仍沉底: {[(f['title'], f['record']['my_rating']) for f in lst]}")
     check(client.get("/api/films/search", params={"q": "x"}).json()["code"] == 400, "未配置 TMDb key → search 400")
     det = client.get(f"/api/films/{yiyi_id}").json()["data"]
     check(det["record"]["comment"] == "杨德昌" and det["poster_url"] is None, "详情含最近一次感想；骨架无海报")
