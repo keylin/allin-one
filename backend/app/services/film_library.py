@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
 import httpx
@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from app.core.time import utcnow
 from app.models.content import ContentItem, ContentStatus, SourceConfig, SourceType
 from app.models.credential import PlatformCredential
-from app.models.film import WatchRecord, WATCH_STATUSES
+from app.models.film import WatchLog, WatchRecord, WATCH_STATUSES
 from app.models.system_setting import SystemSetting
 
 logger = logging.getLogger(__name__)
@@ -508,8 +508,10 @@ def upsert_films(db: Session, source: SourceConfig, films: list[dict]) -> dict:
             record.status = "watched"
             record.status_source = "emby_autofill"
             last = _parse_dt(emby_block.get("last_played_at"))
-            record.watched_at = last.date() if last else None
-            record.watched_precision = "day" if last else None
+            log = ensure_log(db, record)
+            log.watched_at = last.date() if last else None
+            log.watched_precision = "day" if last else None
+            sync_record_from_logs(record)
             record.updated_at = utcnow()
             stats["autofilled"] += 1
         elif (
@@ -519,8 +521,10 @@ def upsert_films(db: Session, source: SourceConfig, films: list[dict]) -> dict:
             # 自动填过"看过"但当时没拿到日期：补日期（仍属自动填充，不碰 manual 行）
             last = _parse_dt(emby_block.get("last_played_at"))
             if last:
-                record.watched_at = last.date()
-                record.watched_precision = "day"
+                log = ensure_log(db, record)
+                log.watched_at = last.date()
+                log.watched_precision = "day"
+                sync_record_from_logs(record)
                 record.updated_at = utcnow()
 
         stats["content_ids"].append(content.id)
@@ -668,26 +672,128 @@ def parse_watched_at(value: str) -> tuple[date, str] | None:
         return None
 
 
+def _date_label(watched_at: date | None, precision: str | None) -> str:
+    if not watched_at:
+        return "时间不详"
+    p = precision or "day"
+    if p == "release":
+        return f"≈{watched_at.year}（上映）"
+    if p == "year":
+        return str(watched_at.year)
+    if p == "month":
+        return watched_at.strftime("%Y-%m")
+    return watched_at.isoformat()
+
+
 def watched_label(record: WatchRecord | None) -> str | None:
-    """展示用：2019 / 2019-05 / 2019-05-03 / 时间不详（仅看过时）"""
+    """展示用：2019 / 2019-05 / 2019-05-03 / ≈2019（上映）/ 时间不详（仅看过时；取最近一次观看）"""
     if not record or record.status != "watched":
         return None
-    if not record.watched_at:
-        return "时间不详"
-    p = record.watched_precision or "day"
-    if p == "release":
-        return f"≈{record.watched_at.year}（上映）"
+    return _date_label(record.watched_at, record.watched_precision)
+
+
+# ─── 观看记录（watch_logs） ─────────────────────────────────────────────────
+
+def _effective_date(log: WatchLog) -> date:
+    """用于比较「哪次更近」的有效日期：
+    - 没写日期 → 录入那天（刚记的一次视为最新；迁移来的老记录都落在迁移日）
+    - 只记年 / 记到月 → 该区间的最后一天（2026-09 → 09-30），封顶到今天
+    - 具体日期 / 按上映 → 该日期"""
+    today = utcnow().date()
+    if not log.watched_at:
+        return (log.created_at or utcnow()).date()
+    d, p = log.watched_at, log.watched_precision
     if p == "year":
-        return str(record.watched_at.year)
-    if p == "month":
-        return record.watched_at.strftime("%Y-%m")
-    return record.watched_at.isoformat()
+        d = date(d.year, 12, 31)
+    elif p == "month":
+        d = (date(d.year + (d.month == 12), d.month % 12 + 1, 1) - timedelta(days=1))
+    return min(d, today)
 
 
-def apply_record_update(record: WatchRecord, data: dict, content: ContentItem | None = None) -> list[str]:
+def _log_sort_key(log: WatchLog):
+    # 最近一次 = 有效日期最新；同一天按录入先后
+    return (_effective_date(log), log.created_at or datetime.min)
+
+
+def sorted_logs(record: WatchRecord) -> list[WatchLog]:
+    """最近一次在前"""
+    return sorted(list(record.logs or []), key=_log_sort_key, reverse=True)
+
+
+def latest_log(record: WatchRecord) -> WatchLog | None:
+    logs = sorted_logs(record)
+    return logs[0] if logs else None
+
+
+def ensure_log(db: Session, record: WatchRecord) -> WatchLog:
+    """没有任何观看记录时建一条空的并返回；否则返回最近一次"""
+    log = latest_log(record)
+    if log is None:
+        log = WatchLog(id=uuid.uuid4().hex, record_id=record.id)
+        record.logs.append(log)
+        db.add(log)
+        db.flush()
+    return log
+
+
+def new_log(db: Session, record: WatchRecord) -> WatchLog:
+    log = WatchLog(id=uuid.uuid4().hex, record_id=record.id)
+    record.logs.append(log)
+    db.add(log)
+    db.flush()
+    return log
+
+
+def sync_record_from_logs(record: WatchRecord) -> None:
+    """把「最近一次观看」的评分/日期缓存到 watch_records（列表排序、筛选、卡片用）。
+
+    评分取最近一次**打了分**的观看（重看没打分时沿用上一次的分）；日期取最近一次观看。"""
+    logs = sorted_logs(record)
+    latest = logs[0] if logs else None
+    record.watched_at = latest.watched_at if latest else None
+    record.watched_precision = latest.watched_precision if latest else None
+    rated = next((l for l in logs if l.my_rating is not None), None)
+    record.my_rating = rated.my_rating if rated else None
+
+
+def apply_log_update(log: WatchLog, data: dict, content: ContentItem | None = None) -> list[str]:
+    """写一条观看记录：watched_at（YYYY / YYYY-MM / YYYY-MM-DD / release / 空）、my_rating、note"""
+    errors: list[str] = []
+    if "my_rating" in data:
+        rating = data["my_rating"]
+        if rating is not None and not (1 <= int(rating) <= 10):
+            errors.append("my_rating 需在 1~10")
+        else:
+            log.my_rating = int(rating) if rating is not None else None
+    if "watched_at" in data:
+        value = data["watched_at"]
+        if value == "release":
+            # 详情页主动选「不记得（按上映）」：按上映时间近似，精度标为 release 与手填日期区分
+            approx = release_watched_at(content)
+            log.watched_at, log.watched_precision = approx if approx else (None, None)
+        elif value in (None, ""):
+            log.watched_at = None            # 时间不详（空着，以后补）
+            log.watched_precision = None
+        else:
+            parsed = parse_watched_at(str(value))
+            if not parsed:
+                errors.append(f"watched_at 格式错误: {value}（支持 YYYY / YYYY-MM / YYYY-MM-DD / release）")
+            else:
+                log.watched_at, log.watched_precision = parsed
+    if "note" in data:
+        log.note = (data["note"] or "").strip() or None
+    if not errors:
+        log.updated_at = utcnow()
+    return errors
+
+
+def apply_record_update(db: Session, record: WatchRecord, data: dict, content: ContentItem | None = None) -> list[str]:
     """把用户提交的字段写入 record（任何手动修改都把 status_source 置回 manual）。返回错误列表
 
-    看过日期：手填 YYYY / YYYY-MM / YYYY-MM-DD 记对应精度；传 "release" = 详情页主动选「不记得（按上映）」；传空 = 清空（时间不详）。自动规则从不填日期。"""
+    片级字段：status / tags。观看级字段 my_rating / watched_at / comment（=note）落到**最近一次观看**，
+    没有观看记录时先建一条；传 rewatch=True 则先新建一条观看再写。
+    看过日期：手填 YYYY / YYYY-MM / YYYY-MM-DD 记对应精度；传 "release" = 详情页主动选「不记得（按上映）」；
+    传空 = 清空（时间不详）。自动规则从不填日期。"""
     errors: list[str] = []
     touched = False
     if "status" in data and data["status"] is not None:
@@ -696,42 +802,42 @@ def apply_record_update(record: WatchRecord, data: dict, content: ContentItem | 
         else:
             record.status = data["status"]
             touched = True
-    if "my_rating" in data:
-        rating = data["my_rating"]
-        if rating is not None and not (1 <= int(rating) <= 10):
-            errors.append("my_rating 需在 1~10")
-        else:
-            record.my_rating = int(rating) if rating is not None else None
-            touched = True
-    if "watched_at" in data:
-        value = data["watched_at"]
-        if value == "release":
-            # 详情页主动选「不记得（按上映）」：按上映时间近似，精度标为 release 与手填日期区分
-            approx = release_watched_at(content)
-            record.watched_at, record.watched_precision = approx if approx else (None, None)
-        elif value in (None, ""):
-            record.watched_at = None            # 时间不详（空着，以后补）
-            record.watched_precision = None
-        else:
-            parsed = parse_watched_at(str(value))
-            if not parsed:
-                errors.append(f"watched_at 格式错误: {value}（支持 YYYY / YYYY-MM / YYYY-MM-DD / release）")
-            else:
-                record.watched_at, record.watched_precision = parsed
-        touched = True
     if "tags" in data and data["tags"] is not None:
         record.tags = [str(t).strip() for t in data["tags"] if str(t).strip()]
         touched = True
+    log_data = {k: data[k] for k in ("my_rating", "watched_at") if k in data}
     if "comment" in data:
-        record.comment = data["comment"] or None
+        log_data["note"] = data["comment"]
+    if "note" in data:
+        log_data["note"] = data["note"]
+    if log_data and not errors:
+        log = new_log(db, record) if data.get("rewatch") else ensure_log(db, record)
+        errors.extend(apply_log_update(log, log_data, content))
         touched = True
     if touched and not errors:
         record.status_source = "manual"
         record.updated_at = utcnow()
         # 评分蕴含看过：打分即记为看过（任何非看过状态，含弃了）；日期空着，留给详情页处理
-        if "my_rating" in data and "status" not in data and record.my_rating is not None and record.status != "watched":
+        if "my_rating" in log_data and "status" not in data and log_data["my_rating"] is not None and record.status != "watched":
             record.status = "watched"
+        # 看过必有至少一条观看记录（空的也算：时间不详、没打分）
+        if record.status == "watched" and not record.logs:
+            ensure_log(db, record)
+        sync_record_from_logs(record)
     return errors
+
+
+def serialize_log(log: WatchLog) -> dict:
+    return {
+        "id": log.id,
+        "watched_at": log.watched_at.isoformat() if log.watched_at else None,
+        "watched_precision": log.watched_precision,
+        "watched_label": _date_label(log.watched_at, log.watched_precision),
+        "my_rating": log.my_rating,
+        "note": log.note,
+        "created_at": log.created_at.isoformat() if log.created_at else None,
+        "updated_at": log.updated_at.isoformat() if log.updated_at else None,
+    }
 
 
 # ─── 序列化 ───────────────────────────────────────────────────────────────────
@@ -743,6 +849,8 @@ def serialize_film(content: ContentItem, record: WatchRecord | None, *, brief: b
     poster = raw.get("poster") or {}
     has_poster = bool(poster.get("emby_item_id") or poster.get("tmdb_path"))
     parsed = parse_external_id(content.external_id)
+    logs = sorted_logs(record) if record else []
+    latest = logs[0] if logs else None
     data: dict[str, Any] = {
         "content_id": content.id,
         "external_id": content.external_id,
@@ -776,12 +884,14 @@ def serialize_film(content: ContentItem, record: WatchRecord | None, *, brief: b
         },
         "record": {
             "status": record.status if record else "unmarked",
+            # my_rating / watched_at / comment 都是「最近一次观看」的缓存；完整历史见 logs（详情）
             "my_rating": record.my_rating if record else None,
             "watched_at": record.watched_at.isoformat() if record and record.watched_at else None,
             "watched_precision": record.watched_precision if record else None,
             "watched_label": watched_label(record),
             "tags": list(record.tags or []) if record else [],
-            "comment": record.comment if record else None,
+            "comment": (latest.note if latest else None),
+            "log_count": len(logs),
             "status_source": record.status_source if record else "manual",
             "updated_at": record.updated_at.isoformat() if record and record.updated_at else None,
         },
@@ -798,6 +908,6 @@ def serialize_film(content: ContentItem, record: WatchRecord | None, *, brief: b
             "official_rating": raw.get("official_rating"),
             "provider_ids": raw.get("provider_ids") or {},
             "url": content.url,
-            "user_note": content.user_note,
         })
+        data["record"]["logs"] = [serialize_log(l) for l in logs]
     return data

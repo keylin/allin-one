@@ -9,7 +9,7 @@ import sqlalchemy as sa
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import Response
 from sqlalchemy import asc, desc, func, or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.database import get_db
 from app.core.time import utcnow
@@ -22,13 +22,14 @@ from app.schemas.film import (
     FilmMetaUpdate,
     FilmRelinkRequest,
     FilmCreate,
-    FilmNoteUpdate,
+    WatchLogUpdate,
     WatchRecordUpdate,
 )
 from app.services.film_library import (
     FILM_SOURCE_TYPES,
     KINDS,
     TMDB_IMAGE_BASE,
+    apply_log_update,
     apply_record_update,
     enrich_film,
     enrichment_state,
@@ -39,8 +40,10 @@ from app.services.film_library import (
     get_or_create_film_source,
     get_or_create_record,
     get_tmdb_api_key,
+    new_log,
     resolve_or_create_film,
     serialize_film,
+    sync_record_from_logs,
     tmdb_details,
     tmdb_external_id,
     tmdb_search,
@@ -61,6 +64,7 @@ def _base_query(db: Session):
         db.query(ContentItem, WatchRecord)
         .join(SourceConfig, ContentItem.source_id == SourceConfig.id)
         .outerjoin(WatchRecord, WatchRecord.content_id == ContentItem.id)
+        .options(selectinload(WatchRecord.logs))   # 序列化要取最近一次观看，避免逐行查
         .filter(SourceConfig.source_type.in_(FILM_SOURCE_TYPES))
     )
 
@@ -247,7 +251,7 @@ def create_film(body: FilmCreate, db: Session = Depends(get_db)):
     record = get_or_create_record(db, content.id)
     update = {k: v for k, v in body.model_dump().items() if k in ("status", "my_rating", "watched_at", "comment") and v is not None}
     if update:
-        errors = apply_record_update(record, update, content)
+        errors = apply_record_update(db, record, update, content)
         if errors:
             db.rollback()
             return error_response(400, "; ".join(errors))
@@ -276,7 +280,7 @@ def batch_records(body: BatchRecordRequest, db: Session = Depends(get_db)):
             **({"comment": item.comment} if item.comment is not None else {}),
             **({"tags": item.tags} if item.tags is not None else {}),
         }
-        errors = apply_record_update(record, update, content)
+        errors = apply_record_update(db, record, update, content)
         if errors:
             results.append({"ok": False, "error": "; ".join(errors), "content_id": content.id, "title": content.title})
             continue
@@ -479,7 +483,7 @@ def update_record(content_id: str, body: WatchRecordUpdate, db: Session = Depend
     content, record = row
     if not record:
         record = get_or_create_record(db, content.id)
-    errors = apply_record_update(record, body.model_dump(exclude_unset=True), content)
+    errors = apply_record_update(db, record, body.model_dump(exclude_unset=True), content)
     if errors:
         db.rollback()
         return error_response(400, "; ".join(errors))
@@ -487,16 +491,69 @@ def update_record(content_id: str, body: WatchRecordUpdate, db: Session = Depend
     return {"code": 0, "data": serialize_film(content, record, emby_conn=get_emby_connection(db)), "message": "已保存"}
 
 
-@router.put("/{content_id}/note")
-def update_note(content_id: str, body: FilmNoteUpdate, db: Session = Depends(get_db)):
+# ─── 观看记录（一部片多次观看） ────────────────────────────────────────────
+
+@router.post("/{content_id}/logs")
+def add_log(content_id: str, body: WatchLogUpdate, db: Session = Depends(get_db)):
+    """再记一次观看：新建一条观看记录（片自动置为看过）"""
     row = _base_query(db).filter(ContentItem.id == content_id).first()
     if not row:
         return error_response(404, "影片不存在")
     content, record = row
-    content.user_note = body.user_note or None
-    content.updated_at = utcnow()
+    if not record:
+        record = get_or_create_record(db, content.id)
+    log = new_log(db, record)   # flush 后 created_at 才有值，「最近一次」比较依赖它
+    errors = apply_log_update(log, body.model_dump(exclude_unset=True), content)
+    if errors:
+        db.rollback()
+        return error_response(400, "; ".join(errors))
+    if record.status != "watched":
+        record.status = "watched"
+    record.status_source = "manual"
+    record.updated_at = utcnow()
+    sync_record_from_logs(record)
+    db.commit()
+    return {"code": 0, "data": serialize_film(content, record, emby_conn=get_emby_connection(db)), "message": "已记一次观看"}
+
+
+@router.put("/{content_id}/logs/{log_id}")
+def update_log(content_id: str, log_id: str, body: WatchLogUpdate, db: Session = Depends(get_db)):
+    row = _base_query(db).filter(ContentItem.id == content_id).first()
+    if not row:
+        return error_response(404, "影片不存在")
+    content, record = row
+    log = next((l for l in (record.logs if record else []) if l.id == log_id), None)
+    if not log:
+        return error_response(404, "观看记录不存在")
+    errors = apply_log_update(log, body.model_dump(exclude_unset=True), content)
+    if errors:
+        db.rollback()
+        return error_response(400, "; ".join(errors))
+    record.status_source = "manual"
+    record.updated_at = utcnow()
+    sync_record_from_logs(record)
     db.commit()
     return {"code": 0, "data": serialize_film(content, record, emby_conn=get_emby_connection(db)), "message": "已保存"}
+
+
+@router.delete("/{content_id}/logs/{log_id}")
+def delete_log(content_id: str, log_id: str, db: Session = Depends(get_db)):
+    """删一条观看记录；删到零条时片的状态保持不变（看过与否由用户决定）"""
+    row = _base_query(db).filter(ContentItem.id == content_id).first()
+    if not row:
+        return error_response(404, "影片不存在")
+    content, record = row
+    log = next((l for l in (record.logs if record else []) if l.id == log_id), None)
+    if not log:
+        return error_response(404, "观看记录不存在")
+    record.logs.remove(log)
+    db.delete(log)
+    db.flush()
+    record.status_source = "manual"
+    record.updated_at = utcnow()
+    sync_record_from_logs(record)
+    db.commit()
+    return {"code": 0, "data": serialize_film(content, record, emby_conn=get_emby_connection(db)), "message": "已删除该次观看"}
 
 
 @router.delete("/{content_id}")

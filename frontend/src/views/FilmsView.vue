@@ -504,7 +504,7 @@ onUnmounted(() => {
                     v-focus
                     type="text"
                     maxlength="200"
-                    placeholder="一句话，回车保存"
+                    placeholder="这次看完的感想，回车保存"
                     class="flex-1 min-w-0 px-1.5 py-1 sm:py-0.5 text-[11px] bg-white border border-indigo-300 rounded focus:ring-2 focus:ring-indigo-500/20 outline-none"
                     @keydown.enter.prevent="saveComment(film)"
                     @keydown.esc.prevent="cancelComment"
@@ -515,9 +515,10 @@ onUnmounted(() => {
                     v-else
                     class="flex-1 min-w-0 text-left text-[11px] leading-snug truncate px-1 py-1 sm:py-0.5 rounded hover:bg-slate-50 active:bg-slate-100 transition-colors"
                     :class="film.record?.comment ? 'text-slate-600 italic' : 'text-slate-300'"
-                    :title="film.record?.comment ? '点击修改短评' : '写一句短评'"
+                    :title="film.record?.comment ? '修改最近一次的感想' : '写点感想'"
                     @click.stop="startComment(film)"
-                  >{{ film.record?.comment || '写一句短评…' }}</button>
+                  >{{ film.record?.comment || '写点感想…' }}</button>
+                  <span v-if="film.record?.log_count > 1" class="shrink-0 text-[10px] text-slate-400 tabular-nums" :title="`看过 ${film.record.log_count} 次`">×{{ film.record.log_count }}</span>
                   <button
                     class="shrink-0 w-6 h-6 sm:w-5 sm:h-5 text-slate-300 hover:text-slate-500 hover:bg-slate-100 active:bg-slate-100 rounded transition-colors text-sm sm:text-xs leading-none"
                     title="改状态"

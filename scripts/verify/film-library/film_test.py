@@ -12,7 +12,7 @@ from app.core.database import SessionLocal
 from app.api.routes import films as films_routes
 from app.api.routes import sync as sync_routes
 from app.models.content import ContentItem, SourceType
-from app.models.film import WatchRecord
+from app.models.film import WatchLog, WatchRecord
 from app.services.film_library import (
     get_or_create_film_source, upsert_films, mark_missing_from_emby, serialize_film,
 )
@@ -77,6 +77,7 @@ with SessionLocal() as db:
 
     c, r = rec("伊豆的舞女")
     check(r.status == "watched" and r.status_source == "emby_autofill" and str(r.watched_at) == "2026-04-06", f"played=true 自动填看过: {r.status}/{r.status_source}/{r.watched_at}")
+    check(len(r.logs) == 1 and str(r.logs[0].watched_at) == "2026-04-06" and r.logs[0].watched_precision == "day", "自动填看过建一条观看记录（真实播放日期）")
     c, r = rec("银翼杀手2049")
     check(r.status == "unmarked", "0%~22% 播放不自动填")
     check(c.url == "https://www.themoviedb.org/movie/335984" and c.author == "Someone", f"url/author 冗余: {c.url} {c.author}")
@@ -84,6 +85,7 @@ with SessionLocal() as db:
     # ── 用户手动标记，后续同步不覆盖 ──
     resp = client.put(f"/api/films/{c.id}/record", json={"status": "dropped", "my_rating": 6, "comment": "看不下去"}).json()
     check(resp["code"] == 0 and resp["data"]["record"]["status"] == "dropped" and resp["data"]["record"]["status_source"] == "manual", f"PUT record: {resp['message']}")
+    check(resp["data"]["record"]["comment"] == "看不下去" and resp["data"]["record"]["log_count"] == 1 and resp["data"]["record"]["logs"][0]["my_rating"] == 6, "评分/短评落到观看记录，请求显式带 status 时不改状态")
     bad = client.put(f"/api/films/{c.id}/record", json={"my_rating": 11})
     check(bad.status_code == 422 or bad.json().get("code") == 400, f"评分越界被拒: http={bad.status_code}")
 
@@ -151,7 +153,42 @@ with SessionLocal() as db:
     check(st["total"] == 8 and st["by_status"]["watched"] == 3 and st["in_emby"] == 5 and st["by_kind"]["series"] == 1, f"stats: {st}")
     check(client.get("/api/films/search", params={"q": "x"}).json()["code"] == 400, "未配置 TMDb key → search 400")
     det = client.get(f"/api/films/{yiyi_id}").json()["data"]
-    check(det["record"]["comment"] == "杨德昌" and det["poster_url"] is None, "详情含短评；骨架无海报")
+    check(det["record"]["comment"] == "杨德昌" and det["poster_url"] is None, "详情含最近一次感想；骨架无海报")
+    check(det["record"]["log_count"] == 1 and det["record"]["logs"][0]["note"] == "杨德昌" and det["record"]["logs"][0]["my_rating"] == 10, f"手工添加时的评分与批量短评合并进同一条观看记录: {det['record']['logs']}")
+
+    # ── 多次观看：再记一次 → 最近一次在前，片级缓存取最近一次 ──
+    first_log = det["record"]["logs"][0]["id"]
+    resp = client.post(f"/api/films/{yiyi_id}/logs", json={"watched_at": "2026-09", "my_rating": 8, "note": "十年后重看，更懂 NJ 了"}).json()
+    r2 = resp["data"]["record"]
+    check(resp["code"] == 0 and r2["log_count"] == 2 and r2["logs"][0]["note"].startswith("十年后") and r2["logs"][0]["watched_label"] == "2026-09", f"再记一次: {resp['message']} {r2['watched_label']}")
+    check(r2["my_rating"] == 8 and r2["watched_at"] == "2026-09-01" and r2["watched_precision"] == "month" and r2["comment"].startswith("十年后"), f"片级缓存=最近一次: rating={r2['my_rating']} at={r2['watched_at']}")
+    lst = client.get("/api/films", params={"q": "一一"}).json()["data"][0]["record"]
+    check(lst["log_count"] == 2 and lst["my_rating"] == 8 and "logs" not in lst, "列表精简输出带 log_count 与最近一次缓存")
+    # 修改旧的那次：改日期到 2015，最近一次仍是 2026-09
+    resp = client.put(f"/api/films/{yiyi_id}/logs/{first_log}", json={"watched_at": "2015", "my_rating": 10}).json()
+    r3 = resp["data"]["record"]
+    check(resp["code"] == 0 and r3["logs"][1]["id"] == first_log and r3["logs"][1]["watched_label"] == "2015" and r3["my_rating"] == 8, "改旧记录不影响最近一次缓存")
+    # 重看但没打分：评分沿用最近一次打过分的
+    resp = client.put(f"/api/films/{yiyi_id}/record", json={"rewatch": True, "comment": "第三次"}).json()
+    r4 = resp["data"]["record"]
+    check(r4["log_count"] == 3 and r4["comment"] == "第三次" and r4["my_rating"] == 8 and r4["watched_label"] == "时间不详", f"rewatch 不填日期视为最新、未打分沿用上次评分: {r4['my_rating']} {r4['watched_label']}")
+    bad = client.put(f"/api/films/{yiyi_id}/logs/{first_log}", json={"watched_at": "abc"}).json()
+    check(bad["code"] == 400, "观看记录日期格式错误 400")
+    # 删掉第三次 → 回到 2 条，缓存回到 2026-09 那次
+    third = r4["logs"][0]["id"]
+    resp = client.delete(f"/api/films/{yiyi_id}/logs/{third}").json()
+    check(resp["code"] == 0 and resp["data"]["record"]["log_count"] == 2 and resp["data"]["record"]["watched_label"] == "2026-09", "删一次观看后缓存回退")
+    check(client.delete(f"/api/films/{yiyi_id}/logs/{third}").json()["code"] == 404, "重复删除 404")
+    # 打分即看过：想看 + 打分 → 看过、建观看记录、日期空
+    c, r = rec("牯岭街少年杀人事件")
+    resp = client.put(f"/api/films/{c.id}/record", json={"my_rating": 9}).json()["data"]["record"]
+    check(resp["status"] == "watched" and resp["log_count"] == 1 and resp["watched_at"] is None and resp["watched_label"] == "时间不详", f"想看+打分→看过且日期空: {resp['status']} {resp['watched_label']}")
+    # 点看过不带日期 → 建一条空观看记录
+    c, r = rec("汉武大帝")
+    resp = client.put(f"/api/films/{c.id}/record", json={"status": "watched"}).json()["data"]["record"]
+    check(resp["log_count"] == 1 and resp["watched_label"] == "时间不详" and resp["my_rating"] is None, "点看过→一条空观看记录")
+    resp = client.put(f"/api/films/{c.id}/record", json={"watched_at": "release"}).json()["data"]["record"]
+    check(resp["watched_precision"] == "release" and resp["watched_label"] == "≈2005（上映）", f"主动选不记得→按上映: {resp['watched_label']}")
     poster = client.get(f"/api/films/{c.id}/poster")
     check(poster.status_code == 404, f"未配 Emby 凭证时海报 404 (got {poster.status_code})")
 
@@ -163,18 +200,24 @@ with SessionLocal() as db:
     check(run["code"] == 400, f"未绑凭证触发同步被拒: {run['message']}")
 
     # 删除
+    rid = db.query(WatchRecord).filter(WatchRecord.content_id == yiyi_id).first().id
     d = client.delete(f"/api/films/{yiyi_id}").json()
-    check(d["code"] == 0 and db.query(WatchRecord).filter(WatchRecord.content_id == yiyi_id).count() == 0, "删除级联 watch_records")
+    db.expire_all()
+    check(d["code"] == 0 and db.query(WatchRecord).filter(WatchRecord.content_id == yiyi_id).count() == 0
+          and db.query(WatchLog).filter(WatchLog.record_id == rid).count() == 0, "删除级联 watch_records 与 watch_logs")
 
 # ── MCP 工具 ──
 try:
     import mcp_server
     out = json.loads(mcp_server.list_films(status="watched"))
-    check(out["total_count"] == 2 and all("record" in i for i in out["items"]), f"MCP list_films: {out['total_count']}")
+    check(out["total_count"] == 4 and all("record" in i and "log_count" in i["record"] for i in out["items"]), f"MCP list_films: {out['total_count']}")
     out = json.loads(mcp_server.mark_films([{"title": "海上钢琴师", "year": 1998, "status": "watched", "my_rating": 8}, {"tmdb_id": "603", "status": "watched"}]))
     check(out["ok"] == 2, f"MCP mark_films: {out}")
     out = json.loads(mcp_server.list_films(keyword="海上"))
     check(out["items"][0]["record"]["my_rating"] == 8, "MCP 写入后可读")
+    out = json.loads(mcp_server.mark_films([{"title": "海上钢琴师", "year": 1998, "rewatch": True, "watched_at": "2026-09-17", "my_rating": 10, "comment": "重看"}]))
+    out = json.loads(mcp_server.list_films(keyword="海上"))
+    check(out["items"][0]["record"]["log_count"] == 2 and out["items"][0]["record"]["my_rating"] == 10 and out["items"][0]["record"]["comment"] == "重看", f"MCP rewatch: {out['items'][0]['record']}")
     out = json.loads(mcp_server.search_film("x"))
     check("error" in out, "MCP search_film 无 key 报错")
 except Exception as e:  # noqa: BLE001

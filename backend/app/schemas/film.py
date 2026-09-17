@@ -18,12 +18,25 @@ class FilmCreate(BaseModel):
 
 
 class WatchRecordUpdate(BaseModel):
-    """更新用户标记；未传的字段不改"""
+    """更新用户标记；未传的字段不改。
+
+    status / tags 是片级；my_rating / watched_at / comment 落到最近一次观看记录（没有则新建一条）；
+    rewatch=true 表示先新建一条观看记录再写这三项（重看）。"""
     status: Optional[str] = None          # unmarked / want / watching / watched / dropped
     my_rating: Optional[int] = Field(None, ge=1, le=10)
-    watched_at: Optional[str] = None      # YYYY-MM-DD，空串清除
+    watched_at: Optional[str] = None      # YYYY / YYYY-MM / YYYY-MM-DD / release，空串清除
     tags: Optional[list[str]] = None
-    comment: Optional[str] = None
+    comment: Optional[str] = None         # = 最近一次观看的 note
+    rewatch: Optional[bool] = None
+
+    model_config = {"extra": "forbid"}
+
+
+class WatchLogUpdate(BaseModel):
+    """新建 / 修改一条观看记录；未传的字段不改"""
+    watched_at: Optional[str] = None      # YYYY / YYYY-MM / YYYY-MM-DD / release，空串清除
+    my_rating: Optional[int] = Field(None, ge=1, le=10)
+    note: Optional[str] = None
 
     model_config = {"extra": "forbid"}
 
@@ -44,10 +57,6 @@ class BatchRecordItem(BaseModel):
 
 class BatchRecordRequest(BaseModel):
     items: list[BatchRecordItem]
-
-
-class FilmNoteUpdate(BaseModel):
-    user_note: Optional[str] = None
 
 
 class FilmMetaUpdate(BaseModel):

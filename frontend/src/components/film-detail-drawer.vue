@@ -1,7 +1,7 @@
 <script setup>
 import { ref, watch, computed } from 'vue'
 import DetailDrawer from '@/components/detail-drawer.vue'
-import { getFilm, getFilmStats, updateWatchRecord, updateFilmNote, deleteFilm, enrichFilm, setDoubanLink, clearDoubanLink, updateFilmMeta, relinkFilm, searchTmdb, WATCH_STATUS_OPTIONS, statusMeta } from '@/api/films'
+import { getFilm, getFilmStats, updateWatchRecord, addWatchLog, updateWatchLog, deleteWatchLog, deleteFilm, enrichFilm, setDoubanLink, clearDoubanLink, updateFilmMeta, relinkFilm, searchTmdb, WATCH_STATUS_OPTIONS, statusMeta } from '@/api/films'
 import { formatTimeShort } from '@/utils/time'
 import { useToast } from '@/composables/useToast'
 import { useDoubleTapClose } from '@/composables/useDoubleTapClose'
@@ -19,19 +19,16 @@ const loading = ref(false)
 const film = ref(null)
 const saving = ref(false)
 
-// editable form
-const form = ref({ status: 'unmarked', my_rating: null, watched_at: '', tags: [], comment: '' })
-const dateMode = ref('unknown')   // unknown / year / month / day
-const dateYear = ref('')
-const dateMonth = ref('')
+// editable form：片级字段；观看记录（日期/评分/感想）在 logs 里逐条编辑
+const form = ref({ status: 'unmarked', my_rating: null, tags: [] })
+const logs = ref([])              // [{ id, watched_at, watched_precision, watched_label, my_rating, note, mode, year, month }]
+const logDeleteId = ref(null)     // 待二次确认删除的观看记录
 const tagInput = ref('')
 const knownTags = ref([])
 const tmdbConfigured = ref(false)
 const bodyRef = ref(null)
 // 移动端：空白处双击关闭抽屉
 useDoubleTapClose(bodyRef, { onClose: () => emit('close') })
-const note = ref('')
-const noteDirty = ref(false)
 const deleteConfirm = ref(false)
 let deleteTimer = null
 
@@ -41,22 +38,7 @@ async function load() {
   try {
     const res = await getFilm(props.contentId)
     if (res.code === 0) {
-      film.value = res.data
-      const r = res.data.record || {}
-      form.value = {
-        status: r.status || 'unmarked',
-        my_rating: r.my_rating ?? null,
-        watched_at: r.watched_at || '',
-        tags: [...(r.tags || [])],
-        comment: r.comment || '',
-      }
-      note.value = res.data.user_note || ''
-      noteDirty.value = false
-      // 日期精度控件初始化
-      const p = r.watched_precision
-      dateMode.value = !r.watched_at ? 'none' : (p === 'release' ? 'unknown' : p === 'year' ? 'year' : p === 'month' ? 'month' : 'day')
-      dateYear.value = r.watched_at ? r.watched_at.slice(0, 4) : ''
-      dateMonth.value = r.watched_at ? r.watched_at.slice(0, 7) : ''
+      applyFilm(res.data)
     }
   } finally {
     loading.value = false
@@ -79,13 +61,29 @@ watch(() => [props.visible, props.contentId], ([v]) => {
   else { deleteConfirm.value = false }
 }, { immediate: true })
 
+// 服务端返回的完整影片 → 表单 + 观看记录编辑态（保留正在编辑的感想草稿）
+function applyFilm(data) {
+  film.value = data
+  const r = data.record || {}
+  form.value = { status: r.status || 'unmarked', my_rating: r.my_rating ?? null, tags: [...(r.tags || [])] }
+  const drafts = Object.fromEntries(logs.value.map(l => [l.id, l.note]))
+  logs.value = (r.logs || []).map(l => ({
+    ...l,
+    note: l.id in drafts && drafts[l.id] !== (l.note || '') ? drafts[l.id] : (l.note || ''),
+    mode: !l.watched_at ? 'none' : (l.watched_precision === 'release' ? 'unknown' : l.watched_precision === 'year' ? 'year' : l.watched_precision === 'month' ? 'month' : 'day'),
+    year: l.watched_at ? l.watched_at.slice(0, 4) : '',
+    month: l.watched_at ? l.watched_at.slice(0, 7) : '',
+    day: l.watched_at || '',
+  }))
+}
+
 async function saveRecord(partial) {
   if (!film.value) return
   saving.value = true
   try {
     const res = await updateWatchRecord(film.value.content_id, partial)
     if (res.code === 0) {
-      film.value = res.data
+      applyFilm(res.data)
       emit('updated', res.data)
     } else {
       showError(res.message || '保存失败')
@@ -104,24 +102,88 @@ function setStatus(value) {
 }
 
 function setRating(value) {
-  // StarRating 已处理"再点同一值即清除"，这里拿到的是 1~10 或 null
+  // 非看过状态下的打分：后端落到最近一次观看（没有则新建）并把片记为看过
   form.value.my_rating = value
   saveRecord({ my_rating: value })
 }
 
-// 看过日期：unknown → 清空；year → YYYY；month → YYYY-MM；day → YYYY-MM-DD（后端按格式判精度）
-function setDateMode(mode) {
-  dateMode.value = mode
-  if (mode === 'unknown') { form.value.watched_at = ''; saveRecord({ watched_at: 'release' }) }   // 主动选「不记得」→ 按上映时间近似
-  if (mode === 'day' && !form.value.watched_at) form.value.watched_at = new Date().toISOString().slice(0, 10)
-  if (mode === 'day' && form.value.watched_at) saveRecord({ watched_at: form.value.watched_at })
-  if (mode === 'year' && dateYear.value) saveRecord({ watched_at: dateYear.value })
-  if (mode === 'month' && dateMonth.value) saveRecord({ watched_at: dateMonth.value })
+// ---- 观看记录：一次观看一条，各自有日期 / 评分 / 感想 ----
+async function saveLog(log, partial) {
+  if (!film.value) return
+  saving.value = true
+  try {
+    const res = await updateWatchLog(film.value.content_id, log.id, partial)
+    if (res.code === 0) {
+      applyFilm(res.data)
+      emit('updated', res.data)
+    } else {
+      showError(res.message || '保存失败')
+    }
+  } catch {
+    showError('保存失败')
+  } finally {
+    saving.value = false
+  }
 }
-function saveWatchedAt() {
-  if (dateMode.value === 'day' && form.value.watched_at) saveRecord({ watched_at: form.value.watched_at })
-  if (dateMode.value === 'year' && /^\d{4}$/.test(dateYear.value)) saveRecord({ watched_at: dateYear.value })
-  if (dateMode.value === 'month' && /^\d{4}-\d{2}$/.test(dateMonth.value)) saveRecord({ watched_at: dateMonth.value })
+
+async function addLog() {
+  if (!film.value) return
+  saving.value = true
+  try {
+    const res = await addWatchLog(film.value.content_id, {})
+    if (res.code === 0) {
+      applyFilm(res.data)
+      emit('updated', res.data)
+    } else {
+      showError(res.message || '添加失败')
+    }
+  } catch {
+    showError('添加失败')
+  } finally {
+    saving.value = false
+  }
+}
+
+async function removeLog(log) {
+  if (logDeleteId.value !== log.id) {
+    logDeleteId.value = log.id
+    setTimeout(() => { if (logDeleteId.value === log.id) logDeleteId.value = null }, 3000)
+    return
+  }
+  logDeleteId.value = null
+  saving.value = true
+  try {
+    const res = await deleteWatchLog(film.value.content_id, log.id)
+    if (res.code === 0) {
+      applyFilm(res.data)
+      emit('updated', res.data)
+    } else {
+      showError(res.message || '删除失败')
+    }
+  } catch {
+    showError('删除失败')
+  } finally {
+    saving.value = false
+  }
+}
+
+// 日期：unknown → 按上映近似（release）；year → YYYY；month → YYYY-MM；day → YYYY-MM-DD（后端按格式判精度）
+function setLogDateMode(log, mode) {
+  log.mode = mode
+  if (mode === 'unknown') saveLog(log, { watched_at: 'release' })   // 主动选「不记得」→ 按上映时间近似
+  if (mode === 'day' && !log.day) log.day = new Date().toISOString().slice(0, 10)
+  if (mode === 'day' && log.day) saveLog(log, { watched_at: log.day })
+  if (mode === 'year' && log.year) saveLog(log, { watched_at: log.year })
+  if (mode === 'month' && log.month) saveLog(log, { watched_at: log.month })
+}
+function saveLogDate(log) {
+  if (log.mode === 'day' && log.day) saveLog(log, { watched_at: log.day })
+  if (log.mode === 'year' && /^\d{4}$/.test(log.year)) saveLog(log, { watched_at: log.year })
+  if (log.mode === 'month' && /^\d{4}-\d{2}$/.test(log.month)) saveLog(log, { watched_at: log.month })
+}
+function saveLogNote(log) {
+  if ((log.note || '').trim() === (film.value?.record?.logs?.find(l => l.id === log.id)?.note || '')) return
+  saveLog(log, { note: log.note })
 }
 const yearOptions = (() => { const y = new Date().getFullYear(); return Array.from({ length: 40 }, (_, i) => String(y - i)) })()
 
@@ -139,25 +201,6 @@ function removeTag(tag) {
 }
 
 const tagSuggestions = computed(() => knownTags.value.filter(t => !form.value.tags.includes(t)).slice(0, 12))
-
-function saveComment() {
-  saveRecord({ comment: form.value.comment })
-}
-
-async function saveNote() {
-  if (!film.value) return
-  saving.value = true
-  try {
-    const res = await updateFilmNote(film.value.content_id, note.value)
-    if (res.code === 0) {
-      film.value = res.data
-      noteDirty.value = false
-      success('长评已保存')
-    }
-  } finally {
-    saving.value = false
-  }
-}
 
 const enriching = ref(false)
 async function handleEnrich() {
@@ -442,29 +485,9 @@ function fmt(iso) {
           >{{ opt.label }}</button>
         </div>
 
-        <div class="mt-4">
-          <p class="text-[11px] text-slate-400 mb-1.5">我的评分 <span class="text-slate-300">· 点星的左半边是半星</span></p>
+        <div v-if="form.status !== 'watched'" class="mt-4">
+          <p class="text-[11px] text-slate-400 mb-1.5">我的评分 <span class="text-slate-300">· 打分即记为看过</span></p>
           <StarRating :model-value="form.my_rating" size="lg" show-value @update:model-value="setRating" />
-        </div>
-
-        <div class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div v-if="form.status === 'watched'">
-            <span class="text-[11px] text-slate-400">什么时候看的<span class="text-slate-300"> · {{ film.record?.watched_label || '时间不详，可以以后补' }}</span></span>
-            <div class="mt-1 flex flex-wrap items-center gap-1.5">
-              <div class="flex bg-slate-100 rounded-lg p-0.5">
-                <button v-for="m in [['unknown','不记得（按上映）'],['year','只记年'],['month','记到月'],['day','具体日期']]" :key="m[0]"
-                  class="px-2 py-1 text-[11px] rounded-md transition-all"
-                  :class="dateMode === m[0] ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'"
-                  @click="setDateMode(m[0])">{{ m[1] }}</button>
-              </div>
-              <select v-if="dateMode === 'year'" v-model="dateYear" class="px-2 py-1 text-sm bg-white border border-slate-200 rounded-lg outline-none" @change="saveWatchedAt">
-                <option value="" disabled>选年份</option>
-                <option v-for="y in yearOptions" :key="y" :value="y">{{ y }}</option>
-              </select>
-              <input v-else-if="dateMode === 'month'" v-model="dateMonth" type="month" class="px-2 py-1 text-sm bg-white border border-slate-200 rounded-lg outline-none" @change="saveWatchedAt" />
-              <input v-else-if="dateMode === 'day'" v-model="form.watched_at" type="date" class="px-2 py-1 text-sm bg-white border border-slate-200 rounded-lg outline-none" @change="saveWatchedAt" />
-            </div>
-          </div>
         </div>
 
         <div class="mt-4">
@@ -498,16 +521,48 @@ function fmt(iso) {
           </div>
         </div>
 
-        <label class="block mt-3">
-          <span class="text-[11px] text-slate-400">短评</span>
-          <textarea
-            v-model="form.comment"
-            rows="2"
-            placeholder="一两句话，写给以后的自己"
-            class="mt-1 w-full px-3 py-2 text-sm bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 outline-none resize-y"
-            @blur="saveComment"
-          />
-        </label>
+        <!-- 观看记录：一次观看一条；不同阶段重看各记各的 -->
+        <div v-if="form.status === 'watched' || logs.length" class="mt-4">
+          <div class="flex items-center justify-between mb-1.5">
+            <p class="text-[11px] text-slate-400">观看记录<span v-if="logs.length > 1" class="text-slate-300"> · {{ logs.length }} 次</span></p>
+            <button class="text-[11px] text-indigo-500 hover:text-indigo-700 hover:underline disabled:opacity-50" :disabled="saving" @click="addLog">+ {{ logs.length ? '再记一次' : '记一次' }}</button>
+          </div>
+          <div class="space-y-2">
+            <div v-for="(log, idx) in logs" :key="log.id" class="rounded-lg border border-slate-200 bg-white p-2.5">
+              <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                <span class="text-[11px] text-slate-400 tabular-nums">{{ idx === 0 ? '最近' : `第 ${logs.length - idx} 次` }} · {{ log.watched_label }}</span>
+                <StarRating :model-value="log.my_rating" size="md" show-value @update:model-value="saveLog(log, { my_rating: $event })" />
+                <button
+                  class="ml-auto text-[11px] transition-colors"
+                  :class="logDeleteId === log.id ? 'text-rose-600 font-medium' : 'text-slate-300 hover:text-rose-500'"
+                  :title="logDeleteId === log.id ? '再点一次确认删除' : '删除这次观看'"
+                  @click="removeLog(log)"
+                >{{ logDeleteId === log.id ? '确认删除' : '删除' }}</button>
+              </div>
+              <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
+                <div class="flex bg-slate-100 rounded-lg p-0.5">
+                  <button v-for="m in [['unknown','不记得（按上映）'],['year','只记年'],['month','记到月'],['day','具体日期']]" :key="m[0]"
+                    class="px-2 py-1 text-[11px] rounded-md transition-all"
+                    :class="log.mode === m[0] ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+                    @click="setLogDateMode(log, m[0])">{{ m[1] }}</button>
+                </div>
+                <select v-if="log.mode === 'year'" v-model="log.year" class="px-2 py-1 text-sm bg-white border border-slate-200 rounded-lg outline-none" @change="saveLogDate(log)">
+                  <option value="" disabled>选年份</option>
+                  <option v-for="y in yearOptions" :key="y" :value="y">{{ y }}</option>
+                </select>
+                <input v-else-if="log.mode === 'month'" v-model="log.month" type="month" class="px-2 py-1 text-sm bg-white border border-slate-200 rounded-lg outline-none" @change="saveLogDate(log)" />
+                <input v-else-if="log.mode === 'day'" v-model="log.day" type="date" class="px-2 py-1 text-sm bg-white border border-slate-200 rounded-lg outline-none" @change="saveLogDate(log)" />
+              </div>
+              <textarea
+                v-model="log.note"
+                rows="2"
+                placeholder="这次看完的感想，长短都行，写给以后的自己"
+                class="mt-2 w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 focus:bg-white outline-none resize-y"
+                @blur="saveLogNote(log)"
+              />
+            </div>
+          </div>
+        </div>
       </section>
 
       <!-- Emby 事实 -->
@@ -553,26 +608,6 @@ function fmt(iso) {
           <template v-if="film.release_date"><dt class="text-slate-300">上映</dt><dd class="text-slate-500 tabular-nums">{{ film.release_date }}</dd></template>
           <template v-if="film.provider_ids?.imdb"><dt class="text-slate-300">IMDb</dt><dd><a :href="`https://www.imdb.com/title/${film.provider_ids.imdb}/`" target="_blank" rel="noopener" class="text-indigo-400 hover:underline">{{ film.provider_ids.imdb }}</a></dd></template>
         </dl>
-      </section>
-
-      <!-- 长评 -->
-      <section class="p-5 sm:p-6 border-b border-slate-100">
-        <div class="flex items-center justify-between mb-2">
-          <h3 class="text-xs font-semibold uppercase tracking-wider text-slate-400">长评 / 笔记</h3>
-          <button
-            v-if="noteDirty"
-            class="text-xs px-2.5 py-1 rounded-lg bg-indigo-500 text-white hover:bg-indigo-600 transition-all"
-            :disabled="saving"
-            @click="saveNote"
-          >保存</button>
-        </div>
-        <textarea
-          v-model="note"
-          rows="5"
-          placeholder="支持 Markdown，随便写"
-          class="w-full px-3 py-2 text-sm bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 outline-none resize-y"
-          @input="noteDirty = true"
-        />
       </section>
 
       <!-- 危险区 -->

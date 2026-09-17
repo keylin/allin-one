@@ -788,7 +788,9 @@ def list_films(
     Each row: content_id, tmdb_id, title, original_title, kind (movie/series), year,
     genres, directors, countries, community_rating, in_emby, emby facts (played,
     play_count, progress, last_played_at, episodes), and record (status, my_rating,
-    watched_at, tags, comment, status_source).
+    watched_at, tags, comment, log_count, status_source). my_rating / watched_at / comment are
+    from the LATEST viewing; log_count > 1 means the user has rewatched it (each viewing has its
+    own date/rating/note; fetch the full history via the REST detail endpoint if needed).
 
     Data layers: `emby` = viewing facts from the media server (evidence);
     `record` = the user's own claim. status_source=emby_autofill means "watched" was
@@ -807,6 +809,7 @@ def list_films(
     """
     import sqlalchemy as sa
     from sqlalchemy import or_
+    from sqlalchemy.orm import selectinload
     from app.models.film import WatchRecord, WATCH_STATUSES
     from app.services.film_library import FILM_SOURCE_TYPES, KINDS, serialize_film
 
@@ -818,6 +821,7 @@ def list_films(
                 db.query(ContentItem, WatchRecord)
                 .join(SourceConfig, ContentItem.source_id == SourceConfig.id)
                 .outerjoin(WatchRecord, WatchRecord.content_id == ContentItem.id)
+                .options(selectinload(WatchRecord.logs))
                 .filter(SourceConfig.source_type.in_(FILM_SOURCE_TYPES))
             )
             if status:
@@ -909,9 +913,14 @@ def mark_films(items: list[dict]) -> str:
             "movie"/"series", default movie) | title (+year). Optional fields:
             status (want/watching/watched/dropped/unmarked; default "watched"),
             my_rating (1-10), watched_at ("YYYY-MM-DD", or "YYYY-MM" / "YYYY" when only roughly
-            remembered; omit when unknown — never guess a date), comment (short review), tags (list).
+            remembered; omit when unknown — never guess a date), comment (the user's note for this
+            viewing, any length), tags (list, film-level), rewatch (true = record a NEW viewing
+            instead of editing the latest one; use when the user says they watched it again).
+            my_rating / watched_at / comment belong to a viewing; a film keeps one viewing log per
+            watch, and the latest one is what list_films shows.
             Example: [{"tmdb_id": "603", "kind": "movie", "status": "watched", "my_rating": 9},
-                      {"title": "一一", "year": 2000, "status": "watched"}]
+                      {"title": "一一", "year": 2000, "status": "watched"},
+                      {"title": "教父", "year": 1972, "rewatch": true, "watched_at": "2026-09", "my_rating": 10}]
     """
     from app.services.film_library import apply_record_update, get_or_create_record, resolve_or_create_film
 
@@ -937,10 +946,10 @@ def mark_films(items: list[dict]) -> str:
                     continue
                 record = get_or_create_record(db, content.id)
                 update = {"status": item.get("status") or "watched"}
-                for key in ("my_rating", "watched_at", "comment", "tags"):
+                for key in ("my_rating", "watched_at", "comment", "tags", "rewatch"):
                     if key in item and item[key] is not None:
                         update[key] = item[key]
-                errors = apply_record_update(record, update, content)
+                errors = apply_record_update(db, record, update, content)
                 if errors:
                     db.rollback()
                     results.append({"ok": False, "error": "; ".join(errors), "content_id": content.id, "title": content.title})

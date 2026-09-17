@@ -24,8 +24,17 @@ export function updateWatchRecord(contentId, data) {
   return api.put(`/films/${contentId}/record`, data)
 }
 
-export function updateFilmNote(contentId, userNote) {
-  return api.put(`/films/${contentId}/note`, { user_note: userNote })
+// 观看记录：一部片多次观看，各自有日期/评分/感想
+export function addWatchLog(contentId, data = {}) {
+  return api.post(`/films/${contentId}/logs`, data)
+}
+
+export function updateWatchLog(contentId, logId, data) {
+  return api.put(`/films/${contentId}/logs/${logId}`, data)
+}
+
+export function deleteWatchLog(contentId, logId) {
+  return api.delete(`/films/${contentId}/logs/${logId}`)
 }
 
 export function batchRecords(items) {

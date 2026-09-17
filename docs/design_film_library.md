@@ -48,7 +48,7 @@ ContentItem (影片 / 剧集)
   ├── author        = 导演（多位用 " / " 连接，仅冗余展示）
   ├── published_at  = 上映日期（仅知年份时取 YYYY-01-01）
   ├── source_id     → sync.emby 或 user.film 的 SourceConfig
-  ├── is_favorited / user_note = 沿用（user_note 作为长评）
+  ├── is_favorited  = 沿用（user_note 不再用于影视：长评已并入 watch_logs.note，0023）
   ├── status        = READY（不走流水线）
   └── raw_data      = 见 2.4
 ```
@@ -101,24 +101,38 @@ Upsert 规则：先按 `external_id` 精确匹配；Emby 条目从 `emby:<Id>` �
 }
 ```
 
-### 2.5 新增表: watch_records（用户标记）
+### 2.5 新增表: watch_records（片级标记）+ watch_logs（观看记录）
 
 ```sql
-CREATE TABLE watch_records (
+CREATE TABLE watch_records (                        -- 一部片一行
     id           TEXT PRIMARY KEY,
     content_id   TEXT NOT NULL UNIQUE REFERENCES content_items(id) ON DELETE CASCADE,
     status       TEXT NOT NULL DEFAULT 'unmarked',  -- unmarked / want / watching / watched / dropped
-    my_rating    SMALLINT,                          -- 1~10，可空；页面以五星（半星=奇数）展示
-    watched_at   DATE,                              -- 看过日期，NULL = 时间不详
-    watched_precision TEXT,                         -- day / month / year（0022）
     tags         TEXT[] DEFAULT '{}',
-    comment      TEXT,                              -- 短评（长评用 content_items.user_note）
     status_source TEXT DEFAULT 'manual',            -- manual / emby_autofill / douban_import
-    created_at   TIMESTAMP DEFAULT NOW(),
-    updated_at   TIMESTAMP DEFAULT NOW()
+    -- 以下为「最近一次观看」的缓存（sync_record_from_logs 维护），供列表排序/筛选/卡片
+    my_rating    SMALLINT,                          -- 最近一次打过分的观看的评分
+    watched_at   DATE,                              -- 最近一次观看的日期，NULL = 时间不详
+    watched_precision TEXT,                         -- day / month / year / release
+    created_at / updated_at
 );
-CREATE INDEX idx_watch_records_status ON watch_records(status);
+CREATE TABLE watch_logs (                           -- 一次观看一行；同一部片可多条（不同阶段重看）
+    id           TEXT PRIMARY KEY,
+    record_id    TEXT NOT NULL REFERENCES watch_records(id) ON DELETE CASCADE,
+    watched_at   DATE,                              -- NULL = 时间不详
+    watched_precision TEXT,                         -- day / month / year / release
+    my_rating    SMALLINT,                          -- 这一次的评分
+    note         TEXT,                              -- 这一次的感想，长短不限（不再分短评/长评）
+    created_at / updated_at
+);
 ```
+
+**观看记录（0023，2026-09-17）**：短评/长评的区分取消，改为"一部片多条观看记录"。片级只有状态和标签；评分、日期、感想都属于某一次观看。
+- 「最近一次」的判定：有效日期 = 具体日期本身 / 记到月或年取区间末日（封顶今天）/ 没写日期取录入日；同日按录入先后。刚记的一次没写日期也算最新。
+- 片级缓存：`watched_at` 取最近一次；`my_rating` 取最近一次**打过分**的观看（重看没打分则沿用上次）。
+- 快捷路径（卡片打分/感想、`PUT /record` 的 my_rating/watched_at/comment、MCP mark_films）都落到最近一次观看，没有则新建；`rewatch=true` 先新建一条再写。
+- 看过必有至少一条观看记录（点看过 → 建一条空记录，时间不详）。删观看记录不改状态。
+- 迁移 0023：每条看过/带评分/带短评/带长评的记录 → 一条观看记录，短评 + 长评合并为 note；`watch_records.comment` 删除，影视条目的 `user_note` 清空。
 
 **覆盖规则（核心）**：
 - 同步**永不**修改 `watch_records` 中 `status_source = manual` 的行。
@@ -126,7 +140,7 @@ CREATE INDEX idx_watch_records_status ON watch_records(status);
 - Emby 的 0% 播放记录、playCount 不触发任何自动填充（整理库时的验证播放会污染）。
 - 用户任何一次手动修改都把 `status_source` 置回 `manual`。
 - 看过日期带精度（迁移 0022，`watched_precision`）：手填 `YYYY` / `YYYY-MM` / `YYYY-MM-DD` → year / month / day；详情页主动选「不记得（按上映）」→ 传 `release`，按上映时间近似并标 precision=release，展示「≈2019（上映）」。**自动规则从不填日期**（点看过、打分自动看过都留空 = 时间不详，以后再补；2026-09-17 定）。Emby 自动填充用真实播放日期（day）。**评分蕴含看过**：给任何非看过状态（含弃了）的片打分即记为看过，仅在主动打分时触发。
-- 卡片坑位（桌面/手机同一套，手机两列，无长按面板）：星评一行 + 第二行按状态切换——未标记/想看/在看显示 想看/看过/弃了 按钮；看过/弃了显示短评入口（原地编辑、回车保存）和「⋯」改状态菜单。
+- 卡片坑位（桌面/手机同一套，手机两列，无长按面板）：星评一行 + 第二行按状态切换——未标记/想看/在看显示 想看/看过/弃了 按钮；看过/弃了显示最近一次感想入口（原地编辑、回车保存）、看过多次时显示 ×N，和「⋯」改状态菜单。详情页「观看记录」逐条编辑日期/评分/感想，「再记一次」新增。
 
 ---
 
@@ -182,8 +196,11 @@ SyncView 现有"运行"按钮 → `POST /api/sync/run/sync.emby`。不注册 per
 GET    /api/films                     列表；query: status, kind, genre, year_from, year_to, in_emby, min_rating, q, sort, page
 GET    /api/films/{id}                详情（ContentItem + watch_record）
 POST   /api/films                     手工添加
-PUT    /api/films/{id}/record         更新标记 {status, my_rating, watched_at, tags, comment}
-POST   /api/films/records/batch       批量标记 [{tmdb_id|content_id|title+year, status, my_rating?, watched_at?}]
+PUT    /api/films/{id}/record         更新标记 {status, tags, my_rating, watched_at, comment, rewatch}（后三项落到最近一次观看）
+POST   /api/films/{id}/logs           再记一次观看 {watched_at?, my_rating?, note?}
+PUT    /api/films/{id}/logs/{log_id}  改一次观看
+DELETE /api/films/{id}/logs/{log_id}  删一次观看
+POST   /api/films/records/batch       批量标记 [{tmdb_id|content_id|title+year, status, my_rating?, watched_at?, comment?}]
 GET    /api/films/search?q=           TMDb 搜索
 GET    /api/films/{id}/poster         海报代理（Emby Primary 图 → 无则 TMDb → 无则 404），不向前端暴露 Emby key
 GET    /api/films/stats               按状态/类型/年代计数（页面头部）
@@ -208,7 +225,7 @@ GET    /api/films/stats               按状态/类型/年代计数（页面头�
 |------|------|------|
 | `list_films(status?, kind?, genre?, year_from?, year_to?, in_emby?, q?, limit=200)` | 是 | 返回精简行：content_id、tmdb 键、标题、年份、类型、导演、状态、我的评分、Emby 事实摘要 |
 | `search_film(q, year?)` | 是 | TMDb 搜索，返回候选（供 agent 落库前确认 ID） |
-| `mark_films(items: list[{tmdb_id?, kind?, content_id?, title?, year?, status, my_rating?, watched_at?, comment?}])` | 否 | 批量建/改标记；不存在的影片先建骨架再标记；返回每条的结果 |
+| `mark_films(items: list[{tmdb_id?, kind?, content_id?, title?, year?, status, my_rating?, watched_at?, comment?, tags?, rewatch?}])` | 否 | 批量建/改标记；不存在的影片先建骨架再标记；`rewatch` 新记一次观看；返回每条的结果 |
 
 推荐流程：agent 先 `list_films` 拉全库 → 推荐时排除已有记录并带 TMDb ID → 用户回复"1、3、5 看过" → agent `mark_films` 一次落库。
 
