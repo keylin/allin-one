@@ -15,6 +15,7 @@ from app.schemas.bookmark_sync import (
     BookmarkSyncResponse,
     BookmarkSyncStatus,
 )
+from app.services.sync.runner import run_push_sync
 from app.services.sync.upsert import upsert_bookmarks
 
 logger = logging.getLogger(__name__)
@@ -123,7 +124,7 @@ def sync_bookmarks(
         return error_response(404, "书签同步源不存在")
 
     bookmarks_dicts = [bm.model_dump() for bm in body.bookmarks]
-    stats = upsert_bookmarks(db, source, bookmarks_dicts)
+    stats = run_push_sync(db, source, upsert_bookmarks, bookmarks_dicts)
 
     platform = _platform_name(source.source_type)
     logger.info(

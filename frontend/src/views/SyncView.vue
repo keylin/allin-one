@@ -1,6 +1,7 @@
 <script setup>
-import { ref, onMounted, onUnmounted, computed } from 'vue'
-import { getSyncStatus, setupEbookSync, setupVideoSync, setupFilmSync, triggerSync, linkCredential, streamSyncProgress } from '@/api/sync'
+import { ref, onMounted, computed } from 'vue'
+import { getSyncStatus, setupEbookSync, setupVideoSync, setupFilmSync, linkCredential } from '@/api/sync'
+import { useSyncRun } from '@/composables/useSyncRun'
 import { listCredentials } from '@/api/credentials'
 import { formatTimeShort } from '@/utils/time'
 import { useToast } from '@/composables/useToast'
@@ -10,8 +11,8 @@ const { success, error: showError } = useToast()
 const loading = ref(false)
 const plugins = ref([])
 
-// 同步进度状态: { [source_type]: { progressId, status, phase, message, current, total, controller } }
-const syncStates = ref({})
+// 同步进度状态: { [source_type]: { progressId, status, phase, message, current, total } }，由 useSyncRun 维护
+const { states: syncStates, run: runSync } = useSyncRun()
 
 // 凭证选项: { [platform]: [{id, display_name, status}] }
 const credentialOptions = ref({})
@@ -188,78 +189,12 @@ async function confirmBilibiliSync() {
   await doSync('sync.bilibili', opts)
 }
 
-async function doSync(sourceType, options) {
-  try {
-    const res = await triggerSync(sourceType, options)
-    if (res.code !== 0) {
-      showError(res.message || '触发同步失败')
-      return
-    }
-
-    const { progress_id } = res.data
-
-    // 初始化进度状态
-    syncStates.value[sourceType] = {
-      progressId: progress_id,
-      status: 'pending',
-      phase: '',
-      message: '正在排队...',
-      current: 0,
-      total: 0,
-      controller: null,
-    }
-
-    // 开启 SSE
-    const controller = streamSyncProgress(
-      progress_id,
-      // onUpdate
-      (event) => {
-        const state = syncStates.value[sourceType]
-        if (state) {
-          state.status = event.status
-          state.phase = event.phase
-          state.message = event.message
-          state.current = event.current
-          state.total = event.total
-        }
-      },
-      // onDone
-      (event) => {
-        const state = syncStates.value[sourceType]
-        if (event && event.status === 'failed') {
-          showError(event.error_message || '同步失败')
-        } else if (event && event.result_data) {
-          const r = event.result_data
-          const parts = []
-          if (r.new_videos) parts.push(`新增 ${r.new_videos} 条视频`)
-          if (r.updated_videos) parts.push(`更新 ${r.updated_videos} 条`)
-          if (r.new_books) parts.push(`新增 ${r.new_books} 本`)
-          if (r.updated_books) parts.push(`更新 ${r.updated_books} 本`)
-          if (r.new_annotations) parts.push(`新增 ${r.new_annotations} 条标注`)
-          if (r.new_films) parts.push(`新增 ${r.new_films} 部影片`)
-          if (r.changed_films ?? r.updated_films) parts.push(`有变化 ${r.changed_films ?? r.updated_films} 部`)
-          if (r.autofilled) parts.push(`自动标记看过 ${r.autofilled} 部`)
-          if (r.removed_from_emby) parts.push(`${r.removed_from_emby} 部已不在 Emby`)
-          success(`同步完成: ${parts.join(', ') || '无新增数据'}`)
-        } else {
-          success('同步完成')
-        }
-        // 清除状态并刷新
-        delete syncStates.value[sourceType]
-        fetchStatus()
-      },
-      // onError
-      (msg) => {
-        showError(`同步错误: ${msg}`)
-        delete syncStates.value[sourceType]
-        fetchStatus()
-      },
-    )
-
-    syncStates.value[sourceType].controller = controller
-  } catch {
-    showError('触发同步失败')
-  }
+function doSync(sourceType, options) {
+  return runSync(sourceType, options, {
+    onSuccess: (summary) => success(summary ? `同步完成: ${summary}` : '同步完成: 无新增数据'),
+    onError: (message) => showError(message),
+    onSettled: fetchStatus,
+  })
 }
 
 async function copyToClipboard(text) {
@@ -340,13 +275,7 @@ onMounted(() => {
 })
 
 // 清理 SSE 连接
-onUnmounted(() => {
-  for (const state of Object.values(syncStates.value)) {
-    if (state.controller) {
-      state.controller.abort()
-    }
-  }
-})
+// 进度流的断开由 useSyncRun 在卸载时统一处理
 </script>
 
 <template>

@@ -191,6 +191,31 @@ async def check_and_collect_sources(timestamp):
             )
 
 
+@proc_app.periodic(cron="20 19 * * *")  # 19:20 UTC = 03:20 CST
+@proc_app.task(queue="scheduled", queueing_lock="cleanup_job_queue")
+async def cleanup_job_queue(timestamp):
+    """任务队列自身的清理
+
+    Procrastinate 不会自己删已结束的作业：每分钟一次的采集心跳一年会攒下五十多万行
+    （审计时 procrastinate_jobs 4.9 万行 + events 14.7 万行，体量已接近 content_items）。
+    - 已结束（成功/失败/取消/中止）超过 7 天的作业连同事件一并删除
+    - worker 被杀后遗留在 doing 状态的作业：心跳已丢失超过 1 小时的，标记为失败
+    """
+    from procrastinate import jobs as jobs_module
+
+    jm = proc_app.job_manager
+    stalled = list(await jm.get_stalled_jobs(seconds_since_heartbeat=3600))
+    for job in stalled:
+        await jm.finish_job_by_id_async(job.id, jobs_module.Status.FAILED, delete_job=False)
+    if stalled:
+        logger.warning(f"[job_queue] {len(stalled)} 个僵死作业已标记为失败: {[j.id for j in stalled]}")
+
+    await jm.delete_old_jobs(
+        nb_hours=7 * 24, include_failed=True, include_cancelled=True, include_aborted=True,
+    )
+    logger.info("[job_queue] 已清理 7 天前结束的作业")
+
+
 @proc_app.periodic(cron="*/10 * * * *")
 @proc_app.task(queue="scheduled", queueing_lock="auto_sync_sources")
 async def auto_sync_sources(timestamp):

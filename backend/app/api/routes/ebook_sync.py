@@ -19,6 +19,7 @@ from app.schemas.ebook_sync import (
     EbookSyncResponse,
     EbookSyncStatus,
 )
+from app.services.sync.runner import run_push_sync
 from app.services.sync.upsert import upsert_ebooks
 
 logger = logging.getLogger(__name__)
@@ -163,7 +164,7 @@ async def sync_ebooks(
     async with lock:
         # 将 Pydantic 模型转为 dict 列表
         books_dicts = [b.model_dump(by_alias=False) for b in body.books]
-        stats = upsert_ebooks(db, source, books_dicts)
+        stats = run_push_sync(db, source, upsert_ebooks, books_dicts)
 
     platform = _platform_name(source.source_type)
     logger.info(

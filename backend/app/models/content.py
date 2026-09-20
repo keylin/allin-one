@@ -217,8 +217,9 @@ class CollectionRecord(Base):
     source = relationship("SourceConfig", back_populates="collection_records")
 
     __table_args__ = (
-        Index("ix_colrec_started_at", "started_at"),
-        Index("ix_colrec_status", "status"),
+        # 与库对齐（审计时模型声明了 ix_colrec_started_at / ix_colrec_status，库里从未建过；
+        # 库里实际有的 ix_colrec_source_id 模型反而没声明，会让 autogenerate 产出假 diff）
+        Index("ix_colrec_source_id", "source_id"),
         Index("ix_colrec_source_started", "source_id", "started_at"),
         Index("ix_colrec_source_status_started", "source_id", "status", "started_at"),
     )

@@ -25,8 +25,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-class PlaybackProgressBody(BaseModel):
-    position: int
+from app.api.routes.media import PlaybackProgressBody  # noqa: E402  与 /media 的进度端点共用
 
 
 @router.post("/download")
@@ -235,21 +234,12 @@ def save_playback_progress(
     body: PlaybackProgressBody,
     db: Session = Depends(get_db),
 ):
-    """保存视频播放进度"""
-    from app.core.time import utcnow
+    """保存播放进度 —— 与 PUT /api/media/{content_id}/progress 是同一个实现
 
-    media = db.query(MediaItem).filter(
-        MediaItem.content_id == content_id,
-        MediaItem.media_type.in_(["video", "audio"]),
-    ).first()
-    if not media:
-        return error_response(404, "Media not found")
-
-    media.playback_position = max(0, body.position)
-    media.last_played_at = utcnow()
-    db.commit()
-
-    return {"code": 0, "data": {"playback_position": media.playback_position}, "message": "ok"}
+    两个地址都保留（video-player 用这个，podcast-player 用 /media 的），逻辑只有一份。
+    """
+    from app.api.routes.media import save_playback_progress as _save
+    return _save(content_id, body, db)
 
 
 @router.delete("/{content_id}")

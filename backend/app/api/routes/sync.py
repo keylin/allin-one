@@ -99,12 +99,11 @@ def get_sync_status(db: Session = Depends(get_db)):
             )
             stats["in_emby"] = in_emby
 
-        # script 模式（外部脚本写入，不产生进度记录）只能退回 last_collected_at
-        last_sync = (
-            source.last_collected_at
-            if plugin["sync_mode"] == "script"
-            else last_sync_map.get(source.id)
-        )
+        # 内置同步与外部推送现在都写 sync_task_progress。script 模式在补记录之前的历史同步
+        # 没有进度行，这种情况才退回 last_collected_at
+        last_sync = last_sync_map.get(source.id)
+        if last_sync is None and plugin["sync_mode"] == "script":
+            last_sync = source.last_collected_at
 
         # 凭证信息
         credential_id = None

@@ -102,3 +102,49 @@ async def start_sync(db: Session, source: SourceConfig, options: dict | None = N
         raise SyncStartError(500, "任务入队失败") from e
 
     return progress
+
+
+def run_push_sync(db: Session, source: SourceConfig, upsert, items: list[dict]) -> dict:
+    """执行一次外部推送的落库，并留下运行记录
+
+    外部脚本 / Fountain 客户端经推送 API 写入时，此前不留任何痕迹：成功与否、何时同步过、
+    写了多少，服务端都查不到（审计 §3-C，18 条入口路径里 9 条无痕）。这里与内置同步共用
+    sync_task_progress，options_json._trigger = "push" 以示区分。
+    """
+    started = utcnow()
+    progress = SyncTaskProgress(
+        id=uuid.uuid4().hex,
+        source_id=source.id,
+        status="running",
+        phase="syncing",
+        total=len(items),
+        started_at=started,
+        options_json={"_trigger": "push"},
+    )
+    db.add(progress)
+    db.commit()
+    progress_id, source_id = progress.id, source.id
+
+    try:
+        stats = upsert(db, source, items)
+    except Exception as e:
+        db.rollback()
+        row = db.get(SyncTaskProgress, progress_id)
+        if row:
+            row.status = "failed"
+            row.phase = "done"
+            row.error_message = str(e)[:2000]
+            row.completed_at = utcnow()
+            db.commit()
+        logger.error(f"[sync] 推送落库失败 source={source_id}: {e}")
+        raise
+
+    row = db.get(SyncTaskProgress, progress_id)
+    row.status = "completed"
+    row.phase = "done"
+    row.current = len(items)
+    row.result_data = stats
+    row.message = f"推送同步完成: {len(items)} 条"
+    row.completed_at = utcnow()
+    db.commit()
+    return stats

@@ -146,7 +146,7 @@ const localVideoSrc = computed(() => {
     const filename = videoItem.local_path.split('/').pop()
     return `/api/media/${content.value.id}/${filename}`
   }
-  return `/api/media/${content.value.id}/stream`
+  return `/api/video/${content.value.id}/stream`   // 流式端点只在 /video 与 /audio 下；/media/{id}/stream 不存在
 })
 
 const renderedAnalysis = computed(() => {

@@ -2,7 +2,7 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { listFilms, getFilmStats, enrichMissing, updateWatchRecord, statusMeta, WATCH_STATUS_OPTIONS } from '@/api/films'
-import { triggerSync, streamSyncProgress } from '@/api/sync'
+import { useSyncRun } from '@/composables/useSyncRun'
 import { useToast } from '@/composables/useToast'
 import FilmDetailDrawer from '@/components/film-detail-drawer.vue'
 import FilmAddModal from '@/components/film-add-modal.vue'
@@ -242,13 +242,13 @@ function onDocClick(e) {
 const vFocus = { mounted: (el) => el.focus() }
 
 // ---- Emby 同步 ----
-const syncing = ref(false)
-const syncProgress = ref('')
-let syncController = null
+const { states: syncStates, run: runSync } = useSyncRun()
+const syncing = computed(() => !!syncStates.value['sync.emby'])
+const syncProgress = computed(() => syncStates.value['sync.emby']?.message || '')
 
 const syncHint = computed(() => {
   if (!stats.value?.emby_configured) return 'Emby 未配置，去同步管理绑定凭证'
-  return '从 Emby 拉取库存与观看状态'
+  return '从 Emby 拉取库存与观看状态（每 30 分钟也会自动同步一次）'
 })
 
 function runEmbySync() {
@@ -257,42 +257,10 @@ function runEmbySync() {
     showToast(syncHint.value, { type: 'info', duration: 6000 })
     return
   }
-  syncing.value = true
-  syncProgress.value = '正在排队...'
-  triggerSync('sync.emby')
-    .then((res) => {
-      if (res.code !== 0) {
-        showError(res.message || '触发同步失败')
-        syncing.value = false
-        return
-      }
-      syncController = streamSyncProgress(
-        res.data.progress_id,
-        (event) => { syncProgress.value = event.message || '同步中...' },
-        (event) => {
-          syncing.value = false
-          syncProgress.value = ''
-          if (event?.status === 'failed') {
-            showError(event.error_message || '同步失败')
-            return
-          }
-          const r = event?.result_data || {}
-          success(`同步完成：新增 ${r.new_films ?? 0}，有变化 ${r.changed_films ?? r.updated_films ?? 0}`)
-          reload()
-          fetchStats()
-        },
-        (msg) => {
-          syncing.value = false
-          syncProgress.value = ''
-          showError(msg || '同步失败')
-        },
-      )
-    })
-    .catch(() => {
-      syncing.value = false
-      syncProgress.value = ''
-      showError('触发同步失败')
-    })
+  runSync('sync.emby', {}, {
+    onSuccess: (summary) => { success(summary ? `同步完成：${summary}` : '同步完成：没有变化'); reload() },
+    onError: (message) => showError(message),
+  })
 }
 
 // ---- 补全元数据 ----
@@ -350,7 +318,6 @@ onMounted(() => {
 onUnmounted(() => {
   document.removeEventListener('click', onDocClick)
   if (observer) observer.disconnect()
-  syncController?.abort()
 })
 </script>
 

@@ -16,6 +16,7 @@ from app.schemas.video_sync import (
     VideoSyncResponse,
     VideoSyncStatus,
 )
+from app.services.sync.runner import run_push_sync
 from app.services.sync.upsert import upsert_videos
 
 logger = logging.getLogger(__name__)
@@ -116,7 +117,7 @@ def sync_videos(
 
     # 将 Pydantic 模型转为 dict 列表
     videos_dicts = [v.model_dump(by_alias=False) for v in body.videos]
-    stats = upsert_videos(db, source, videos_dicts)
+    stats = run_push_sync(db, source, upsert_videos, videos_dicts)
 
     platform = _platform_name(source.source_type)
     logger.info(

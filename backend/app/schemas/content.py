@@ -33,7 +33,6 @@ class ContentResponse(BaseModel):
     url: Optional[str] = None
     author: Optional[str] = None
     status: str = "pending"
-    language: Optional[str] = None
     published_at: Optional[datetime] = None
     collected_at: Optional[datetime] = None
     is_favorited: bool = False
