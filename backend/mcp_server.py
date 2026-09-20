@@ -48,6 +48,7 @@ from app.services.financial_data_client import (
     tool_enabled,
 )
 from app.services.financial_symbols import a_share_suffix, from_fd_symbol, to_fd_symbol
+from app.services import system_health
 from app.services.source_cleanup import SourceDeleteBlocked, cascade_delete_source
 from app.services.source_service import (
     validate_source_config,
@@ -83,6 +84,37 @@ def get_db():
         raise
     finally:
         db.close()
+
+
+# ============ 错误返回 ============
+#
+# 所有工具的失败都长一个样：{"error": "<给人看的文案>", "error_code": "<稳定的机器码>", ...附加字段}
+# - error 保持为字符串（早期工具就是这个形状，已有的调用方 / skill 提示词按它判断失败）
+# - error_code 供 agent 分支决策，取值只有下面这几个；新增前先想想现有的是否够用
+# - 附加字段按码约定: AMBIGUOUS → candidates；INVALID_ARGUMENT → 可选 valid_values；
+#   UPSTREAM_UNAVAILABLE → retryable；任何码都可带 hint（下一步该怎么做）
+# 批量工具里逐条的 {"ok": false, "error": ...} 是结果的一部分，不走这里。
+
+ERROR_CODES = {
+    "INVALID_ARGUMENT",      # 参数缺失 / 取值不合法，改参数重试
+    "NOT_FOUND",             # 指定的对象不存在
+    "AMBIGUOUS",             # 模糊匹配命中多个，从 candidates 里挑一个精确指定
+    "CONFLICT",              # 与现有状态冲突（重名、受保护的数据源不能非级联删除）
+    "NOT_CONFIGURED",        # 依赖的外部服务未配置 Key
+    "UPSTREAM_UNAVAILABLE",  # 外部接口暂不可用
+    "INTERNAL",              # 未预期异常，详情在 allin-mcp 容器日志
+}
+
+
+def _err(code: str, message: str, **extra) -> str:
+    assert code in ERROR_CODES, code
+    return json.dumps({"error": message, "error_code": code, **extra}, ensure_ascii=False, default=str)
+
+
+def _internal_error(tool: str, e: Exception) -> str:
+    logger.error("%s failed: %s", tool, e, exc_info=True)
+    return _err("INTERNAL", f"{tool} 内部错误: {type(e).__name__}: {e}",
+                hint="未预期异常，堆栈在 allin-mcp 容器日志里")
 
 
 # ============ 辅助函数 ============
@@ -129,34 +161,34 @@ def _resolve_source(db, source_id: str | None, source_name: str | None) -> tuple
     - source_name 使用模糊匹配，多个匹配时返回候选列表的 error_json
     """
     if not source_id and not source_name:
-        return None, json.dumps({"error": "需要提供 source_id 或 source_name"})
+        return None, _err("INVALID_ARGUMENT", "需要提供 source_id 或 source_name")
     if source_id:
         source = db.get(SourceConfig, source_id)
         if not source:
-            return None, json.dumps({"error": f"数据源不存在: {source_id}"})
+            return None, _err("NOT_FOUND", f"数据源不存在: {source_id}")
         return source, None
     # 按名称模糊查找
     matches = db.query(SourceConfig).filter(SourceConfig.name.ilike(f"%{source_name}%")).all()
     if not matches:
-        return None, json.dumps({"error": f"找不到名称匹配 '{source_name}' 的数据源"})
+        return None, _err("NOT_FOUND", f"找不到名称匹配 '{source_name}' 的数据源", hint="用 get_sources 查看现有数据源")
     if len(matches) > 1:
         candidates = [{"id": s.id, "name": s.name, "source_type": s.source_type} for s in matches]
-        return None, json.dumps({"error": f"找到 {len(matches)} 个匹配，请用 source_id 精确指定", "candidates": candidates})
+        return None, _err("AMBIGUOUS", f"找到 {len(matches)} 个匹配，请用 source_id 精确指定", candidates=candidates)
     return matches[0], None
 
 
 def _resolve_template_by_name(db, template_name: str) -> tuple[str | None, str | None]:
     """通过模板名称（模糊匹配）获取模板 ID。
 
-    返回: (template_id, error_msg)
+    返回: (template_id, error_json) — 恰好一个为 None。
     """
     matches = db.query(PipelineTemplate).filter(PipelineTemplate.name.ilike(f"%{template_name}%")).all()
     if not matches:
         all_names = [row[0] for row in db.query(PipelineTemplate.name).limit(20).all()]
-        return None, f"找不到模板 '{template_name}'，可用模板: {all_names}"
+        return None, _err("NOT_FOUND", f"找不到模板 '{template_name}'", valid_values=all_names)
     if len(matches) > 1:
         candidates = [t.name for t in matches]
-        return None, f"找到 {len(matches)} 个匹配模板: {candidates}，请提供更精确的名称"
+        return None, _err("AMBIGUOUS", f"找到 {len(matches)} 个匹配模板，请提供更精确的名称", candidates=candidates)
     return matches[0].id, None
 
 
@@ -238,10 +270,8 @@ def list_content(
             # Status filtering
             if status:
                 if status not in _VALID_STATUSES:
-                    return json.dumps({
-                        "error": f"Invalid status '{status}'",
-                        "valid_values": sorted(_VALID_STATUSES),
-                    })
+                    return _err("INVALID_ARGUMENT", f"Invalid status '{status}'",
+                                valid_values=sorted(_VALID_STATUSES))
                 query = query.filter(ContentItem.status == status)
             else:
                 query = query.filter(
@@ -302,8 +332,7 @@ def list_content(
                 default=str,
             )
     except Exception as e:
-        logger.error("list_content failed: %s", e, exc_info=True)
-        return json.dumps({"error": str(e)})
+        return _internal_error("list_content", e)
 
 
 @mcp.tool(annotations={"readOnlyHint": True})
@@ -318,7 +347,7 @@ def get_content_detail(content_id: str) -> str:
         with get_db() as db:
             item = db.get(ContentItem, content_id)
             if not item:
-                return json.dumps({"error": "Content not found", "content_id": content_id})
+                return _err("NOT_FOUND", "Content not found", content_id=content_id)
 
             analysis = _extract_analysis(item)
             processed = item.processed_content or ""
@@ -352,8 +381,7 @@ def get_content_detail(content_id: str) -> str:
                 "truncated": truncated,
             }, ensure_ascii=False, default=str)
     except Exception as e:
-        logger.error("get_content_detail failed: %s", e, exc_info=True)
-        return json.dumps({"error": str(e)})
+        return _internal_error("get_content_detail", e)
 
 
 @mcp.tool(annotations={"readOnlyHint": True})
@@ -428,8 +456,7 @@ def get_sources(
                 },
             }, ensure_ascii=False, default=str)
     except Exception as e:
-        logger.error("get_sources failed: %s", e, exc_info=True)
-        return json.dumps({"error": str(e)})
+        return _internal_error("get_sources", e)
 
 
 @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False})
@@ -444,13 +471,13 @@ def toggle_favorite(
         action: "favorite" (default) or "unfavorite".
     """
     if action not in ("favorite", "unfavorite"):
-        return json.dumps({"error": f"Invalid action '{action}'. Use 'favorite' or 'unfavorite'."})
+        return _err("INVALID_ARGUMENT", f"Invalid action '{action}'. Use 'favorite' or 'unfavorite'.")
 
     try:
         with get_db() as db:
             items = db.query(ContentItem).filter(ContentItem.id.in_(content_ids)).all()
             if not items:
-                return json.dumps({"error": "No matching content items found", "content_ids": content_ids})
+                return _err("NOT_FOUND", "No matching content items found", content_ids=content_ids)
 
             now = utcnow()
             updated_ids = []
@@ -475,8 +502,7 @@ def toggle_favorite(
                 result["not_found_ids"] = not_found
             return json.dumps(result, ensure_ascii=False)
     except Exception as e:
-        logger.error("toggle_favorite failed: %s", e, exc_info=True)
-        return json.dumps({"error": str(e)})
+        return _internal_error("toggle_favorite", e)
 
 
 @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True})
@@ -494,7 +520,7 @@ def mark_read(content_ids: list[str]) -> str:
         content_ids: List of content item IDs to mark as read.
     """
     if not content_ids:
-        return json.dumps({"error": "content_ids is empty"})
+        return _err("INVALID_ARGUMENT", "content_ids is empty")
 
     try:
         with get_db() as db:
@@ -524,8 +550,7 @@ def mark_read(content_ids: list[str]) -> str:
                 result["not_found_ids"] = not_found
             return json.dumps(result, ensure_ascii=False)
     except Exception as e:
-        logger.error("mark_read failed: %s", e, exc_info=True)
-        return json.dumps({"error": str(e)})
+        return _internal_error("mark_read", e)
 
 
 @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False})
@@ -563,12 +588,12 @@ def create_source(
                     inferred_type = "rss.standard"
                 else:
                     valid = sorted(e.value for e in SourceType)
-                    return json.dumps({"error": "无法推导 source_type，请明确提供", "valid_values": valid})
+                    return _err("INVALID_ARGUMENT", "无法推导 source_type，请明确提供", valid_values=valid)
 
             # 校验 source_type
             err = validate_source_type(inferred_type)
             if err:
-                return json.dumps({"error": err})
+                return _err("INVALID_ARGUMENT", err)
 
             # 构造 config_json
             config_json: dict = {}
@@ -578,19 +603,19 @@ def create_source(
             # 校验必填配置
             err = validate_source_config(inferred_type, url or None, config_json)
             if err:
-                return json.dumps({"error": err})
+                return _err("INVALID_ARGUMENT", err)
 
             # 名称唯一性
             err = validate_source_name_unique(name, db)
             if err:
-                return json.dumps({"error": err})
+                return _err("CONFLICT", err)
 
             # 解析模板
             template_id = None
             if pipeline_template_name:
                 template_id, err = _resolve_template_by_name(db, pipeline_template_name)
                 if err:
-                    return json.dumps({"error": err})
+                    return err
 
             # 构造数据源对象
             source_data = {
@@ -616,8 +641,7 @@ def create_source(
                 "source": {"id": source.id, "name": source.name, "source_type": source.source_type, "url": source.url},
             }, ensure_ascii=False)
     except Exception as e:
-        logger.error("create_source failed: %s", e, exc_info=True)
-        return json.dumps({"error": str(e)})
+        return _internal_error("create_source", e)
 
 
 @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True})
@@ -653,7 +677,7 @@ def update_source(
             if name.strip():
                 err = validate_source_name_unique(name.strip(), db, exclude_id=source.id)
                 if err:
-                    return json.dumps({"error": err})
+                    return _err("CONFLICT", err)
                 updates["name"] = name.strip()
             if url.strip():
                 updates["url"] = url.strip()
@@ -662,7 +686,7 @@ def update_source(
             if pipeline_template_name.strip():
                 template_id, err = _resolve_template_by_name(db, pipeline_template_name.strip())
                 if err:
-                    return json.dumps({"error": err})
+                    return err
                 updates["pipeline_template_id"] = template_id
             if schedule_interval_minutes == 0:
                 updates["schedule_mode"] = "auto"
@@ -672,7 +696,7 @@ def update_source(
                 updates["schedule_interval_override"] = schedule_interval_minutes
 
             if not updates:
-                return json.dumps({"error": "没有提供任何要更新的字段"})
+                return _err("INVALID_ARGUMENT", "没有提供任何要更新的字段")
 
             for k, v in updates.items():
                 setattr(source, k, v)
@@ -686,8 +710,7 @@ def update_source(
                 "changes": list(updates.keys()),
             }, ensure_ascii=False)
     except Exception as e:
-        logger.error("update_source failed: %s", e, exc_info=True)
-        return json.dumps({"error": str(e)})
+        return _internal_error("update_source", e)
 
 
 @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False})
@@ -718,7 +741,7 @@ def delete_source(
             try:
                 cascade_delete_source([sid], db, cascade=cascade)
             except SourceDeleteBlocked as e:
-                return json.dumps({"error": str(e)}, ensure_ascii=False)
+                return _err("CONFLICT", str(e), hint="该数据源下有用户数据；确认要连内容一起删除时传 cascade=True")
             db.commit()
 
             logger.info("MCP delete_source: %s (%s) cascade=%s", sid, sname, cascade)
@@ -730,8 +753,7 @@ def delete_source(
                 "note": "关联内容已删除" if cascade else "关联内容已保留（source_id 已置空）",
             }, ensure_ascii=False)
     except Exception as e:
-        logger.error("delete_source failed: %s", e, exc_info=True)
-        return json.dumps({"error": str(e)})
+        return _internal_error("delete_source", e)
 
 
 @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True})
@@ -750,7 +772,7 @@ def toggle_source(
         action: "enable" or "disable".
     """
     if action not in ("enable", "disable"):
-        return json.dumps({"error": f"Invalid action '{action}'. Use 'enable' or 'disable'."})
+        return _err("INVALID_ARGUMENT", f"Invalid action '{action}'. Use 'enable' or 'disable'.")
 
     try:
         with get_db() as db:
@@ -769,8 +791,146 @@ def toggle_source(
                 "is_active": source.is_active,
             }, ensure_ascii=False)
     except Exception as e:
-        logger.error("toggle_source failed: %s", e, exc_info=True)
-        return json.dumps({"error": str(e)})
+        return _internal_error("toggle_source", e)
+
+
+# ============ 运行健康度（只读） ============
+
+def _health_window(time_range: str) -> tuple[datetime | None, str | None]:
+    days = _TIME_RANGE_DAYS.get(time_range)
+    if days is None:
+        return None, _err("INVALID_ARGUMENT", f"Invalid time_range '{time_range}'",
+                          valid_values=sorted(_TIME_RANGE_DAYS))
+    return utcnow() - timedelta(days=days), None
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+def get_system_health(time_range: str = "7d") -> str:
+    """One-call answer to "is anything silently broken?". Start here for any ops question.
+
+    Returns only what needs attention (healthy parts are just counted):
+    - overall: "healthy" / "warning" / "error"
+    - sources.problems: collecting sources that keep failing or have a high 7-day failure rate
+      (reasons included). Source health always uses a fixed 7-day window.
+    - sync.problems: sync/push sources (Emby, Bilibili, WeChat Read, ...) whose last sync failed,
+      is stalled, lacks a credential, or whose auto-sync has fallen behind.
+    - background_jobs.failed: periodic tasks (daily report, cleanup, scheduler heartbeat...) that
+      failed within time_range. still_failing=true means it has not succeeded since — these are
+      failures no source-level record would ever show. The queue keeps no exception text; the
+      reason is in the worker container logs.
+    - background_jobs.stuck: jobs in "doing" for over an hour.
+
+    Follow up with get_source_health (one source, with run history) or get_recent_failures
+    (chronological error messages).
+
+    Args:
+        time_range: Window for background job failures: "1d/3d/7d". Finished jobs are purged
+            after 7 days, so "30d" sees no more than "7d".
+    """
+    since, err = _health_window(time_range)
+    if err:
+        return err
+    try:
+        with get_db() as db:
+            return json.dumps(system_health.system_health(db, since), ensure_ascii=False)
+    except Exception as e:
+        return _internal_error("get_system_health", e)
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+def get_source_health(
+    source_id: str = "",
+    source_name: str = "",
+    problems_only: bool = True,
+    runs: int = 10,
+) -> str:
+    """Health of data sources. Same verdicts as the web dashboard.
+
+    Without source_id/source_name: lists sources with their 7-day verdict
+    (error / warning / healthy / disabled / sync), reasons, failure rate, last collected time
+    and last time new content arrived.
+    With a source: adds that source's recent run history including error messages —
+    collection runs for collector sources, sync runs for sync/push sources. Use this to answer
+    "why did source X stop updating".
+
+    Note a source is only collected when is_active AND schedule_enabled are both true; both
+    are returned for a single source.
+
+    Args:
+        source_id: Source ID (exact match, preferred).
+        source_name: Source name (fuzzy match, used if source_id not provided).
+        problems_only: List mode only — return just error/warning sources (default True).
+            The summary counts always cover all sources.
+        runs: Single-source mode only — number of recent runs to include (default 10, max 50).
+    """
+    try:
+        with get_db() as db:
+            overview = system_health.source_health(db)
+
+            if not source_id and not source_name:
+                sources = overview["sources"]
+                if problems_only:
+                    sources = [s for s in sources if s["health"] in ("error", "warning")]
+                return json.dumps({
+                    "window_days": overview["window_days"],
+                    "summary": overview["summary"],
+                    "sources": sources,
+                }, ensure_ascii=False)
+
+            source, err = _resolve_source(db, source_id or None, source_name or None)
+            if err:
+                return err
+            verdict = next(s for s in overview["sources"] if s["id"] == source.id)
+            history = system_health.source_runs(db, source, limit=max(1, min(runs, 50)))
+            return json.dumps({
+                **verdict,
+                "schedule_enabled": source.schedule_enabled,
+                "schedule_mode": source.schedule_mode,
+                "next_collection_at": source.next_collection_at.isoformat() if source.next_collection_at else None,
+                **history,
+            }, ensure_ascii=False, default=str)
+    except Exception as e:
+        return _internal_error("get_source_health", e)
+
+
+@mcp.tool(annotations={"readOnlyHint": True})
+def get_recent_failures(
+    time_range: str = "1d",
+    source_id: str = "",
+    source_name: str = "",
+    limit: int = 30,
+) -> str:
+    """Chronological failure events with error messages, newest first.
+
+    Merges three kinds of run records: "collection" (collector sources), "sync" (built-in sync
+    and external push) and "background_job" (periodic tasks; no error text is stored for
+    these — check worker container logs). Filtering by source excludes background jobs.
+
+    Args:
+        time_range: "1d/3d/7d/30d" (default "1d"). Background jobs only go back 7 days.
+        source_id: Only failures of this source (exact match, preferred).
+        source_name: Source name (fuzzy match, used if source_id not provided).
+        limit: Max events to return (default 30, max 100).
+    """
+    since, err = _health_window(time_range)
+    if err:
+        return err
+    try:
+        with get_db() as db:
+            sid = None
+            if source_id or source_name:
+                source, err = _resolve_source(db, source_id or None, source_name or None)
+                if err:
+                    return err
+                sid = source.id
+            events = system_health.recent_failures(db, since, limit=max(1, min(limit, 100)), source_id=sid)
+            return json.dumps({
+                "time_range": time_range,
+                "count": len(events),
+                "failures": events,
+            }, ensure_ascii=False, default=str)
+    except Exception as e:
+        return _internal_error("get_recent_failures", e)
 
 
 # ============ 影视资料库 ============
@@ -877,8 +1037,7 @@ def list_films(
                 "returned": len(items), "has_more": offset + len(items) < total,
             }, ensure_ascii=False, default=str)
     except Exception as e:
-        logger.error("list_films failed: %s", e, exc_info=True)
-        return json.dumps({"error": str(e)})
+        return _internal_error("list_films", e)
 
 
 @mcp.tool(annotations={"readOnlyHint": True})
@@ -897,14 +1056,13 @@ def search_film(q: str, year: int = 0) -> str:
         with get_db() as db:
             api_key = get_tmdb_api_key(db)
         if not api_key:
-            return json.dumps({"error": "TMDb API key not configured; use mark_films with title+year instead"})
+            return _err("NOT_CONFIGURED", "TMDb API key not configured; use mark_films with title+year instead")
         results = tmdb_search(api_key, q, year or None)
         for r in results:
             r.pop("poster_path", None)
         return json.dumps({"results": results}, ensure_ascii=False)
     except Exception as e:
-        logger.error("search_film failed: %s", e, exc_info=True)
-        return json.dumps({"error": str(e)})
+        return _internal_error("search_film", e)
 
 
 @mcp.tool(annotations={"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True})
@@ -936,7 +1094,7 @@ def mark_films(items: list[dict]) -> str:
     from app.services.film_library import apply_record_update, get_or_create_record, resolve_or_create_film
 
     if not isinstance(items, list) or not items:
-        return json.dumps({"error": "items must be a non-empty list"})
+        return _err("INVALID_ARGUMENT", "items must be a non-empty list")
     results = []
     try:
         with get_db() as db:
@@ -974,8 +1132,7 @@ def mark_films(items: list[dict]) -> str:
         ok = sum(1 for r in results if r["ok"])
         return json.dumps({"processed": len(results), "ok": ok, "results": results}, ensure_ascii=False, default=str)
     except Exception as e:
-        logger.error("mark_films failed: %s", e, exc_info=True)
-        return json.dumps({"error": str(e)})
+        return _internal_error("mark_films", e)
 
 
 @mcp.tool(annotations={"readOnlyHint": True})
@@ -997,7 +1154,7 @@ def get_favorites_summary(
                 days_map = {"7d": 7, "30d": 30, "90d": 90}
                 days = days_map.get(time_range)
                 if days is None:
-                    return json.dumps({"error": f"Invalid time_range '{time_range}'. Use '7d', '30d', '90d', or 'all'."})
+                    return _err("INVALID_ARGUMENT", f"Invalid time_range '{time_range}'. Use '7d', '30d', '90d', or 'all'.")
                 since = utcnow() - timedelta(days=days)
 
             # 基础过滤条件（所有子查询复用）
@@ -1064,8 +1221,7 @@ def get_favorites_summary(
                 "recent": recent,
             }, ensure_ascii=False, default=str)
     except Exception as e:
-        logger.error("get_favorites_summary failed: %s", e, exc_info=True)
-        return json.dumps({"error": str(e)})
+        return _internal_error("get_favorites_summary", e)
 
 
 # ============ 金融数据工具 ============
@@ -1245,7 +1401,7 @@ async def _crypto_quote(symbols: str, keyword: str, limit: int) -> str:
                 if attempt < 2:
                     await asyncio.sleep(2 ** attempt * 5)
         if data is None:
-            return json.dumps({"error": "加密货币接口暂不可用（CoinGecko rate limit），请稍后重试"})
+            return _err("UPSTREAM_UNAVAILABLE", "加密货币接口暂不可用（CoinGecko rate limit），请稍后重试", retryable=True)
 
         records = []
         for coin in data:
@@ -1437,7 +1593,7 @@ async def get_market_snapshot() -> str:
             })
 
     if not results:
-        return json.dumps({"error": "行情接口暂不可用，请稍后重试"})
+        return _err("UPSTREAM_UNAVAILABLE", "行情接口暂不可用，请稍后重试", retryable=True)
 
     data_source = ("financial_data" if not legacy_hit else "mixed") if fd_hit else "legacy"
     if legacy_hit and fd is not None:
@@ -1483,7 +1639,7 @@ async def get_stock_quote(
         limit: 最大返回条数（默认 10，上限 50）
     """
     if not symbols and not keyword:
-        return json.dumps({"error": "请提供 symbols（代码）或 keyword（关键词）"})
+        return _err("INVALID_ARGUMENT", "请提供 symbols（代码）或 keyword（关键词）")
 
     import akshare as ak
 
@@ -1496,7 +1652,7 @@ async def get_stock_quote(
             return await _crypto_quote(symbols, keyword, limit)
 
         if market not in ("A", "HK", "US"):
-            return json.dumps({"error": f"不支持的市场: {market}，可选: A, HK, US, crypto"})
+            return _err("INVALID_ARGUMENT", f"不支持的市场: {market}，可选: A, HK, US, crypto")
 
         fd = _get_fd_client("quote")
 
@@ -1583,15 +1739,14 @@ async def get_stock_quote(
             if df is not None:
                 _finance_set_cache(cache_key, df)
         if df is None:
-            return json.dumps({"error": f"关键词搜索需要东方财富接口，当前不可用。请改用 symbols 参数直接查询代码"})
+            return _err("UPSTREAM_UNAVAILABLE", "关键词搜索需要东方财富接口，当前不可用。请改用 symbols 参数直接查询代码")
         df = df[df["名称"].str.contains(keyword, na=False)].head(limit)
         records = _df_to_records(df, _SPOT_FIELDS, _SPOT_STR)
         return json.dumps(
             {"stocks": records, "count": len(records), "market": market, "data_source": "legacy"},
             ensure_ascii=False, default=str)
     except Exception as e:
-        logger.error("get_stock_quote failed: %s", e, exc_info=True)
-        return json.dumps({"error": str(e)})
+        return _internal_error("get_stock_quote", e)
 
 
 _KLINE_FIELDS_TX = {
@@ -1632,7 +1787,7 @@ async def get_kline(
 
     valid_markets = {"A", "HK", "US", "index", "etf"}
     if market not in valid_markets:
-        return json.dumps({"error": f"market 须为 {'/'.join(valid_markets)}，收到: {market}"})
+        return _err("INVALID_ARGUMENT", f"market 须为 {'/'.join(valid_markets)}，收到: {market}")
 
     count = max(1, min(count, 250))
 
@@ -1750,7 +1905,7 @@ async def get_kline(
                     if adjust in ("qfq", "hfq"):
                         note = f"复权数据源不可用，本结果为主数据源不复权口径（请求 adjust={adjust}）"
                     return _fd_payload(data, note)
-            return json.dumps({"error": f"未找到 {symbol} ({market}) 的数据，请检查代码和市场类型"})
+            return _err("NOT_FOUND", f"未找到 {symbol} ({market}) 的数据，请检查代码和市场类型")
 
         df = df.tail(count)
         data = _df_to_records(df, fields, str_fields={"date"})
@@ -1761,8 +1916,7 @@ async def get_kline(
             "data": data, "count": len(data), "data_source": "legacy",
         }, ensure_ascii=False, default=str)
     except Exception as e:
-        logger.error("get_kline failed: %s", e, exc_info=True)
-        return json.dumps({"error": str(e)})
+        return _internal_error("get_kline", e)
 
 
 @mcp.tool(annotations={"readOnlyHint": True})
@@ -1785,7 +1939,7 @@ async def get_macro_indicator(
     key = indicator.lower().strip()
     if key not in _MACRO_MAP:
         available = ", ".join(_MACRO_MAP.keys())
-        return json.dumps({"error": f"未知指标 '{indicator}'，可选: {available}"})
+        return _err("INVALID_ARGUMENT", f"未知指标 '{indicator}'，可选: {available}")
 
     func_name, params, date_field, value_field, label = _MACRO_MAP[key]
     count = max(1, min(count, 120))
@@ -1826,7 +1980,7 @@ async def get_macro_indicator(
                 _finance_set_cache(cache_key, df)
 
         if df is None:
-            return json.dumps({"error": f"{label}: 接口暂不可用"})
+            return _err("UPSTREAM_UNAVAILABLE", f"{label}: 接口暂不可用", retryable=True)
 
         # akshare 部分指标按时间倒序排列，统一取最近 count 条
         if len(df) > 1 and date_field in df.columns:
@@ -1860,8 +2014,7 @@ async def get_macro_indicator(
             "data_source": "legacy",
         }, ensure_ascii=False, default=str)
     except Exception as e:
-        logger.error("get_macro_indicator failed: %s", e, exc_info=True)
-        return json.dumps({"error": str(e)})
+        return _internal_error("get_macro_indicator", e)
 
 
 if __name__ == "__main__":

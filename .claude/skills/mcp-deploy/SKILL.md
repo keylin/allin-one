@@ -56,6 +56,7 @@ def my_tool(
 - 使用 `with get_db_session() as db:` 管理数据库会话
 - 复杂查询用辅助函数（如 `_resolve_source(db, source_id, source_name)`）
 - JSONB 字段直接作为 dict 读取，不用 `json.loads()`
+- 失败一律用 `_err(code, message, **extra)`，未预期异常用 `_internal_error("工具名", e)`，不要手写 `json.dumps({"error": ...})`；`error_code` 取值与附加字段约定见 `docs/system_design.md` §10.3
 - annotations 声明:
   - 只读查询: `{"readOnlyHint": True}`
   - 写入操作: `{"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True/False}`

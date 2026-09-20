@@ -118,7 +118,7 @@ vim scripts/utils/cleanup_data.py
   - 筛选条（chip 区）只渲染 `overrides`，绝不渲染过滤器自身的条件——否则选中一个含 55 个来源的过滤器会把它们全铺成标签，这是历史上返工两次的形态。过滤器自身条件由快捷方式高亮表达。
   - 分类是消费视角不是源的属性，**不要给 `source_configs` 加 purpose 之类的字段**；同一个源在不同过滤器里可归不同组。
   - 外部消费方（the-one 的 `scripts/intel-query.py`）读同一个 key，按名字取「浏览」过滤器的 source_ids，用「全部源 - 浏览类」的排除法算情报源，保证新源默认进情报侧不被静默漏掉；旧 `feed.source_groups` 自动迁移且保留可回退
-- MCP 金融数据源: 蚂蚁 financial-data API 为主源（`FINANCIAL_DATA_*` 环境变量，key 走基础设施密钥模式，不经 system_settings+Fernet），akshare/雪球为降级路径；`FINANCIAL_DATA_ENABLED=false` 或留空 API key 即一键全量回退，详见 `docs/system_design.md` §10.5
+- MCP 金融数据源: 蚂蚁 financial-data API 为主源（`FINANCIAL_DATA_*` 环境变量，key 走基础设施密钥模式，不经 system_settings+Fernet），akshare/雪球为降级路径；`FINANCIAL_DATA_ENABLED=false` 或留空 API key 即一键全量回退，详见 `docs/system_design.md` §10.6
 
 ## 文档导航
 

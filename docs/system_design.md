@@ -1344,7 +1344,7 @@ docker compose exec -T postgres psql -U allinone allinone < data/backups/backup_
 
 ### 10.2 工具清单
 
-共 17 个工具，按读写属性分类：
+共 20 个工具，按读写属性分类：
 
 **只读工具 (readOnlyHint=True)**
 
@@ -1360,8 +1360,13 @@ docker compose exec -T postgres psql -U allinone allinone < data/backups/backup_
 | `get_macro_indicator` | 中国宏观经济指标 | indicator (cpi/ppi/pmi/gdp/m2/shibor) / count |
 | `list_films` | 影视资料库列表（元数据 + Emby 事实 + 用户标记），推荐前先拉全库 | status / kind / genre / year_from / year_to / in_emby / keyword / limit / offset |
 | `search_film` | TMDb 搜索取 tmdb_id（需 `tmdb_api_key`） | q / year |
+| `get_system_health` | 「有东西悄悄挂了吗」一次回答：只列有问题的部分——采集源异常、同步 / 推送源异常（上次失败、僵死、缺凭证、自动同步落后）、后台任务失败（`still_failing` 标出至今没再成功过的）与卡住的作业 | time_range (1d/3d/7d，仅作用于后台任务窗口) |
+| `get_source_health` | 数据源健康判定（与仪表盘同一口径）；指定数据源时附最近运行记录与错误文本，回答「某源为何停更」 | source_id / source_name / problems_only / runs |
+| `get_recent_failures` | 按时间倒序的失败事件流，合并采集、同步 / 推送、后台任务三类运行记录 | time_range / source_id / source_name / limit |
 
-金融数据工具以蚂蚁 financial-data API 为主数据源，akshare/雪球/腾讯/新浪为降级路径（crypto 走 CoinGecko），带内存缓存（TTL 按工具类型区分）和超时保护，不写入本地数据库。响应含 `data_source` 字段标识实际来源。详见 §10.5。
+运行健康度三个工具的判定逻辑在 `app/services/system_health.py`，`GET /api/dashboard/source-health` 调用同一份 `source_health()`，两边口径不会分叉。该模块只读：僵死的同步任务只标出、不回收。后台任务的失败来自 `procrastinate_jobs` / `procrastinate_events`——采集记录与同步记录都挂在数据源上，不属于任何数据源的定时任务（日报、清理、调度心跳）失败只有这里看得到；队列不保存异常文本（原因在 worker 容器日志），且已结束的作业 7 天后被 `cleanup_job_queue` 清除，所以最多回看 7 天。
+
+金融数据工具以蚂蚁 financial-data API 为主数据源，akshare/雪球/腾讯/新浪为降级路径（crypto 走 CoinGecko），带内存缓存（TTL 按工具类型区分）和超时保护，不写入本地数据库。响应含 `data_source` 字段标识实际来源。详见 §10.6。
 
 **写操作工具 (readOnlyHint=False)**
 
@@ -1375,13 +1380,29 @@ docker compose exec -T postgres psql -U allinone allinone < data/backups/backup_
 | `toggle_source` | False | True | 启用/禁用数据源 |
 | `mark_films` | False | True | 批量建/改影片观影标记（content_id / tmdb_id / title+year 定位，缺失影片先建骨架）；写入即 `status_source=manual`，Emby 同步不再覆盖 |
 
-### 10.3 数据源定位辅助函数
+### 10.3 错误返回约定
+
+所有工具失败时返回同一形状：`{"error": "<给人看的文案>", "error_code": "<机器码>", ...附加字段}`，由 `_err()` / `_internal_error()` 生成，不要再手写 `json.dumps({"error": ...})`。`error` 保持为字符串（与早期形状兼容），agent 按 `error_code` 分支：
+
+| error_code | 含义 | 附加字段 |
+|------------|------|----------|
+| `INVALID_ARGUMENT` | 参数缺失 / 取值不合法 | 可选 `valid_values` |
+| `NOT_FOUND` | 指定的对象不存在 | 定位用的入参、可选 `hint` |
+| `AMBIGUOUS` | 模糊匹配命中多个 | `candidates` |
+| `CONFLICT` | 与现有状态冲突（重名、受保护的数据源不能非级联删除） | 可选 `hint` |
+| `NOT_CONFIGURED` | 依赖的外部服务未配置 Key | — |
+| `UPSTREAM_UNAVAILABLE` | 外部接口暂不可用 | 可选 `retryable` |
+| `INTERNAL` | 未预期异常，堆栈在 `allin-mcp` 容器日志 | `hint` |
+
+批量工具（`mark_films`）里逐条的 `{"ok": false, "error": ...}` 是结果的一部分，不走此约定。REST API 的 `{code, data, message}` 不在此次统一范围内（前端有 153 处按现有形状判断，见审计 §4 🔴-6）。
+
+### 10.4 数据源定位辅助函数
 
 `_resolve_source(db, source_id, source_name)` — 写操作工具共用的定位逻辑：
 - `source_id` 精确匹配（优先）
-- `source_name` 模糊匹配（ilike），匹配多条时返回候选列表供 AI 确认
+- `source_name` 模糊匹配（ilike），匹配多条时返回 `AMBIGUOUS` + `candidates` 供 AI 确认
 
-### 10.4 服务层复用
+### 10.5 服务层复用
 
 MCP 写操作调用 `app/services/source_service.py` 中的共享校验函数，与 Router 保持一致：
 - `validate_source_type(source_type)` — 校验 SourceType 合法性
@@ -1389,7 +1410,7 @@ MCP 写操作调用 `app/services/source_service.py` 中的共享校验函数，
 - `validate_source_name_unique(name, db, exclude_id)` — 校验名称唯一性
 - `validate_template_exists(pipeline_template_id, db)` — 校验模板存在性
 
-### 10.5 金融数据源架构
+### 10.6 金融数据源架构
 
 > 定稿于 2026-09-04（g-design：architect-designer 方案 + product-reviewer 有条件通过后精简）
 

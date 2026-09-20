@@ -97,11 +97,11 @@ async def collect_single_source(source_id: str, trigger: str = "scheduled", use_
             db.rollback()
 
             # 分类错误类型
-            from app.services.collectors import classify_error
+            from app.services.collectors import classify_error, describe_error
             error_type = classify_error(e)
 
             # 生成带错误类型前缀的错误信息
-            error_msg = f"[{error_type.upper()}] {str(e)[:480]}"
+            error_msg = f"[{error_type.upper()}] {describe_error(e)[:480]}"
 
             # 查询最近的失败记录并更新 error_message
             latest_record = db.query(CollectionRecord).filter(

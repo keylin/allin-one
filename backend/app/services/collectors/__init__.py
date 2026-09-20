@@ -17,6 +17,12 @@ from app.services.collectors.generic_account import GenericAccountCollector
 logger = logging.getLogger(__name__)
 
 
+def describe_error(e: Exception) -> str:
+    """写进运行记录的错误文本。httpx 的超时 / 断连等异常 str() 是空串，只存它的话
+    记录里就剩一个「[TRANSIENT] 」，看不出失败原因 —— 为空时退回异常类型名。"""
+    return str(e) or type(e).__name__
+
+
 def classify_error(exception: Exception) -> str:
     """根据异常类型分类错误为暂时性或持续性
 
@@ -252,7 +258,7 @@ async def collect_source(source: SourceConfig, db: Session) -> list[ContentItem]
 
     except Exception as e:
         record.status = "failed"
-        record.error_message = str(e)[:500]
+        record.error_message = describe_error(e)[:500]
         record.completed_at = utcnow()
         db.commit()
 
