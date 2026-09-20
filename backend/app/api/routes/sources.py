@@ -368,8 +368,11 @@ def batch_delete_sources(
 
     source_ids = [s.id for s in sources]
 
-    from app.services.source_cleanup import cascade_delete_source
-    result = cascade_delete_source(source_ids, db, cascade)
+    from app.services.source_cleanup import SourceDeleteBlocked, cascade_delete_source
+    try:
+        result = cascade_delete_source(source_ids, db, cascade)
+    except SourceDeleteBlocked as e:
+        return error_response(409, str(e))
     db.commit()
 
     logger.info(f"Batch deleted {result['deleted']} sources (cascade={cascade})")
@@ -391,8 +394,11 @@ def delete_source(
     if not source:
         return error_response(404, "Source not found")
 
-    from app.services.source_cleanup import cascade_delete_source
-    result = cascade_delete_source([source_id], db, cascade)
+    from app.services.source_cleanup import SourceDeleteBlocked, cascade_delete_source
+    try:
+        result = cascade_delete_source([source_id], db, cascade)
+    except SourceDeleteBlocked as e:
+        return error_response(409, str(e))
     db.commit()
 
     logger.info(f"Source deleted: {source_id} (cascade={cascade})")

@@ -192,17 +192,16 @@ def preview_cleanup(db: Session = Depends(get_db)):
     if default_retention > 0:
         sources = db.query(SourceConfig).all()
 
+        from app.services.content_retention import expired_content_query, is_auto_cleanup_eligible
+
         for source in sources:
+            if not is_auto_cleanup_eligible(source):
+                continue
+
             retention = source.retention_days if source.retention_days and source.retention_days > 0 else default_retention
             cutoff = now - timedelta(days=retention)
 
-            count = db.query(ContentItem).filter(
-                ContentItem.source_id == source.id,
-                ContentItem.collected_at < cutoff,
-                ContentItem.is_favorited == False,
-                ContentItem.user_note.is_(None),
-            ).count()
-            content_count += count
+            content_count += expired_content_query(db, source, cutoff).count()
 
     # ---- 预览执行记录清理 ----
     exec_retention_days = get_setting("execution_retention_days", 30)

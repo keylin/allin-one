@@ -46,7 +46,7 @@ from app.services.financial_data_client import (
     tool_enabled,
 )
 from app.services.financial_symbols import a_share_suffix, from_fd_symbol, to_fd_symbol
-from app.services.source_cleanup import cascade_delete_source
+from app.services.source_cleanup import SourceDeleteBlocked, cascade_delete_source
 from app.services.source_service import (
     validate_source_config,
     validate_source_name_unique,
@@ -712,7 +712,10 @@ def delete_source(
             sid = source.id
             sname = source.name
 
-            cascade_delete_source([sid], db, cascade=cascade)
+            try:
+                cascade_delete_source([sid], db, cascade=cascade)
+            except SourceDeleteBlocked as e:
+                return json.dumps({"error": str(e)}, ensure_ascii=False)
             db.commit()
 
             logger.info("MCP delete_source: %s (%s) cascade=%s", sid, sname, cascade)

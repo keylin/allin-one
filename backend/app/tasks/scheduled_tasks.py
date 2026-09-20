@@ -321,9 +321,14 @@ async def cleanup_expired_content():
     """定时清理过期内容
 
     逻辑:
-    1. 读取全局默认 default_retention_days
-    2. 遍历所有 auto_cleanup_enabled=True 的数据源
-    3. 删除超过保留期且未收藏、无笔记的内容（级联删除关联数据+媒体文件）
+    1. 读取全局默认 default_retention_days（未配置时 30 天；0 = 永久保留）
+    2. 遍历网络采集类数据源；用户数据类（sync.* / user.* / file.*，即影视库、书、
+       书签、笔记、上传文件）永不自动清理
+    3. 删除超过保留期且不受保护的内容（级联删除关联数据+媒体文件）
+
+    可清理范围与保护条件统一定义在 app/services/content_retention.py。
+    注: source.auto_cleanup_enabled 目前不参与判定——清理是全局行为，按数据源只能
+    通过 retention_days 调整保留期。
     """
     import shutil
     from pathlib import Path
@@ -333,6 +338,7 @@ async def cleanup_expired_content():
     from app.core.time import utcnow
     from app.models.content import SourceConfig, ContentItem
     from app.models.system_setting import SystemSetting
+    from app.services.content_retention import expired_content_query, is_auto_cleanup_eligible
 
     with SessionLocal() as db:
         # 读取全局默认保留天数
@@ -352,18 +358,14 @@ async def cleanup_expired_content():
         total_deleted = 0
 
         for source in sources:
+            if not is_auto_cleanup_eligible(source):
+                continue
+
             retention = source.retention_days if source.retention_days and source.retention_days > 0 else global_retention
             cutoff = now - timedelta(days=retention)
 
             # 查找过期且未保护的内容 ID（仅查 ID 减少内存）
-            expired_ids = [
-                cid for (cid,) in db.query(ContentItem.id).filter(
-                    ContentItem.source_id == source.id,
-                    ContentItem.collected_at < cutoff,
-                    ContentItem.is_favorited == False,
-                    ContentItem.user_note.is_(None),
-                ).all()
-            ]
+            expired_ids = [cid for (cid,) in expired_content_query(db, source, cutoff).all()]
 
             if not expired_ids:
                 continue

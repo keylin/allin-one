@@ -154,7 +154,7 @@ CREATE TABLE source_configs (
     config_json     JSONB,                      -- 渠道特定配置 (JSON)
     credential_id   TEXT,                       -- 关联的平台凭证
     -- 内容保留
-    auto_cleanup_enabled BOOLEAN DEFAULT FALSE, -- 启用自动清理
+    auto_cleanup_enabled BOOLEAN DEFAULT FALSE, -- （当前不参与判定）清理是全局行为，见下方「内容保留策略」
     retention_days  INTEGER,                    -- 内容保留天数 (null=使用全局默认)
     -- 运行状态
     last_collected_at DATETIME,
@@ -169,6 +169,14 @@ CREATE TABLE source_configs (
 CREATE INDEX ix_source_credential_id ON source_configs(credential_id);
 CREATE INDEX ix_source_next_collection ON source_configs(is_active, schedule_enabled, next_collection_at);
 ```
+
+**内容保留策略**（唯一判定处 `app/services/content_retention.py`，定时清理与清理预览共用）：
+
+- 每日清理只作用于**网络采集类**数据源（`rss.*` / `podcast.*` / `web.*` / `api.*` / `account.*`）。保留期 = `source.retention_days`，为空则用全局 `default_retention_days`（未配置时 30 天，0 = 永久）。
+- **用户数据类**数据源（`sync.*` / `user.*` / `file.*`：影视库、书、书签、笔记、上传文件）**永不自动清理**。
+- 采集类内容满足任一条件即受保护：内容已收藏、有用户笔记、其下任一媒体项已收藏。
+- 删除数据源时，用户数据类数据源下若有内容，**拒绝非级联删除**（`SourceDeleteBlocked` → 409）：这类内容的领域身份依赖所属数据源，`source_id` 置空会让它们从影视库等页面消失。
+
 
 #### collection_records (数据源抓取记录)
 
