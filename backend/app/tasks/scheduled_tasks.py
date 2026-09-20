@@ -256,20 +256,25 @@ async def auto_sync_sources(timestamp):
                 logger.info(f"[auto_sync] {source.name}: 跳过（{e.message}）")
 
 
-@proc_app.periodic(cron="0 14 * * *")  # 14:00 UTC = 22:00 CST
-@proc_app.task(queue="scheduled", queueing_lock="daily_report")
-async def trigger_daily_report(timestamp):
-    """日报 — 每天 22:00 北京时间"""
-    from app.tasks.report_tasks import generate_daily_report
-    await generate_daily_report()
-
-
-@proc_app.periodic(cron="0 1 * * 1")  # 01:00 UTC Mon = 09:00 CST Mon
-@proc_app.task(queue="scheduled", queueing_lock="weekly_report")
-async def trigger_weekly_report(timestamp):
-    """周报 — 每周一 09:00 北京时间"""
-    from app.tasks.report_tasks import generate_weekly_report
-    await generate_weekly_report()
+# 日报 / 周报：2026-09-20 停用（用户决定）。此前从未成功过 —— report_tasks 的本意是
+# 「没配 LLM Key 就跳过 AI 总结、照常出报告」，但 get_llm_config() 在没 Key 时直接 raise，
+# 任务第一步就失败（日报 20 次、周报 3 次）。恢复前先修这条降级路径，再取消下面的注释；
+# 注意恢复后会开始每天写 REPORTS_DIR 并按通知设置推送。生成逻辑仍在 report_tasks.py。
+#
+# @proc_app.periodic(cron="0 14 * * *")  # 14:00 UTC = 22:00 CST
+# @proc_app.task(queue="scheduled", queueing_lock="daily_report")
+# async def trigger_daily_report(timestamp):
+#     """日报 — 每天 22:00 北京时间"""
+#     from app.tasks.report_tasks import generate_daily_report
+#     await generate_daily_report()
+#
+#
+# @proc_app.periodic(cron="0 1 * * 1")  # 01:00 UTC Mon = 09:00 CST Mon
+# @proc_app.task(queue="scheduled", queueing_lock="weekly_report")
+# async def trigger_weekly_report(timestamp):
+#     """周报 — 每周一 09:00 北京时间"""
+#     from app.tasks.report_tasks import generate_weekly_report
+#     await generate_weekly_report()
 
 
 @proc_app.periodic(cron="0 20 * * *")  # 20:00 UTC = 04:00 CST next day

@@ -43,7 +43,7 @@
 │  │  ┌──────────────────┐ ┌──────────────────────┐  │     │
 │  │  │ pipeline 队列     │ │ scheduled 队列        │  │     │
 │  │  │ (concurrency=4)  │ │ (concurrency=2)      │  │     │
-│  │  │ extract/localize │ │ 采集循环/日报/清理     │  │     │
+│  │  │ extract/localize │ │ 采集循环/同步/清理     │  │     │
 │  │  │ analyze/publish  │ │                       │  │     │
 │  │  └──────────────────┘ └──────────────────────┘  │     │
 │  └───────┼───────────┼───────────┼─────────────────┘     │
@@ -1085,13 +1085,9 @@ async def check_and_collect_sources(timestamp):
 @proc_app.task(queue="scheduled", queueing_lock="auto_sync_sources")
 async def auto_sync_sources(timestamp): ...
 
-# 日报 - 14:00 UTC (22:00 CST)
-@proc_app.periodic(cron="0 14 * * *")
-async def trigger_daily_report(timestamp): ...
-
-# 周报 - 周一 01:00 UTC (周一 09:00 CST)
-@proc_app.periodic(cron="0 1 * * 1")
-async def trigger_weekly_report(timestamp): ...
+# 日报 (0 14 * * *) / 周报 (0 1 * * 1)：2026-09-20 停用，定义在 scheduled_tasks.py 里注释保留。
+# 此前从未成功过：get_llm_config() 在未配置 LLM Key 时 raise，而 report_tasks 期望的是静默降级。
+# 恢复前先修这条降级路径。
 
 # 周期性分析 - 20:00 UTC (次日 04:00 CST)，只分析可调度的采集型数据源
 @proc_app.periodic(cron="0 20 * * *")
