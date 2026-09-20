@@ -265,7 +265,7 @@ MediaType 现在仅用于 `MediaItem`（媒体项），不再是 ContentItem 或
 
 ### 场景 7：Emby 影视资料库同步
 - **数据源类型**：`sync.emby`（SourceCategory.USER）
-- **接入模式**：Fountain (internal 模式) — `POST /api/sync/run/sync.emby`，SyncView 手动触发，不注册定时任务
+- **接入模式**：Fountain (internal 模式) — `POST /api/sync/run/sync.emby`，SyncView / 影视库页手动触发，另每 30 分钟自动同步一次（`auto_sync_sources`）
 - **凭证**：`platform=emby`，`credential_type=api_key`，`extra_info={base_url, user_name, user_id}`
 - **数据落点**：ContentItem（元数据 + `raw_data.emby` 观看事实）+ `watch_records`（用户标记，同步只填空不覆盖）
 - **详细设计**：`docs/design_film_library.md`

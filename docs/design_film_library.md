@@ -180,7 +180,7 @@ GET {base}/emby/Shows/{series_id}/Episodes?UserId={user_id}&Fields=UserData   �
 
 ### 3.3 手动触发
 
-SyncView 的"运行"按钮与 FilmsView 的「同步 Emby」按钮 → `POST /api/sync/run/sync.emby`。不注册 periodic 任务。
+SyncView 的"运行"按钮与 FilmsView 的「同步 Emby」按钮 → `POST /api/sync/run/sync.emby`。2026-09-20 起另有定时自动同步：periodic 任务 `auto_sync_sources` 每 10 分钟检查一次，按源类型注册表的 `auto_sync_minutes`（Emby = 30）到期即发起，与手动触发走同一条路径（`services/sync/runner.start_sync`）。`upsert_films` 在影片数据无变化时不写库（忽略 `emby.last_synced_at`），避免自动同步不停刷新 `updated_at`、霸占「最近更新」排序；同步结果里 `changed_films` 是真正有变化的数量。
 
 ---
 

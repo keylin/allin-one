@@ -423,6 +423,14 @@ def _parse_dt(value: str | None) -> datetime | None:
         return None
 
 
+def _ignoring_sync_stamp(raw: dict) -> dict:
+    """去掉每次同步都会变的时间戳，用于判断影片数据是否真的发生了变化"""
+    emby = raw.get("emby")
+    if not isinstance(emby, dict) or "last_synced_at" not in emby:
+        return raw
+    return {**raw, "emby": {k: v for k, v in emby.items() if k != "last_synced_at"}}
+
+
 def upsert_films(db: Session, source: SourceConfig, films: list[dict]) -> dict:
     """批量 upsert 影片。films 元素为规范化 dict：
 
@@ -433,7 +441,7 @@ def upsert_films(db: Session, source: SourceConfig, films: list[dict]) -> dict:
     规则：元数据整体覆盖（None 不覆盖）；emby 块整体覆盖；用户标记只填空不覆盖。
     返回 {"new_films", "updated_films", "autofilled", "content_ids": [...]}
     """
-    stats = {"new_films": 0, "updated_films": 0, "autofilled": 0, "content_ids": []}
+    stats = {"new_films": 0, "updated_films": 0, "changed_films": 0, "autofilled": 0, "content_ids": []}
     emby_conn = get_emby_connection(db)   # 海报落盘用（Emby 图走本地，TMDb 图出网一次）
 
     for film in films:
@@ -463,9 +471,9 @@ def upsert_films(db: Session, source: SourceConfig, films: list[dict]) -> dict:
             if content.external_id != external_id and external_id.startswith("tmdb:"):
                 content.external_id = external_id
             content.title = film["title"] or content.title
-            content.updated_at = utcnow()
 
-        raw = dict(content.raw_data) if isinstance(content.raw_data, dict) else {}
+        old_raw = content.raw_data if isinstance(content.raw_data, dict) else {}
+        raw = dict(old_raw)
         for key in _META_FIELDS:
             value = film.get(key)
             if value is not None and value != [] and value != "":
@@ -490,7 +498,13 @@ def upsert_films(db: Session, source: SourceConfig, films: list[dict]) -> dict:
         raw.setdefault("source", src)
         if src == "emby":
             raw["source"] = "emby"
-        content.raw_data = raw
+        # 只有内容真的变了才写库。同步会定时自动跑，若每次都写，Emby 里的全部影片会不停刷新
+        # updated_at、永久霸占影视库的「最近更新」排序。last_synced_at 每次都不同，比较时忽略。
+        if is_new or _ignoring_sync_stamp(raw) != _ignoring_sync_stamp(old_raw) or db.is_modified(content):
+            content.raw_data = raw
+            content.updated_at = utcnow()
+            if not is_new:
+                stats["changed_films"] += 1
 
         # 冗余展示字段
         directors = raw.get("directors") or []

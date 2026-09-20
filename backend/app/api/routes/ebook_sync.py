@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.models.content import ContentItem, SourceConfig, SourceType
+from app.models.source_types import push_types_for_domain
 from app.models.ebook import BookAnnotation
 from app.schemas import error_response
 from app.schemas.ebook_sync import (
@@ -45,13 +46,9 @@ def setup_ebook_sync(
     db: Session = Depends(get_db),
 ):
     """首次设置 — 自动创建 sync.* 类型的 SourceConfig"""
-    if not source_type.startswith("sync."):
-        return error_response(400, "source_type 必须以 sync. 开头")
-
-    # 校验 source_type 必须在 SourceType 枚举中
-    valid_types = {e.value for e in SourceType}
-    if source_type not in valid_types:
-        return error_response(400, f"不支持的 source_type: {source_type}")
+    # 只接受本领域、已实现、接受外部推送的数据源类型（由源类型注册表决定）
+    if source_type not in push_types_for_domain("ebook"):
+        return error_response(400, f"{source_type} 不是可用的电子书同步源类型")
 
     existing = db.query(SourceConfig).filter(
         SourceConfig.source_type == source_type,
@@ -155,8 +152,8 @@ async def sync_ebooks(
 ):
     """全量/增量同步 — 接收书籍元数据、阅读进度、标注"""
     source = db.get(SourceConfig, body.source_id)
-    if not source or not source.source_type.startswith("sync."):
-        return error_response(404, "同步源不存在")
+    if not source or source.source_type not in push_types_for_domain("ebook"):
+        return error_response(404, "同步源不存在，或不属于电子书领域")
 
     # Per-source_id 锁，防止并发请求产生重复 ContentItem
     lock = _sync_locks[body.source_id]

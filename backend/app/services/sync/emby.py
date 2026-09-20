@@ -197,7 +197,7 @@ class EmbyFetcher(BaseSyncFetcher):
                 await on_progress(SyncProgress(phase="done", message="Emby 库为空"))
             return SyncResult(success=True, stats={"new_films": 0, "updated_films": 0, "removed_from_emby": 0})
 
-        new_total = updated_total = autofilled_total = 0
+        new_total = updated_total = changed_total = autofilled_total = 0
         seen_ids: list[str] = []
         batch_size = 50
         for i in range(0, total, batch_size):
@@ -211,6 +211,7 @@ class EmbyFetcher(BaseSyncFetcher):
             stats = upsert_films(db, source, batch)
             new_total += stats["new_films"]
             updated_total += stats["updated_films"]
+            changed_total += stats["changed_films"]
             autofilled_total += stats["autofilled"]
             seen_ids.extend(stats["content_ids"])
 
@@ -218,10 +219,11 @@ class EmbyFetcher(BaseSyncFetcher):
 
         result_stats = {
             "new_films": new_total,
-            "updated_films": updated_total,
+            "updated_films": updated_total,     # 库里已有、本次核对过的
+            "changed_films": changed_total,     # 其中数据真的发生变化的
             "autofilled": autofilled_total,
             "removed_from_emby": removed,
-            "message": f"同步完成: 新增 {new_total}, 更新 {updated_total}, 自动标记看过 {autofilled_total}, 已不在 Emby {removed}",
+            "message": f"同步完成: 新增 {new_total}, 有变化 {changed_total}/{updated_total}, 自动标记看过 {autofilled_total}, 已不在 Emby {removed}",
         }
         if on_progress:
             await on_progress(SyncProgress(phase="done", message=result_stats["message"], current=total, total=total))

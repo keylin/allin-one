@@ -43,6 +43,9 @@ class SourceResponse(BaseModel):
     name: str
     source_type: str
     category: Optional[str] = None
+    runner: Optional[str] = None
+    collectable: bool = True
+    schedulable: bool = True
     url: Optional[str] = None
     description: Optional[str] = None
     schedule_enabled: bool = True

@@ -625,7 +625,7 @@ class BaseCollector(ABC):
 
 注意:
 - 没有 BilibiliVideoCollector / YouTubeVideoCollector。视频下载由流水线中的 `localize_media` 步骤 (yt-dlp) 处理, 不是 Collector 的职责。
-- `sync.*` 类型均属于 **Fountain 模式**，无 Collector 实现，不参与定时调度。数据通过两种方式推送：
+- `sync.*` 类型无 Collector 实现，不参与**采集**调度：这一点由源类型注册表（`app/models/source_types.py`，`runner` 字段）在调度器、采集任务、采集端点三处强制，不再只靠建源时的默认值。对它们调用采集端点返回 400；内置同步型可由注册表的 `auto_sync_minutes` 开启定时自动同步（目前仅 Emby）。数据通过两种方式推送：
   - **internal 模式**: 微信读书、B站等可通过 `/api/sync/run/{source_type}` 在服务端 Worker 内置 Fetcher 直接触发
   - **script 模式**: Apple Books 等需要本地数据的走外部脚本推送
 

@@ -251,7 +251,7 @@ async function handleToggleActive(source) {
     const newState = !source.is_active
     const payload = { is_active: newState }
     // 启用时同步恢复定时采集，避免出现「已启用但调度禁用」的死状态（用户类型源无调度）
-    const restoreSchedule = newState && !source.schedule_enabled && !isUserSource(source)
+    const restoreSchedule = newState && !source.schedule_enabled && source.schedulable !== false
     if (restoreSchedule) payload.schedule_enabled = true
     const res = await store.updateSource(source.id, payload)
     if (res.code === 0) {
@@ -841,13 +841,21 @@ async function handleExportFull() {
                     添加内容
                   </button>
                   <button
-                    v-else
+                    v-else-if="source.collectable !== false"
                     class="px-2 py-1 text-xs font-medium text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all duration-200 disabled:opacity-50"
                     :disabled="collectingId === source.id"
                     @click="handleCollect(source)"
                   >
                     {{ collectingId === source.id ? '采集中...' : '采集' }}
                   </button>
+                  <!-- 同步类数据源没有采集器，由同步管理页驱动（后端 runner 字段决定，见源类型注册表） -->
+                  <router-link
+                    v-else-if="source.runner === 'syncer' || source.runner === 'push'"
+                    to="/sync"
+                    class="px-2 py-1 text-xs font-medium text-emerald-600 hover:bg-emerald-50 rounded-lg transition-all duration-200"
+                  >
+                    去同步
+                  </router-link>
                   <button
                     class="px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-all duration-200"
                     @click="openEdit(source)"

@@ -61,7 +61,14 @@ async def check_and_collect_sources(timestamp):
         sources_deferred = 0
         sources_skipped = 0
 
+        from app.models.source_types import is_schedulable
+
         for source in sources:
+            # 只有采集型数据源进调度；同步类即使被误设了 schedule_enabled 也不入队
+            if not is_schedulable(source.source_type):
+                sources_skipped += 1
+                continue
+
             # 二次确认（防止并发或时间偏移）
             if not SchedulingService.should_collect_now(source, now):
                 sources_skipped += 1
@@ -184,6 +191,46 @@ async def check_and_collect_sources(timestamp):
             )
 
 
+@proc_app.periodic(cron="*/10 * * * *")
+@proc_app.task(queue="scheduled", queueing_lock="auto_sync_sources")
+async def auto_sync_sources(timestamp):
+    """内置同步型数据源的自动同步 —— 每 10 分钟检查一次，到期的发起同步
+
+    哪些类型自动同步、间隔多久，由源类型注册表的 auto_sync_minutes 决定（目前只有 Emby）。
+    复用手动触发的同一条路径 (start_sync → run_sync)，因此同样有进度记录与互斥。
+    失败不重试：下一轮自然会再试；凭证失效等需要人处理的问题会留在进度记录里。
+    """
+    from datetime import timedelta
+    from sqlalchemy import func
+    from app.core.database import SessionLocal
+    from app.core.time import utcnow
+    from app.models.content import SourceConfig
+    from app.models.source_types import auto_sync_specs
+    from app.models.sync_progress import SyncTaskProgress
+    from app.services.sync.runner import SyncStartError, start_sync
+
+    with SessionLocal() as db:
+        for spec in auto_sync_specs():
+            source = db.query(SourceConfig).filter(
+                SourceConfig.source_type == spec.type.value,
+                SourceConfig.is_active == True,  # noqa: E712
+            ).first()
+            if not source or (spec.credential_required and not source.credential_id):
+                continue
+
+            last_run = db.query(func.max(SyncTaskProgress.created_at)).filter(
+                SyncTaskProgress.source_id == source.id,
+            ).scalar()
+            if last_run and utcnow() - last_run < timedelta(minutes=spec.auto_sync_minutes):
+                continue
+
+            try:
+                progress = await start_sync(db, source, None, trigger="auto")
+                logger.info(f"[auto_sync] {source.name}: 已发起同步 {progress.id}")
+            except SyncStartError as e:
+                logger.info(f"[auto_sync] {source.name}: 跳过（{e.message}）")
+
+
 @proc_app.periodic(cron="0 14 * * *")  # 14:00 UTC = 22:00 CST
 @proc_app.task(queue="scheduled", queueing_lock="daily_report")
 async def trigger_daily_report(timestamp):
@@ -214,6 +261,9 @@ async def analyze_source_periodicity(timestamp):
             SourceConfig.is_active == True,
             SourceConfig.schedule_mode == "auto",
         ).all()
+
+        from app.models.source_types import is_schedulable
+        sources = [s for s in sources if is_schedulable(s.source_type)]
 
         analyzed_count = 0
         for source in sources:

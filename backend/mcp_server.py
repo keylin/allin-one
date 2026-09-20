@@ -31,6 +31,7 @@ from sqlalchemy.orm import joinedload, sessionmaker
 
 from app.core.config import settings
 from app.core.time import utcnow
+from app.models.source_types import is_schedulable
 from app.models.content import (
     FEED_SCOPE,
     ContentItem,
@@ -600,8 +601,8 @@ def create_source(
                 "description": description.strip() or None,
                 "pipeline_template_id": template_id,
                 "config_json": config_json if config_json else None,
-                "schedule_enabled": get_source_category(inferred_type) != SourceCategory.USER,
-                "schedule_mode": "auto" if schedule_interval_minutes == 0 else "fixed",
+                "schedule_enabled": is_schedulable(inferred_type),
+                "schedule_mode": ("auto" if schedule_interval_minutes == 0 else "fixed") if is_schedulable(inferred_type) else "manual",
                 "schedule_interval_override": schedule_interval_minutes if schedule_interval_minutes > 0 else None,
             }
             source = SourceConfig(**source_data)

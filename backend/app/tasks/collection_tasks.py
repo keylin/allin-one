@@ -35,6 +35,14 @@ async def collect_single_source(source_id: str, trigger: str = "scheduled", use_
             logger.info(f"[collect_task] Source {source_id} not found or inactive, skipping")
             return
 
+        from app.models.source_types import is_collectable
+        if not is_collectable(source.source_type):
+            # 同步类 / 纯归属容器类数据源没有采集器。不写采集记录、不动 last_collected_at 与调度状态
+            logger.warning(
+                f"[collect_task] {source.name} ({source.source_type}) 不是采集型数据源，已跳过 (trigger={trigger})"
+            )
+            return
+
         try:
             # ---- 第一阶段: Collector 抓取, 产出 ContentItem ----
             if use_retry:

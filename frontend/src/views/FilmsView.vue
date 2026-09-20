@@ -277,7 +277,7 @@ function runEmbySync() {
             return
           }
           const r = event?.result_data || {}
-          success(`同步完成：新增 ${r.new_films ?? 0}，更新 ${r.updated_films ?? 0}`)
+          success(`同步完成：新增 ${r.new_films ?? 0}，有变化 ${r.changed_films ?? r.updated_films ?? 0}`)
           reload()
           fetchStats()
         },

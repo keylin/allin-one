@@ -3,7 +3,6 @@
 import asyncio
 import json
 import logging
-import uuid
 
 from fastapi import APIRouter, Depends, Path
 from fastapi.responses import StreamingResponse
@@ -25,58 +24,22 @@ from app.schemas.sync import (
     SyncRunResponse,
     SyncStatusResponse,
 )
+from app.models.source_types import sync_panel_plugins
 from app.services.sync import SYNC_FETCHERS
+from app.services.sync.runner import SyncStartError, expire_stale_progress, start_sync
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# 插件注册表
-SYNC_PLUGINS = [
-    {
-        "source_type": "sync.apple_books",
-        "name": "Apple Books",
-        "category": "ebook",
-        "description": "从 macOS Apple Books 同步书籍与标注",
-        "credential_required": False,
-        "sync_mode": "script",      # 读取本地 macOS 数据库，只能通过脚本同步
-    },
-    {
-        "source_type": "sync.wechat_read",
-        "name": "微信读书",
-        "category": "ebook",
-        "description": "从微信读书同步书籍与标注",
-        "credential_required": True,
-        "sync_mode": "internal",    # Worker 内置 Fetcher
-    },
-    {
-        "source_type": "sync.bilibili",
-        "name": "Bilibili",
-        "category": "video",
-        "description": "从 B站同步收藏/历史/动态视频",
-        "credential_required": True,
-        "sync_mode": "internal",
-    },
-    {
-        "source_type": "sync.emby",
-        "name": "Emby",
-        "category": "film",
-        "description": "从 Emby 媒体库同步电影/剧集与观看状态到影视资料库（只读，手动触发）",
-        "credential_required": True,
-        "sync_mode": "internal",
-    },
-]
-
-# 平台 → credential platform 映射
-_PLATFORM_MAP = {
-    "sync.bilibili": "bilibili",
-    "sync.wechat_read": "wechat_read",
-    "sync.emby": "emby",
-}
+# 同步面板的插件清单由源类型注册表派生（app/models/source_types.py），这里不再维护第二份
+SYNC_PLUGINS = sync_panel_plugins()
 
 
 @router.get("/status")
 def get_sync_status(db: Session = Depends(get_db)):
     """返回所有 sync 插件的配置状态与统计"""
+    expire_stale_progress(db)
+
     # 一次性查出所有 sync.* 源
     sync_sources = db.query(SourceConfig).filter(
         SourceConfig.source_type.like("sync.%"),
@@ -191,61 +154,16 @@ async def trigger_sync(
     db: Session = Depends(get_db),
 ):
     """触发同步任务 — 创建进度记录 + defer Worker 任务"""
-    from app.tasks.sync_tasks import run_sync
-    from app.tasks.procrastinate_app import async_defer
-
-    # 查找插件元数据
-    plugin_meta = next((p for p in SYNC_PLUGINS if p["source_type"] == source_type), None)
-
-    # script 模式不支持在线触发
-    if plugin_meta and plugin_meta.get("sync_mode") == "script":
-        return error_response(400, f"{plugin_meta['name']} 需要在本机运行脚本同步，不支持在线触发")
-
-    # 查找源
     source = db.query(SourceConfig).filter(
         SourceConfig.source_type == source_type,
     ).first()
     if not source:
         return error_response(404, f"同步源 {source_type} 未初始化，请先初始化")
 
-    # 检查凭证（部分插件不需要凭证）
-    if plugin_meta and plugin_meta.get("credential_required", True):
-        if not source.credential_id:
-            return error_response(400, "未绑定凭证，请先绑定 Cookie")
-
-    # 检查是否有正在运行的任务
-    running = db.query(SyncTaskProgress).filter(
-        SyncTaskProgress.source_id == source.id,
-        SyncTaskProgress.status.in_(["pending", "running"]),
-    ).first()
-    if running:
-        return error_response(409, "已有同步任务在进行中，请等待完成")
-
-    # 创建进度记录
-    progress = SyncTaskProgress(
-        id=uuid.uuid4().hex,
-        source_id=source.id,
-        status="pending",
-        options_json=body.options if body.options else None,
-    )
-    db.add(progress)
-    db.commit()
-
-    # Defer task
     try:
-        await async_defer(
-            run_sync,
-            source_id=source.id,
-            progress_id=progress.id,
-            # options_str 是 JSON 字符串（Procrastinate 任务参数），区别于同名 JSONB 列
-            options_str=json.dumps(body.options, ensure_ascii=False) if body.options else "{}",
-        )
-    except Exception as e:
-        logger.error(f"Failed to defer sync task: {e}")
-        progress.status = "failed"
-        progress.error_message = f"任务入队失败: {e}"
-        db.commit()
-        return error_response(500, "任务入队失败")
+        progress = await start_sync(db, source, body.options or None, trigger="manual")
+    except SyncStartError as e:
+        return error_response(e.code, e.message)
 
     return {
         "code": 0,

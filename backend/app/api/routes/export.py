@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.time import utcnow
 from app.models.content import SourceConfig
+from app.models.source_types import get_spec, is_schedulable
 from app.schemas import error_response
 
 logger = logging.getLogger(__name__)
@@ -102,6 +103,12 @@ async def import_full(
                     errors.append(f"跳过无效条目：缺少 source_type (name={name})")
                     continue
 
+                spec = get_spec(source_type)
+                if not spec or not spec.implemented:
+                    errors.append(f"跳过无效条目：未知或未实现的 source_type={source_type} (name={name})")
+                    continue
+                schedulable = is_schedulable(source_type)
+
                 # 去重检查
                 if url:
                     existing = db.query(SourceConfig).filter(
@@ -131,8 +138,9 @@ async def import_full(
                     source_type=source_type,
                     url=url,
                     description=item.get("description"),
-                    schedule_enabled=item.get("schedule_enabled", True),
-                    schedule_mode=item.get("schedule_mode", "auto"),
+                    # 非采集型数据源不进调度，无论导入文件里怎么写
+                    schedule_enabled=item.get("schedule_enabled", True) if schedulable else False,
+                    schedule_mode=item.get("schedule_mode", "auto") if schedulable else "manual",
                     schedule_interval_override=item.get("schedule_interval_override"),
                     pipeline_template_id=pipeline_template_id,
                     config_json=item.get("config_json"),

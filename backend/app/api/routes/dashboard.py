@@ -14,6 +14,7 @@ from app.core.timezone_utils import (
     get_local_today, get_local_date_offset, get_local_date_range,
 )
 from app.models.content import SourceConfig, ContentItem, CollectionRecord, FEED_SCOPE
+from app.models.source_types import is_schedulable
 from app.models.ebook import BookAnnotation
 from app.models.pipeline import PipelineExecution, PipelineStatus
 
@@ -29,15 +30,12 @@ _PIPELINE_FAILED_WINDOW_HOURS = 24
 # 数据源健康的失败率统计窗口
 _SOURCE_HEALTH_WINDOW_DAYS = 7
 
-# 非采集型数据源：靠外部同步脚本/用户提交写入，没有采集记录，不参与健康判定
-_NON_COLLECTING_PREFIXES = ("sync.",)
-_NON_COLLECTING_TYPES = {"user.note", "file.upload", "system.notification"}
-
-
 def _is_non_collecting(source_type: str | None) -> bool:
+    """不进定时调度的数据源（同步类、用户提交、纯归属容器、手动目录扫描）没有持续的采集记录，
+    不参与健康判定。判定依据是源类型注册表，不再自维护名单（旧名单漏了 user.film）。"""
     if not source_type:
         return False
-    return source_type in _NON_COLLECTING_TYPES or source_type.startswith(_NON_COLLECTING_PREFIXES)
+    return not is_schedulable(source_type)
 
 
 @router.get("/stats")

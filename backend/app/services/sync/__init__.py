@@ -10,3 +10,10 @@ SYNC_FETCHERS: dict[str, type] = {
     "sync.wechat_read": WechatReadFetcher,
     "sync.emby": EmbyFetcher,
 }
+
+# 与源类型注册表对账：内置同步器清单必须恰好等于 runner=syncer 的类型
+from app.models.source_types import Runner, types_with_runner  # noqa: E402
+
+assert set(SYNC_FETCHERS) == types_with_runner(Runner.SYNCER), (
+    f"SYNC_FETCHERS 与源类型注册表不一致: {set(SYNC_FETCHERS) ^ types_with_runner(Runner.SYNCER)}"
+)

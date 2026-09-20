@@ -225,6 +225,7 @@ const displayUrl = computed(() => {
     <!-- Action bar -->
     <div class="flex items-center gap-2 px-6 py-3 border-t border-slate-100 shrink-0 bg-white">
       <button
+        v-if="source.collectable !== false"
         class="px-4 py-2 text-sm font-medium text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors disabled:opacity-50"
         :disabled="collectingId === source.id"
         @click="emit('collect', source)"

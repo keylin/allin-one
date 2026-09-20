@@ -237,7 +237,7 @@ async function doSync(sourceType, options) {
           if (r.updated_books) parts.push(`更新 ${r.updated_books} 本`)
           if (r.new_annotations) parts.push(`新增 ${r.new_annotations} 条标注`)
           if (r.new_films) parts.push(`新增 ${r.new_films} 部影片`)
-          if (r.updated_films) parts.push(`更新 ${r.updated_films} 部`)
+          if (r.changed_films ?? r.updated_films) parts.push(`有变化 ${r.changed_films ?? r.updated_films} 部`)
           if (r.autofilled) parts.push(`自动标记看过 ${r.autofilled} 部`)
           if (r.removed_from_emby) parts.push(`${r.removed_from_emby} 部已不在 Emby`)
           success(`同步完成: ${parts.join(', ') || '无新增数据'}`)

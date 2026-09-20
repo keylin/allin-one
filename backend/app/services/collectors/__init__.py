@@ -77,9 +77,14 @@ COLLECTOR_MAP = {
     "account.generic": _generic_account_collector,
 }
 
-_USER_SUBMISSION_TYPES = {
-    "user.note", "file.upload", "system.notification",
-}
+# 与源类型注册表对账：采集器清单必须恰好等于 runner=collector 的类型，
+# 否则「能不能采集」会再次出现两份答案（2026-09 审计 §3-C）
+from app.models.source_types import Runner, is_collectable, types_with_runner  # noqa: E402
+
+assert set(COLLECTOR_MAP) == types_with_runner(Runner.COLLECTOR), (
+    f"COLLECTOR_MAP 与源类型注册表不一致: "
+    f"{set(COLLECTOR_MAP) ^ types_with_runner(Runner.COLLECTOR)}"
+)
 
 
 async def collect_with_retry(collector, source: SourceConfig, db: Session, config: dict) -> list[ContentItem]:
@@ -183,16 +188,9 @@ async def collect_source_with_retry(source: SourceConfig, db: Session) -> list[C
         collector = COLLECTOR_MAP.get(source.source_type)
 
         if not collector:
-            if source.source_type in _USER_SUBMISSION_TYPES:
-                logger.debug(f"[collect] User-submission type {source.source_type}, skipping collection")
-            else:
-                logger.error(f"[collect] Unknown source_type: {source.source_type}")
-            record.status = "completed"
-            record.items_found = 0
-            record.items_new = 0
-            record.completed_at = utcnow()
-            db.commit()
-            return []
+            # 调用方（collect_single_source / 采集端点）已用 is_collectable 拦截，走到这里说明有新的
+            # 入口绕过了判定。记为失败而不是「成功 0 条」——假成功会污染成功率统计与调度活跃度。
+            raise ValueError(f"数据源类型 {source.source_type} 不支持采集")
 
         # 调用带重试的采集（先清掉上一次可能残留的发现数）
         take_found(0)
@@ -236,16 +234,9 @@ async def collect_source(source: SourceConfig, db: Session) -> list[ContentItem]
         collector = COLLECTOR_MAP.get(source.source_type)
 
         if not collector:
-            if source.source_type in _USER_SUBMISSION_TYPES:
-                logger.debug(f"[collect] User-submission type {source.source_type}, skipping collection")
-            else:
-                logger.error(f"[collect] Unknown source_type: {source.source_type}")
-            record.status = "completed"
-            record.items_found = 0
-            record.items_new = 0
-            record.completed_at = utcnow()
-            db.commit()
-            return []
+            # 调用方（collect_single_source / 采集端点）已用 is_collectable 拦截，走到这里说明有新的
+            # 入口绕过了判定。记为失败而不是「成功 0 条」——假成功会污染成功率统计与调度活跃度。
+            raise ValueError(f"数据源类型 {source.source_type} 不支持采集")
 
         take_found(0)
         new_items = await collector.collect(source, db)

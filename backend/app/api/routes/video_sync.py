@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.models.content import ContentItem, SourceConfig, SourceType
+from app.models.source_types import push_types_for_domain
 from app.schemas import error_response
 from app.schemas.video_sync import (
     VideoSyncRequest,
@@ -38,13 +39,9 @@ def setup_video_sync(
     db: Session = Depends(get_db),
 ):
     """首次设置 — 自动创建 sync.* 类型的 SourceConfig"""
-    if not source_type.startswith("sync."):
-        return error_response(400, "source_type 必须以 sync. 开头")
-
-    # 校验 source_type 必须在 SourceType 枚举中
-    valid_types = {e.value for e in SourceType}
-    if source_type not in valid_types:
-        return error_response(400, f"不支持的 source_type: {source_type}")
+    # 只接受本领域、已实现、接受外部推送的数据源类型（由源类型注册表决定）
+    if source_type not in push_types_for_domain("video"):
+        return error_response(400, f"{source_type} 不是可用的视频同步源类型")
 
     existing = db.query(SourceConfig).filter(
         SourceConfig.source_type == source_type,
@@ -114,8 +111,8 @@ def sync_videos(
 ):
     """全量/增量同步 — 接收视频元数据、播放进度"""
     source = db.get(SourceConfig, body.source_id)
-    if not source or not source.source_type.startswith("sync."):
-        return error_response(404, "同步源不存在")
+    if not source or source.source_type not in push_types_for_domain("video"):
+        return error_response(404, "同步源不存在，或不属于视频领域")
 
     # 将 Pydantic 模型转为 dict 列表
     videos_dicts = [v.model_dump(by_alias=False) for v in body.videos]

@@ -8,6 +8,7 @@ from sqlalchemy import func
 from app.core.database import get_db
 from app.core.time import utcnow
 from app.models.content import SourceConfig, ContentItem, CollectionRecord, SourceType, SourceCategory, get_source_category
+from app.models.source_types import get_spec, is_collectable, is_schedulable
 from app.models.pipeline import PipelineTemplate
 from app.schemas import (
     SourceCreate, SourceUpdate, SourceResponse, CollectionRecordResponse, ContentBatchDelete, error_response,
@@ -27,6 +28,10 @@ def _source_to_response(source: SourceConfig, content_counts: dict, template_nam
     """将 ORM 对象转为响应 dict（使用预加载的批量数据避免 N+1）"""
     data = SourceResponse.model_validate(source).model_dump()
     data["category"] = get_source_category(source.source_type).value
+    spec = get_spec(source.source_type)
+    data["runner"] = spec.runner.value if spec else None          # collector / syncer / push / none
+    data["collectable"] = is_collectable(source.source_type)      # 前端据此决定是否显示「采集」
+    data["schedulable"] = is_schedulable(source.source_type)
     data["pipeline_template_name"] = template_names.get(source.pipeline_template_id) if source.pipeline_template_id else None
     data["content_count"] = content_counts.get(source.id, 0)
     return data
@@ -147,11 +152,16 @@ def create_source(body: SourceCreate, db: Session = Depends(get_db)):
     if err:
         return error_response(400, err)
 
+    spec = get_spec(body.source_type)
+    if not spec or not spec.implemented:
+        return error_response(400, f"数据源类型 {body.source_type} 尚未实现，不能创建")
+
     data = body.model_dump()
 
-    # 用户类型源自动禁用调度
-    if get_source_category(body.source_type) == SourceCategory.USER:
+    # 只有采集型数据源能进调度
+    if not is_schedulable(body.source_type):
         data["schedule_enabled"] = False
+        data["schedule_mode"] = "manual"
 
     source = SourceConfig(**data)
     db.add(source)
@@ -300,6 +310,11 @@ def update_source(source_id: str, body: SourceUpdate, db: Session = Depends(get_
     for key, value in update_data.items():
         setattr(source, key, value)
 
+    # 非采集型数据源不允许被改成可调度
+    if not is_schedulable(source.source_type):
+        source.schedule_enabled = False
+        source.schedule_mode = "manual"
+
     source.updated_at = utcnow()
     db.commit()
     db.refresh(source)
@@ -315,7 +330,10 @@ async def batch_collect_all(db: Session = Depends(get_db)):
     from app.tasks.collection_tasks import collect_single_source
     from app.tasks.procrastinate_app import async_defer
 
-    active_sources = db.query(SourceConfig).filter(SourceConfig.is_active == True).all()
+    active_sources = [
+        s for s in db.query(SourceConfig).filter(SourceConfig.is_active == True).all()
+        if is_collectable(s.source_type)   # 同步类 / 纯归属容器类没有采集器
+    ]
     if not active_sources:
         return {
             "code": 0,
@@ -413,6 +431,11 @@ async def trigger_collect(source_id: str, db: Session = Depends(get_db)):
     source = db.get(SourceConfig, source_id)
     if not source:
         return error_response(404, "Source not found")
+
+    if not is_collectable(source.source_type):
+        spec = get_spec(source.source_type)
+        hint = "请到同步管理页触发同步" if spec and spec.panel else "它只是内容的归属容器，没有可执行的采集"
+        return error_response(400, f"「{source.name}」不是采集型数据源，{hint}")
 
     from app.tasks.collection_tasks import collect_single_source
     from app.tasks.procrastinate_app import async_defer

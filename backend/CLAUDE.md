@@ -116,6 +116,7 @@ class SourceResponse(BaseModel):     # 响应模型
 ## 枚举定义
 
 枚举值以代码为准，不要凭记忆：
+- `app/models/source_types.py` — **源类型注册表**（叶子模块，任何地方可导入）：SourceType / SourceCategory / ContentKind / Runner 枚举 + `SOURCE_TYPES`。关于「某种源类型能做什么」的全部知识只在这里定义：执行器（collector / syncer / push / none）、默认 kind、能否调度、是否需凭证、所属领域、同步面板信息、自动同步间隔、是否已实现。**新增源类型只改这里 + 执行器实现**；其它地方用 `is_collectable` / `is_schedulable` / `get_spec` / `push_types_for_domain` / `sync_panel_plugins` 查询，禁止再自维护类型名单或按 `sync.` 前缀判断。`COLLECTOR_MAP`、`SYNC_FETCHERS` 在导入时与注册表对账，不一致则启动失败。`content.py` 再导出这些枚举以兼容既有导入
 - `app/models/content.py` — SourceType, MediaType (仅用于 MediaItem: image/video/audio/ebook), ContentStatus (含 ready), **ContentKind**（内容的领域身份：article/audio/video/book/film/bookmark/note/file。「这是什么内容」只看 `content_items.kind`，不要再从 source_type / media_type / raw_data 反推；新增 ContentItem 写入路径必须显式设置 kind。信息流口径的查询统一带 `FEED_SCOPE`）
 - `app/models/pipeline.py` — StepType (含 localize_media), PipelineStatus, StepStatus, TriggerSource
 - `app/models/prompt_template.py` — TemplateType

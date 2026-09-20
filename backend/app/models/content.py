@@ -26,69 +26,11 @@ from app.core.time import utcnow
 
 # ============ 枚举定义 ============
 
-class SourceType(str, Enum):
-    """数据源类型 — 纯粹描述信息来源渠道
-
-    对照脑图「数据源」分支:
-      文件上传、RSSHub、RSSStd、AkShare、网页抓取(Scraper)、账号授权、用户记录
-
-    采用两段式命名: {Category}.{Specific}
-    """
-    # RSS 类
-    RSS_HUB = "rss.hub"              # RSSHub 生成的订阅源
-    RSS_STANDARD = "rss.standard"    # 标准 RSS/Atom 订阅源
-    # 数据接口
-    API_AKSHARE = "api.akshare"      # AkShare 金融宏观数据
-    # 网页抓取
-    WEB_SCRAPER = "web.scraper"      # 网页抓取
-    # 文件
-    FILE_UPLOAD = "file.upload"      # 用户上传文件
-    # 账号授权
-    ACCOUNT_GENERIC = "account.generic"    # 其他平台账号
-    # 播客
-    PODCAST_APPLE = "podcast.apple"  # Apple Podcasts
-    # 同步
-    SYNC_APPLE_BOOKS = "sync.apple_books"          # Apple Books 同步
-    SYNC_WECHAT_READ = "sync.wechat_read"          # 微信读书同步
-    SYNC_BILIBILI = "sync.bilibili"                # B站视频同步
-    SYNC_KINDLE = "sync.kindle"                    # Kindle 标注同步（My Clippings.txt）
-    SYNC_SAFARI_BOOKMARKS = "sync.safari_bookmarks"  # Safari 书签同步
-    SYNC_CHROME_BOOKMARKS = "sync.chrome_bookmarks"  # Chrome 书签同步
-    SYNC_DOUBAN_BOOKS  = "sync.douban_books"       # 豆瓣书单同步
-    SYNC_DOUBAN_MOVIES = "sync.douban_movies"      # 豆瓣影单同步
-    SYNC_ZHIHU         = "sync.zhihu"              # 知乎收藏夹同步
-    SYNC_GITHUB_STARS  = "sync.github_stars"       # GitHub Star 同步
-    SYNC_TWITTER       = "sync.twitter"            # Twitter/X 推文同步
-    SYNC_EMBY          = "sync.emby"               # Emby 媒体库同步（影视资料库）
-    # 用户记录
-    USER_NOTE = "user.note"          # 日常笔记
-    USER_FILM = "user.film"          # 手工添加的影片（影视资料库）
-    SYSTEM_NOTIFICATION = "system.notification"  # 系统消息
-
-
-class SourceCategory(str, Enum):
-    """数据源大类"""
-    NETWORK = "network"   # 网络数据 — Collector 自动采集
-    USER = "user"         # 用户数据 — 用户/系统主动提交
-
-
-_SOURCE_CATEGORY_MAP = {
-    "rss": SourceCategory.NETWORK,
-    "podcast": SourceCategory.NETWORK,
-    "api": SourceCategory.NETWORK,
-    "web": SourceCategory.NETWORK,
-    "account": SourceCategory.NETWORK,
-    "file": SourceCategory.USER,
-    "sync": SourceCategory.USER,
-    "user": SourceCategory.USER,
-    "system": SourceCategory.USER,
-}
-
-
-def get_source_category(source_type: str) -> SourceCategory:
-    """根据 source_type 前缀推导分类"""
-    prefix = source_type.split(".")[0]
-    return _SOURCE_CATEGORY_MAP.get(prefix, SourceCategory.NETWORK)
+# 源类型、分类、内容领域的定义与判定统一在注册表模块，这里只做再导出以兼容既有导入
+from app.models.source_types import (  # noqa: E402,F401
+    ContentKind, SourceCategory, SourceType,
+    default_kind_for_source_type, get_source_category,
+)
 
 
 class MediaType(str, Enum):
@@ -99,50 +41,8 @@ class MediaType(str, Enum):
     EBOOK = "ebook"
 
 
-class ContentKind(str, Enum):
-    """内容的领域身份 —— 「这是什么内容」的唯一判定依据
-
-    写入时确定、之后不变。不要再用 source_type、media_type、raw_data 里的键
-    去反推一条内容属于哪个领域（2026-09 审计前有 6 种并存的判定方式）。
-
-    两条主线:
-      信息流 (stream)  —— 时效性内容，会过期、可清理: ARTICLE / AUDIO
-      资料库 (library) —— 用户的长期资产，永不自动清理: 其余全部
-    """
-    ARTICLE = "article"      # 信息流条目（RSS / 网页抓取 / 账号采集）
-    AUDIO = "audio"          # 播客单集
-    VIDEO = "video"          # 视频（平台同步 / 手动下载）
-    BOOK = "book"            # 电子书
-    FILM = "film"            # 影视（电影 / 剧集）
-    BOOKMARK = "bookmark"    # 浏览器书签
-    NOTE = "note"            # 用户笔记
-    FILE = "file"            # 用户上传 / 目录扫描的文件
-
-
 # 有专属页面的资料库领域：不进通用信息流、未读数、仪表盘与日报口径
 FEED_HIDDEN_KINDS = (ContentKind.FILM.value,)
-
-# 数据源类型 → 该源产出内容的默认 kind（迁移回填与写入路径共用这一份）
-_KIND_BY_SOURCE_TYPE = {
-    "podcast.apple": ContentKind.AUDIO,
-    "sync.bilibili": ContentKind.VIDEO,
-    "sync.apple_books": ContentKind.BOOK,
-    "sync.wechat_read": ContentKind.BOOK,
-    "sync.kindle": ContentKind.BOOK,
-    "sync.douban_books": ContentKind.BOOK,
-    "sync.emby": ContentKind.FILM,
-    "sync.douban_movies": ContentKind.FILM,
-    "user.film": ContentKind.FILM,
-    "sync.safari_bookmarks": ContentKind.BOOKMARK,
-    "sync.chrome_bookmarks": ContentKind.BOOKMARK,
-    "user.note": ContentKind.NOTE,
-    "file.upload": ContentKind.FILE,
-}
-
-
-def default_kind_for_source_type(source_type: str | None) -> ContentKind:
-    """未在表中的类型（rss.* / web.* / account.* / api.* 等）一律是信息流条目"""
-    return _KIND_BY_SOURCE_TYPE.get(source_type or "", ContentKind.ARTICLE)
 
 
 class ContentStatus(str, Enum):
