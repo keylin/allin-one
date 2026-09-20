@@ -1,4 +1,4 @@
-"""Pipeline step: enrich_content — 抓取全文 L1/Crawl4AI/L2"""
+"""Pipeline step: enrich_content — 抓取全文 L1 HTTP / L2 Crawl4AI / L3 Browserless"""
 
 import logging
 
@@ -39,9 +39,9 @@ def _sanitize_html(html: str) -> str:
 
 
 def _handle_enrich_content(context: dict) -> dict:
-    """抓取全文 — L1 HTTP 优先 + Crawl4AI/L2 兜底
+    """抓取全文 — L1 HTTP 优先，L2 Crawl4AI / L3 Browserless 兜底
 
-    提取流程：L1 HTTP+trafilatura → Crawl4AI → L2 Browserless+trafilatura → 原始内容回退。
+    提取流程：L1 HTTP+trafilatura → L2 Crawl4AI → L3 Browserless+trafilatura → 原始内容回退。
     输出 Markdown 格式。质量保障：反爬检测 + enriched vs original 对比 + 自动回退。
     此函数永远不 raise，失败时 fallback 到原始内容。
     """

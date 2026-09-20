@@ -89,7 +89,7 @@ class SourceConfig(Base):
     description = Column(Text)
     # 调度
     schedule_enabled = Column(Boolean, default=True)
-    schedule_mode = Column(String, default="auto")      # auto / fixed / manual
+    schedule_mode = Column(String, nullable=False, default="auto", server_default="auto")  # auto / fixed / manual
     schedule_interval_override = Column(Integer, nullable=True)  # 固定间隔覆盖值（仅 fixed 模式）
     calculated_interval = Column(Integer, nullable=True)         # 系统计算的间隔（仅供展示）
     next_collection_at = Column(DateTime, nullable=True)         # 预计算的下次采集时间
@@ -187,6 +187,15 @@ class ContentItem(Base):
         Index("uq_content_film_external", "external_id", unique=True,
               postgresql_where=text("kind = 'film'")),
         Index("ix_content_title_hash", "title_hash"),
+        # 以下由迁移 0004 / 0019 / 0020 等创建，此前模型未声明（漂移检查: scripts/verify/drift）
+        Index("ix_content_source_id", "source_id"),
+        Index("ix_content_status", "status"),
+        Index("ix_content_url", "url"),
+        Index("ix_content_collected_at", "collected_at"),
+        Index("ix_content_is_favorited", "is_favorited"),
+        Index("ix_content_items_opened_at", "opened_at"),
+        Index("ix_content_source_status_collected", "source_id", "status", "collected_at"),
+        Index("ix_content_analysis_gin", "analysis_result", postgresql_using="gin"),
         Index("ix_content_duplicate_of", "duplicate_of_id"),
     )
 
@@ -240,7 +249,7 @@ class MediaItem(Base):
     playback_position = Column(Integer, default=0)   # 播放进度（秒）
     last_played_at = Column(DateTime, nullable=True) # 最后播放时间
 
-    is_favorited = Column(Boolean, default=False)
+    is_favorited = Column(Boolean, nullable=False, default=False, server_default=text("false"))
     favorited_at = Column(DateTime, nullable=True)
 
     created_at = Column(DateTime, default=_utcnow)
@@ -249,4 +258,6 @@ class MediaItem(Base):
 
     __table_args__ = (
         Index("ix_media_item_content_id", "content_id"),
+        Index("ix_media_media_type", "media_type"),
+        Index("ix_media_status", "status"),
     )

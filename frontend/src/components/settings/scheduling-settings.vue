@@ -24,7 +24,7 @@ const group = {
       key: 'schedule_max_interval',
       label: '最大采集间隔（秒）',
       type: 'number',
-      description: '确保信息源每天至少检查一次，推荐值 86400（24小时）'
+      description: '确保数据源每天至少检查一次，推荐值 86400（24小时）'
     },
     {
       key: 'schedule_base_interval',
@@ -110,14 +110,14 @@ function updateField(key, value) {
         <div class="flex-1 min-w-0">
           <h4 class="text-sm font-semibold text-violet-900 mb-1.5">智能调度算法说明</h4>
           <div class="text-xs text-violet-700 leading-relaxed space-y-1">
-            <p>系统根据信息源的历史采集记录（新增内容数量、成功率、趋势）自动计算下次采集间隔：</p>
+            <p>系统根据数据源的历史采集记录（新增内容数量、成功率、趋势）自动计算下次采集间隔：</p>
             <ul class="list-disc list-inside space-y-0.5 ml-2">
               <li><strong>高活跃源</strong>（新增 ≥ 5）：缩短间隔至 50%，快速抓取</li>
               <li><strong>中活跃源</strong>（新增 2-5）：缩短间隔至 75%</li>
               <li><strong>低活跃源</strong>（新增 < 0.5）：延长间隔至 150%，节省资源</li>
               <li><strong>失败退避</strong>：连续失败时指数延长间隔（2^n 倍），最高至 24 小时</li>
             </ul>
-            <p class="mt-2 text-violet-600">修改这些参数会影响所有设为「自动调度」模式的信息源。</p>
+            <p class="mt-2 text-violet-600">修改这些参数会影响所有设为「自动调度」模式的数据源。</p>
           </div>
         </div>
       </div>

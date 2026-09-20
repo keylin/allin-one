@@ -15,6 +15,7 @@ scripts/
 ├── verify/       # Validation and verification scripts
 │   ├── timezone/       # Time zone related verification scripts
 │   └── financial_data/ # 蚂蚁 financial-data API 探针 + 新旧数据源对拍
+│   └── drift/          # 模型 / 真实库 / 文档 三方漂移检查（check.sh；--write 重新生成 system_design.md 的表结构段）
 ├── utils/        # Reusable utility scripts
 │   └── logs.sh                  # 远程服务器日志查看工具
 ├── apple-books-sync.py          # Apple Books 同步脚本

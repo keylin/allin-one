@@ -12,7 +12,7 @@ import uuid
 from enum import Enum
 
 from sqlalchemy import (
-    Column, String, Boolean, DateTime, Text, Integer, ForeignKey
+    Column, String, Boolean, DateTime, Text, Integer, ForeignKey, Index
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
@@ -128,6 +128,14 @@ class PipelineExecution(Base):
                          cascade="all, delete-orphan",
                          order_by="PipelineStep.step_index")
 
+    # 由迁移创建、此前模型未声明（仅补声明以消除 autogenerate 假 diff，无行为变化）
+    __table_args__ = (
+        Index("ix_pexec_content_id", "content_id"),
+        Index("ix_pexec_source_id", "source_id"),
+        Index("ix_pexec_status", "status"),
+        Index("ix_pexec_created_at", "created_at"),
+    )
+
 
 class PipelineStep(Base):
     """流水线步骤执行记录"""
@@ -152,3 +160,8 @@ class PipelineStep(Base):
 
     # Relationships
     pipeline = relationship("PipelineExecution", back_populates="steps")
+
+    __table_args__ = (
+        Index("ix_pstep_pipeline_id", "pipeline_id"),
+        Index("ix_pstep_status", "status"),
+    )

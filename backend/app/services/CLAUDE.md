@@ -19,7 +19,7 @@ services/
 │   └── utils.py         # 采集器工具函数
 │   # 注: sync.* 类型无 Collector，由外部脚本或 Worker 内置 Fetcher 通过 API 推送
 ├── sync/               # 外部数据同步服务
-│   ├── base.py          # BaseSyncService 接口
+│   ├── base.py          # BaseSyncFetcher 接口
 │   ├── bilibili.py      # B站同步
 │   ├── wechat_read.py   # 微信读书同步
 │   ├── emby.py          # Emby 媒体库只读同步（影视资料库）
@@ -86,7 +86,7 @@ Procrastinate periodic (每1分钟) → check_and_collect_sources()
 ```python
 class BaseCollector(ABC):
     @abstractmethod
-    async def collect(self, source: SourceConfig) -> list[ContentItem]:
+    async def collect(self, source: SourceConfig, db: Session) -> list[ContentItem]:
         """从数据源抓取新条目。去重在 DB 层处理。"""
 ```
 

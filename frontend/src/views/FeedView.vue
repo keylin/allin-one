@@ -1176,7 +1176,7 @@ onUnmounted(() => {
               {{ hasActiveFilters ? '没有找到匹配的内容' : (cf.active ? `「${cf.active.name}」里暂无内容` : '暂无内容') }}
             </p>
             <p class="text-sm text-slate-400">
-              {{ hasActiveFilters ? '试试调整筛选条件' : (cf.active ? '换一个过滤器看看' : '添加信息源后内容会自动出现在这里') }}
+              {{ hasActiveFilters ? '试试调整筛选条件' : (cf.active ? '换一个过滤器看看' : '添加数据源后内容会自动出现在这里') }}
             </p>
           </div>
 

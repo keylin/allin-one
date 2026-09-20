@@ -693,7 +693,7 @@ async def submit_content(body: ContentSubmit, db: Session = Depends(get_db)):
     # 校验源存在且为 USER 分类
     source = db.get(SourceConfig, body.source_id)
     if not source:
-        return error_response(404, "信息源不存在")
+        return error_response(404, "数据源不存在")
     if get_source_category(source.source_type) != SourceCategory.USER:
         return error_response(400, "只能向用户数据类型的源提交内容")
 
@@ -773,9 +773,9 @@ async def upload_content(
     # 校验源存在且为 file.upload 类型
     source = db.get(SourceConfig, source_id)
     if not source:
-        return error_response(404, "信息源不存在")
+        return error_response(404, "数据源不存在")
     if source.source_type != "file.upload":
-        return error_response(400, "文件上传需要 file.upload 类型的信息源")
+        return error_response(400, "文件上传需要 file.upload 类型的数据源")
 
     # 生成 content ID 和保存路径
     content_id = uuid.uuid4().hex
@@ -985,7 +985,7 @@ async def analyze_content(content_id: str, db: Session = Depends(get_db)):
             trigger=TriggerSource.MANUAL,
         )
         if not execution:
-            return error_response(400, "无法创建分析任务，请检查信息源是否绑定了流水线模板")
+            return error_response(400, "无法创建分析任务，请检查数据源是否绑定了流水线模板")
 
         item.status = ContentStatus.PROCESSING.value
         db.commit()

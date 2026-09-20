@@ -22,9 +22,9 @@ const group = {
   keys: [
     { key: 'cleanup_content_time', label: '内容清理时间', type: 'time', description: '每天执行内容清理的时间（本地时区）' },
     { key: 'cleanup_records_time', label: '记录清理时间', type: 'time', description: '每天执行记录清理的时间（本地时区）' },
-    { key: 'default_retention_days', label: '默认保留天数', type: 'number', description: '信息源未单独设置时的全局默认值（0 表示永久保留）' },
+    { key: 'default_retention_days', label: '默认保留天数', type: 'number', description: '数据源未单独设置时的全局默认值（0 表示永久保留）' },
     { key: 'collection_retention_days', label: '采集记录保留天数', type: 'number', description: '超过此天数的已完成采集记录将被自动清理（0 表示永久保留）' },
-    { key: 'collection_min_keep', label: '每个信息源最少保留记录数', type: 'number', description: '即使超过保留天数，也至少保留最新的 N 条记录' },
+    { key: 'collection_min_keep', label: '每个数据源最少保留记录数', type: 'number', description: '即使超过保留天数，也至少保留最新的 N 条记录' },
     { key: 'execution_retention_days', label: '执行记录保留天数', type: 'number', description: '超过此天数的已完成执行记录将被自动清理（0 表示永久保留）' },
     { key: 'execution_max_count', label: '执行记录数量上限', type: 'number', description: '超过上限的旧记录将被自动清理（0 表示不限制）' },
   ],

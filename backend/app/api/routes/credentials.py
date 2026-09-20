@@ -300,7 +300,7 @@ def delete_credential(
             return {
                 "code": 1,
                 "data": {"source_count": source_count},
-                "message": f"该凭证被 {source_count} 个信息源引用，请先解除关联",
+                "message": f"该凭证被 {source_count} 个数据源引用，请先解除关联",
             }
         # force=True: 解除所有引用后删除
         db.query(SourceConfig).filter(

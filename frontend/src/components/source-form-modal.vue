@@ -302,7 +302,7 @@ const sectionClass = 'space-y-4 p-4 bg-slate-50/50 rounded-xl border border-slat
     <div class="relative bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
       <div class="sticky top-0 bg-white border-b border-slate-100 px-6 py-5 rounded-t-2xl z-10">
         <h3 class="text-lg font-semibold text-slate-900 tracking-tight">
-          {{ source ? '编辑信息源' : '新增信息源' }}
+          {{ source ? '编辑数据源' : '新增数据源' }}
         </h3>
         <p class="text-xs text-slate-400 mt-0.5">配置信息采集来源</p>
       </div>
@@ -314,9 +314,9 @@ const sectionClass = 'space-y-4 p-4 bg-slate-50/50 rounded-xl border border-slat
           <input v-model="form.name" type="text" required :class="inputClass" placeholder="例: 少数派 RSS" />
         </div>
 
-        <!-- 信息源类型 -->
+        <!-- 数据源类型 -->
         <div>
-          <label :class="labelClass">信息源类型 *</label>
+          <label :class="labelClass">数据源类型 *</label>
           <select v-model="form.source_type" :class="selectClass">
             <optgroup v-for="group in sourceTypeGroups" :key="group.category" :label="group.label">
               <option v-for="t in group.types" :key="t.value" :value="t.value">{{ t.label }}</option>
@@ -631,13 +631,13 @@ const sectionClass = 'space-y-4 p-4 bg-slate-50/50 rounded-xl border border-slat
                 <!-- 手动模式：提示信息 -->
                 <div v-else-if="form.schedule_mode === 'manual'" class="mt-3">
                   <p class="text-sm text-slate-500 px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl">
-                    手动模式下，信息源不会自动采集，仅通过手动触发或 API 调用采集。
+                    手动模式下，数据源不会自动采集，仅通过手动触发或 API 调用采集。
                   </p>
                 </div>
               </template>
 
               <p class="mt-2 text-xs text-slate-400">
-                智能调度根据信息源的历史采集情况（新增内容数、成功率、趋势）动态调整采集频率。
+                智能调度根据数据源的历史采集情况（新增内容数、成功率、趋势）动态调整采集频率。
               </p>
             </div>
 

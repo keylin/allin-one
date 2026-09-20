@@ -159,7 +159,7 @@ async def sync_ebooks(
     # Per-source_id 锁，防止并发请求产生重复 ContentItem
     lock = _sync_locks[body.source_id]
     if lock.locked():
-        return error_response(409, "该信息源正在同步中，请稍后重试")
+        return error_response(409, "该数据源正在同步中，请稍后重试")
 
     async with lock:
         # 将 Pydantic 模型转为 dict 列表

@@ -53,30 +53,41 @@
 | `podcast.apple` | network | Apple Podcasts | 播客 RSS 解析 |
 | `account.generic` | network | 其他平台账号 | 需要认证的平台 |
 | `sync.apple_books` | user | Apple Books 同步 | Fountain 客户端读取 macOS BKLibrary SQLite 推送书籍+标注 |
-| `sync.wechat_read` | user | 微信读书同步 | Fountain 客户端调用微信 API 推送书籍+标注 |
-| `sync.bilibili` | user | B站视频同步 | Fountain 客户端调用 B站 API 推送视频元数据 |
+| `sync.wechat_read` | user | 微信读书同步 | 内置同步器（服务端存加密凭证）；也接受外部脚本推送 |
+| `sync.bilibili` | user | B站视频同步 | 内置同步器；也接受外部脚本推送 |
 | `sync.kindle` | user | Kindle 标注同步 | Fountain 客户端读取 My Clippings.txt 推送标注 |
 | `sync.safari_bookmarks` | user | Safari 书签同步 | Fountain 客户端读取本地书签库推送 |
 | `sync.chrome_bookmarks` | user | Chrome 书签同步 | Fountain 客户端读取本地书签文件推送 |
-| `sync.douban_books` | user | 豆瓣书单同步 | 豆瓣读书数据同步 |
-| `sync.douban_movies` | user | 豆瓣影单同步 | 豆瓣电影数据同步（预留，Phase 2） |
-| `sync.emby` | user | Emby 媒体库同步 | Worker 内置 Fetcher 只读拉取 Emby 电影/剧集与观看状态，写入影视资料库；页面手动触发 |
-| `sync.zhihu` | user | 知乎收藏夹同步 | 知乎收藏数据同步 |
-| `sync.github_stars` | user | GitHub Star 同步 | GitHub Star 仓库数据同步 |
-| `sync.twitter` | user | Twitter/X 推文同步 | Twitter 推文数据同步 |
+| `sync.douban_books` | user | 豆瓣书单同步 | **未实现**（只占枚举值，不允许建源） |
+| `sync.douban_movies` | user | 豆瓣影单同步 | **未实现**（影视库二期预留，不允许建源） |
+| `sync.emby` | user | Emby 媒体库同步 | Worker 内置 Fetcher 只读拉取 Emby 电影/剧集与观看状态，写入影视资料库；页面手动触发 + 每 30 分钟自动同步 |
+| `sync.zhihu` | user | 知乎收藏夹同步 | **未实现** |
+| `sync.github_stars` | user | GitHub Star 同步 | **未实现** |
+| `sync.twitter` | user | Twitter/X 推文同步 | **未实现**（`twitter` 凭证仅供 RSSHub 路由使用） |
 | `user.note` | user | 日常笔记 | 用户手动输入，通过 `/api/content/submit` 提交 |
 | `user.film` | user | 手工添加的影片 | 影视资料库手工/agent 添加的影片，经 TMDb 补元数据或片名+年份骨架 |
 | `file.upload` | user | 用户上传文件 | 文本/图片/文档，通过 `/api/content/upload` 上传 |
 | `system.notification` | user | 系统消息 | 系统通知 |
 
-### 3.10 SourceCategory (数据源大类)
+### 3.10 SourceCategory 与执行器
 
-定义在 `app/models/content.py`。派生属性，由 source_type 前缀决定，无 DB 列。
+定义在 `app/models/source_types.py`（源类型注册表）。**都不是 DB 列**，由 `source_type` 查注册表得到；不要按字符串前缀判断。
 
-| 枚举值 | 描述 | 前缀 | 特征 |
-| :--- | :--- | :--- | :--- |
-| `network` | 网络数据 | rss, podcast, api, web, account | 有 Collector，定时采集，需要 URL/配置（Collect 模式） |
-| `user` | 用户数据 | user, file, system, sync | 无 Collector，用户/系统主动提交，无调度。`sync.*` 类型走 Fountain 三步同步协议；`user.note` 直接 POST API |
+| SourceCategory | 含义 | 后果 |
+| :--- | :--- | :--- |
+| `network` | 网络数据，由采集器抓取 | 内容会过期，按保留期自动清理 |
+| `user` | 用户数据：同步进来的资料、用户笔记、上传文件、手工影片 | **永不自动清理**；有内容时拒绝非级联删除数据源 |
+
+| Runner（执行器） | 含义 |
+| :--- | :--- |
+| `collector` | 采集：增量追加，可调度，运行记录在 `collection_records` |
+| `syncer` | 内置同步：全量对账，运行记录在 `sync_task_progress`，可按 `auto_sync_minutes` 自动同步 |
+| `push` | 外部推送：本机脚本 / Fountain 客户端经推送 API 写入，同样记 `sync_task_progress` |
+| `none` | 无执行器：纯归属容器（`user.film`、`user.note`）或尚未实现 |
+
+完整对照见 `docs/system_design.md` §4.0。
+
+**术语约定**：实体统一叫「**数据源**」（界面、接口文案、文档一致；「订阅源」专指 RSS feed 本身）。动作上，「**采集**」专指 collector 的增量抓取，「**同步**」专指 syncer / push 的全量对账，「抓取」只用于全文抓取（enrich）这一步。
 
 ### 3.2 StepType (原子操作类型)
 

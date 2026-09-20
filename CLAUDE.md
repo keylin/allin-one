@@ -4,13 +4,26 @@
 
 ## 核心架构约束
 
-- **数据源与流水线解耦**: 数据源只管「从哪来」，流水线只管「怎么处理」，通过 `source.pipeline_template_id` FK 绑定
-- **没有** `video_bilibili` 等混合 SourceType，视频通过 rsshub 发现 + localize_media 步骤处理
-- **抓取与处理分离**: Collector 负责抓取产出 ContentItem，流水线只做处理，不含 fetch 步骤
-- **流水线步骤来自模板**: 模板显式包含所有步骤（含 extract_content、localize_media），Orchestrator 不再自动注入预处理步骤；无模板绑定时直接标记内容为 READY。enrich_content 为可选步骤，用户可在模板中手动添加
-- **媒体项独立**: ContentItem 不再有 media_type 字段，媒体通过 MediaItem 一对多关联管理
-- **三级抓取**: L1 HTTP → L2 Browserless → L3 browser-use，按需升级
+系统有**两条主线**，性质不同、各有一等表达。2026-09 审计前资料库借住在信息流的抽象里，是当时多数混乱的根源（见 `docs/audit_2026-09_architecture.md`）。
+
+| | 信息流 (stream) | 资料库 (library) |
+|---|---|---|
+| 内容 | RSS / 播客 / 网页抓取等时效性内容 | 影视、电子书、书签、笔记、上传文件、同步来的视频 |
+| 进入方式 | **采集**（Collector，增量追加，可调度） | **同步**（内置 Syncer 全量对账 / 外部推送）或手工添加 |
+| 后续处理 | 可选流水线（模板显式定义步骤） | 不进流水线，直接 READY；元数据补全各领域自理 |
+| 清理 | 按保留期自动清理，收藏 / 有笔记 / 媒体已收藏的受保护 | **永不自动清理** |
+
+- **内容的领域身份只看 `content_items.kind`**（ContentKind，写入时确定）。不要从 `source_type`、`media_type`、`raw_data` 的键去反推。新增 ContentItem 写入路径必须显式设置 `kind`。
+- **信息流口径统一带 `FEED_SCOPE`**：通用内容列表、未读数、仪表盘、日报、MCP `list_content` 都排除有专属页面的资料库领域（目前是影视）。新增这类统计时别忘了它。
+- **关于「源类型」的知识只在 `backend/app/models/source_types.py` 定义一次**：执行器（collector / syncer / push / none）、默认 kind、能否调度、是否需凭证、所属领域、自动同步间隔、是否已实现。新增源类型 = 在注册表加一条 + 写执行器；禁止在别处自维护类型名单或按 `sync.` 前缀判断。`COLLECTOR_MAP` / `SYNC_FETCHERS` 在导入时与注册表对账。
+- **「能不能采集」由注册表在入口处强制**：调度器、采集任务、采集端点对非采集型数据源一律拒绝（400），不写采集记录、不动调度状态。同步型由同步面板 / 自动同步驱动，运行记录在 `sync_task_progress`（内置同步、外部推送都写）；采集型的运行记录在 `collection_records`，它同时是调度算法的输入。
+- **可清理范围与保护条件只在 `services/content_retention.py` 定义**；用户数据类数据源下有内容时拒绝非级联删除（`SourceDeleteBlocked`）。
+- **数据源与流水线解耦**: 数据源只管「从哪来」，流水线只管「怎么处理」，通过 `source.pipeline_template_id` FK 绑定；流水线步骤全部来自模板，Orchestrator 不自动注入，无模板绑定时内容直接 READY。
+- **媒体项独立**: ContentItem 没有 media_type 字段，媒体通过 MediaItem 一对多关联。MediaType 描述一个媒体文件是什么；ContentKind 描述一条内容属于哪个领域（带视频的 RSS 文章仍是 `article`）。
+- **全文抓取分级**: L1 HTTP → L2 Crawl4AI → L3 Browserless，按需升级。
+- **金融数据不走 ContentItem**: AkShare 采集器写 `finance_data_points` 列式表、不产出内容。领域实体需要列式查询时，这是落地先例。
 - **数据目录**: `data/` 在项目根目录（非 backend/data/），backend 和 worker 共享同一挂载
+- **迁移先于切换**: `deploy-home-server.sh` 用新镜像跑迁移成功后才重建容器，所以迁移必须对旧代码向后兼容（加列 / 加表 / 加索引）；破坏性变更拆两次发布。
 
 ## 技术栈
 
@@ -100,7 +113,7 @@ vim scripts/utils/cleanup_data.py
 - 凭证加密: `platform_credentials.credential_data` 使用 Fernet 对称加密 (`CREDENTIAL_ENCRYPTION_KEY` 环境变量)，未配置时透传明文，兼容历史数据
 - DB 连接池: `DB_POOL_SIZE`（默认 10）/ `DB_MAX_OVERFLOW`（默认 5）环境变量控制，各容器独立配置
 - LLM API Key 加密存储: `system_settings` 中 `api_key/token/password/secret` 关键词的键值与 `credential_data` 同套 Fernet 加密；`GET /api/settings` 返回解密后掩码（显示末 4 位原始字符）
-- 源是否在采集 = `is_active AND schedule_enabled` **两个字段的与**（`scheduled_tasks.py` 选源条件，对应索引 `ix_source_next_collection`）。两者语义不同：`is_active` 是源的启停，前端源列表的开关改的是它；`schedule_enabled` 是定时采集开关，USER 类源建源时自动置 false。**排查「某源为何不采集/为何还在采集」必须同时查两个**，只看其一会误判。重新启用时前端会顺带把非 USER 类源的 `schedule_enabled` 恢复为 true（见 SourcesView 的 restoreSchedule）
+- 源是否在采集 = `is_active AND schedule_enabled` **两个字段的与**（`scheduled_tasks.py` 选源条件，对应索引 `ix_source_next_collection`）。两者语义不同：`is_active` 是源的启停，前端源列表的开关改的是它；`schedule_enabled` 是定时采集开关，只有源类型注册表里 `schedulable` 的类型才可能为 true（建源 / 改源 / 导入时强制，调度器选源时再校验一次）。**排查「某源为何不采集/为何还在采集」必须同时查两个**，只看其一会误判。重新启用时前端会顺带把可调度数据源（接口返回的 `schedulable`）的 `schedule_enabled` 恢复为 true（见 SourcesView 的 restoreSchedule）
 - 内容过滤器（无表无字段，三层分离）: **定义层** `system_settings` 的 `content.filters`（`{version, filters[]}`，每个过滤器 = `{id,name,emoji,pinned,order,conditions}`，conditions 覆盖 source_ids / media_type / status / unread / favorited / date_range / tag / q 全部维度）；**状态层** `stores/contentFilter.js` 是数据消费状态的唯一所有者，持有「定义 + 当前激活 + 临时覆盖(overrides)」，其 `params` computed 是列表请求参数的唯一来源；**消费端** FeedView 只渲染 pinned 过滤器的快捷方式并读 store，不自行拼装筛选参数，**配置端** 设置 → 内容过滤器 负责增删改。两端只经 store 与 settings 通信。
   - 筛选条（chip 区）只渲染 `overrides`，绝不渲染过滤器自身的条件——否则选中一个含 55 个来源的过滤器会把它们全铺成标签，这是历史上返工两次的形态。过滤器自身条件由快捷方式高亮表达。
   - 分类是消费视角不是源的属性，**不要给 `source_configs` 加 purpose 之类的字段**；同一个源在不同过滤器里可归不同组。
@@ -112,6 +125,7 @@ vim scripts/utils/cleanup_data.py
 - `docs/product_spec.md` — 产品方案 PRD
 - `docs/system_design.md` — 系统架构与 API 规范
 - `docs/business_glossary.md` — 业务术语与枚举定义
+- `docs/audit_2026-09_architecture.md` — 2026-09 架构审计：现状、根因、目标模型、分阶段对齐记录
 - `backend/CLAUDE.md` — 后端开发规范
 - `backend/app/services/CLAUDE.md` — Pipeline/Collector 开发规范
 - `frontend/CLAUDE.md` — 前端开发规范

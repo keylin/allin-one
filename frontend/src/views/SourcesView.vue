@@ -236,7 +236,7 @@ async function confirmDelete() {
   const cascade = deleteContentChecked.value
   const res = await store.deleteSource(deletingSource.value.id, cascade)
   if (res.code === 0) {
-    const msg = cascade ? '已删除信息源及关联内容' : '已删除信息源'
+    const msg = cascade ? '已删除数据源及关联内容' : '已删除数据源'
     toast.success(msg, { title: deletingSource.value.name })
     if (selectedSource.value?.id === deletingSource.value.id) {
       selectedSource.value = null
@@ -345,8 +345,8 @@ async function confirmBatchDelete() {
   const res = await store.batchDelete(selectedIds.value, cascade)
   if (res.code === 0) {
     const msg = cascade
-      ? `已删除 ${res.data.deleted} 个信息源及关联内容`
-      : `已删除 ${res.data.deleted} 个信息源`
+      ? `已删除 ${res.data.deleted} 个数据源及关联内容`
+      : `已删除 ${res.data.deleted} 个数据源`
     toast.success(msg)
     selectedIds.value = []
   }
@@ -372,7 +372,7 @@ async function handleCleanupDuplicates() {
   try {
     const res = await store.cleanupDuplicates()
     if (res.code === 0) {
-      if (res.data.groups_cleaned === 0) toast.info('没有重复信息源')
+      if (res.data.groups_cleaned === 0) toast.info('没有重复数据源')
       else toast.success(res.message)
     } else {
       toast.error(res.message || '清理失败')
@@ -492,7 +492,7 @@ async function handleExportFull() {
     <div class="px-4 pt-3 pb-2 space-y-2.5 sticky top-0 bg-white z-10 border-b border-slate-100 shrink-0">
       <!-- Header -->
       <div class="flex items-center justify-between gap-2">
-        <p class="text-xs text-slate-400">{{ store.total }} 个信息源</p>
+        <p class="text-xs text-slate-400">{{ store.total }} 个数据源</p>
         <div class="flex items-center gap-2">
           <button
             class="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all disabled:opacity-50"
@@ -510,7 +510,7 @@ async function handleExportFull() {
           </button>
           <button
             class="p-2 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-all disabled:opacity-50"
-            title="清理重复信息源"
+            title="清理重复数据源"
             :disabled="cleaningDups"
             @click="handleCleanupDuplicates"
           >
@@ -703,12 +703,12 @@ async function handleExportFull() {
           <path stroke-linecap="round" stroke-linejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
         </svg>
       </div>
-      <p class="text-sm text-slate-500 font-medium mb-1">暂无信息源</p>
+      <p class="text-sm text-slate-500 font-medium mb-1">暂无数据源</p>
       <button
         class="text-sm text-indigo-600 hover:text-indigo-700"
         @click="openCreate"
       >
-        添加第一个信息源
+        添加第一个数据源
       </button>
     </div>
 
@@ -979,7 +979,7 @@ async function handleExportFull() {
               </svg>
             </div>
             <div class="flex-1">
-              <h3 class="text-base font-semibold text-slate-900 tracking-tight">删除信息源</h3>
+              <h3 class="text-base font-semibold text-slate-900 tracking-tight">删除数据源</h3>
               <p class="text-sm text-slate-500 mt-1.5 leading-relaxed">
                 确定要删除「{{ deletingSource?.name }}」吗？
               </p>
@@ -1027,7 +1027,7 @@ async function handleExportFull() {
             <div class="flex-1">
               <h3 class="text-base font-semibold text-slate-900 tracking-tight">批量删除</h3>
               <p class="text-sm text-slate-500 mt-1.5 leading-relaxed">
-                确定要删除选中的 {{ selectedIds.length }} 个信息源吗？
+                确定要删除选中的 {{ selectedIds.length }} 个数据源吗？
               </p>
               <label
                 v-if="batchContentCount > 0"

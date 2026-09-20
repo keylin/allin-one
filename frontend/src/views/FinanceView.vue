@@ -317,7 +317,7 @@ onMounted(() => {
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
           </svg>
-          <span class="hidden sm:inline">添加信息源</span>
+          <span class="hidden sm:inline">添加数据源</span>
         </button>
       </div>
     </div>
@@ -341,8 +341,8 @@ onMounted(() => {
           <path stroke-linecap="round" stroke-linejoin="round" d="M3 3v18h18 M7 16l4-4 3 3 5-6" />
         </svg>
       </div>
-      <h3 class="text-base font-semibold text-slate-700 mb-1">暂无{{ tabs.find(t => t.key === activeTab)?.label }}信息源</h3>
-      <p class="text-sm text-slate-400 mb-5">添加一个 AkShare 信息源开始追踪金融数据</p>
+      <h3 class="text-base font-semibold text-slate-700 mb-1">暂无{{ tabs.find(t => t.key === activeTab)?.label }}数据源</h3>
+      <p class="text-sm text-slate-400 mb-5">添加一个 AkShare 数据源开始追踪金融数据</p>
       <button
         class="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-indigo-600 bg-indigo-50 rounded-lg hover:bg-indigo-100 transition-colors"
         @click="router.push('/sources')"

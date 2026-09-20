@@ -53,7 +53,7 @@ async def generate_daily_report():
     report_lines = [
         f"# 日报 — {now.strftime('%Y-%m-%d')}",
         "",
-        f"**统计**: 过去 24 小时共采集 **{len(items)}** 条内容，来自 **{len(source_groups)}** 个信息源。",
+        f"**统计**: 过去 24 小时共采集 **{len(items)}** 条内容，来自 **{len(source_groups)}** 个数据源。",
         "",
     ]
 
@@ -118,7 +118,7 @@ async def generate_weekly_report():
     report_lines = [
         f"# 周报 — {(now - timedelta(days=7)).strftime('%m/%d')} ~ {now.strftime('%m/%d')}",
         "",
-        f"**统计**: 本周共采集 **{len(items)}** 条内容，来自 **{len(source_ids)}** 个信息源。",
+        f"**统计**: 本周共采集 **{len(items)}** 条内容，来自 **{len(source_ids)}** 个数据源。",
         "",
         "## 每日采集量",
         "",

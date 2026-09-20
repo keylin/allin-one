@@ -1,3 +1,6 @@
+> ⚠️ **已归档（2026-09-20）—— 内容已过期，不要据此开发。**
+> 本文写于 APScheduler + SQLite + Huey 时代，描述的心跳间隔、退避公式、`schedule_interval` 字段、`download_video` 步骤均已不存在。现行实现是 Procrastinate + PostgreSQL，见 `docs/system_design.md` §3 与 §7。
+
 # 任务调度与流水线详细设计
 
 本文档详细描述系统的核心引擎部分：如何通过定时任务发现数据，以及如何通过流水线处理数据。

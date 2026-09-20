@@ -6,7 +6,7 @@
 
 ## 1. 架构总览
 
-> 💡 **提示**: 任务调度与流水线引擎的详细设计请参考独立文档: [docs/design_scheduler_pipeline.md](./design_scheduler_pipeline.md)
+> 任务调度见本文 §7，流水线引擎见 §3。早期的独立设计稿已归档到 `docs/archive/`（内容是 APScheduler / SQLite / Huey 时代的，仅供考古）。
 
 ### 1.1 系统架构
 
@@ -94,231 +94,45 @@
 ### 2.1 ER 关系图
 
 ```
-pipeline_templates 1─ ─ ─ ─ ┐ (绑定)
-                             ▼
-source_configs 1───∞ content_items 1───∞ pipeline_executions 1───∞ pipeline_steps
-      │                  │                       │
-      │                  └──1───∞ media_items     └──── template_id → pipeline_templates
+pipeline_templates 1─ ─ ─ ─ ┐ (pipeline_template_id, SET NULL)
+platform_credentials 1─ ─ ─ ┤ (credential_id, SET NULL)
+                            ▼
+source_configs ──1:N── content_items ──1:N── pipeline_executions ──1:N── pipeline_steps
+      │           (SET NULL)  │
+      │                       ├──1:N── media_items          (CASCADE)
+      │                       ├──1:1── watch_records ──1:N── watch_logs   影视库 (CASCADE)
+      │                       ├──1:1── reading_progress                   电子书 (CASCADE)
+      │                       ├──1:N── book_annotations                   电子书 (CASCADE)
+      │                       └──1:N── book_bookmarks                     电子书 (CASCADE)
       │
-      └──1───∞ collection_records
+      ├──1:N── collection_records    采集型的运行记录 (CASCADE)
+      ├──1:N── sync_task_progress    同步型的运行记录 (CASCADE)
+      └──1:N── finance_data_points   金融时序 (CASCADE)
 
-prompt_templates (独立, 被 step_config 引用)
-system_settings  (独立配置表)
-
-platform_credentials 1─ ─ ─ ─∞ source_configs  (credential_id FK)
-
-source_configs 1───∞ finance_data_points  (source_id FK)
-
-content_items 1───∞ reading_progress     (content_id FK, 电子书阅读进度)
-content_items 1───∞ book_annotations     (content_id FK, 书籍标注)
-content_items 1───∞ book_bookmarks       (content_id FK, 书签)
-
-sync_task_progress  (独立表, 同步任务进度追踪)
+prompt_templates、system_settings：独立表
 ```
 
-**核心解耦关系**: `source_configs.pipeline_template_id → pipeline_templates.id`
-数据源通过此外键绑定流水线模板，而非硬编码映射。
+三个要点：
 
-### 2.2 表结构详细定义
+- **两条主线共用 `content_items`**：信息流条目与资料库条目（影片、书、书签……）都是这张表的行，领域身份看 `kind`。资料库的领域字段目前在 `raw_data`，用户侧的标记在各自的附表（`watch_*`、`reading_progress`、`book_*`）。
+- **`content_items.source_id` 是 SET NULL**，而采集记录、同步记录、金融数据点随数据源 CASCADE。因此删除数据源时：信息流内容可以成为无主行；用户数据类数据源下有内容时拒绝非级联删除（见下方「内容保留策略」）。
+- **数据源与流水线解耦**：`source_configs.pipeline_template_id → pipeline_templates.id`，而非硬编码映射。
 
-#### source_configs (数据源配置)
+### 2.2 表结构
 
-只描述「从哪获取信息」，source_type 不含视频平台等混合类型。
+> **本节的表结构由模型生成，不要手改。** 改了模型后运行 `scripts/verify/drift/check.sh --write` 更新；`scripts/verify/drift/check.sh` 同时检查「模型 vs 真实库」与「本节 vs 模型」两项漂移。
+> 枚举取值、字段语义见 `docs/business_glossary.md`；某种源类型能做什么见 `backend/app/models/source_types.py`。
 
-数据源分为两大类（派生属性，非 DB 列）：
-- **网络数据 (network)**: rss.hub, rss.standard, api.akshare, web.scraper, podcast.apple, account.generic — 有 Collector，定时自动采集
-- **用户数据 (user)**: user.note, file.upload, system.notification, sync.* (apple_books, wechat_read, bilibili, kindle, safari_bookmarks, chrome_bookmarks, douban_books, douban_movies, zhihu, github_stars, twitter) — 用户/系统主动提交或同步推送，schedule_enabled 自动置 false
-
-通用内容提交 API：`POST /api/content/submit`（文本）、`POST /api/content/upload`（文件），校验目标源必须为 user 分类。
-
-```sql
-CREATE TABLE source_configs (
-    id              TEXT PRIMARY KEY,           -- UUID
-    name            TEXT NOT NULL,              -- 源名称 (e.g. "B站-某UP主")
-    source_type     TEXT NOT NULL,              -- 来源渠道: rss.hub/rss.standard/web.scraper/api.akshare/podcast.apple/...
-    url             TEXT,                       -- 订阅/采集地址
-    description     TEXT,
-    -- 调度
-    schedule_enabled BOOLEAN DEFAULT TRUE,
-    schedule_mode   TEXT DEFAULT 'auto',        -- auto / fixed / manual
-    schedule_interval_override INTEGER,         -- 固定间隔覆盖值（仅 fixed 模式）
-    calculated_interval INTEGER,                -- 系统计算的间隔（仅供展示）
-    next_collection_at DATETIME,                -- 预计算的下次采集时间
-    -- 高级调度
-    periodicity_data JSONB,                     -- 周期模式识别结果 JSON
-    periodicity_updated_at DATETIME,            -- 周期分析更新时间
-    hotspot_level   TEXT,                       -- 热点等级: extreme/high/instant
-    hotspot_detected_at DATETIME,               -- 热点检测时间
-    -- 流水线绑定
-    pipeline_template_id TEXT,                  -- 绑定的流水线模板 (解耦关键!)
-    config_json     JSONB,                      -- 渠道特定配置 (JSON)
-    credential_id   TEXT,                       -- 关联的平台凭证
-    -- 内容保留
-    auto_cleanup_enabled BOOLEAN DEFAULT FALSE, -- （当前不参与判定）清理是全局行为，见下方「内容保留策略」
-    retention_days  INTEGER,                    -- 内容保留天数 (null=使用全局默认)
-    -- 运行状态
-    last_collected_at DATETIME,
-    consecutive_failures INTEGER DEFAULT 0,
-    is_active       BOOLEAN DEFAULT TRUE,
-    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (pipeline_template_id) REFERENCES pipeline_templates(id),
-    FOREIGN KEY (credential_id) REFERENCES platform_credentials(id)
-);
-
-CREATE INDEX ix_source_credential_id ON source_configs(credential_id);
-CREATE INDEX ix_source_next_collection ON source_configs(is_active, schedule_enabled, next_collection_at);
-```
+**数据源的两大类**（由源类型注册表决定，非 DB 列）：网络数据 (network) 由 Collector 采集、可定时调度；用户数据 (user) 是用户 / 系统主动提交或同步进来的资料（`sync.*` / `user.*` / `file.*` / `system.*`）。
 
 **内容保留策略**（唯一判定处 `app/services/content_retention.py`，定时清理与清理预览共用）：
 
-- 每日清理只作用于**网络采集类**数据源（`rss.*` / `podcast.*` / `web.*` / `api.*` / `account.*`）。保留期 = `source.retention_days`，为空则用全局 `default_retention_days`（未配置时 30 天，0 = 永久）。
-- **用户数据类**数据源（`sync.*` / `user.*` / `file.*`：影视库、书、书签、笔记、上传文件）**永不自动清理**。
+- 每日清理只作用于**网络采集类**数据源。保留期 = `source.retention_days`，为空则用全局 `default_retention_days`（未配置时 30 天，0 = 永久）。`source.auto_cleanup_enabled` 目前不参与判定。
+- **用户数据类**数据源（影视库、书、书签、笔记、上传文件）**永不自动清理**。
 - 采集类内容满足任一条件即受保护：内容已收藏、有用户笔记、其下任一媒体项已收藏。
-- 删除数据源时，用户数据类数据源下若有内容，**拒绝非级联删除**（`SourceDeleteBlocked` → 409）：这类内容的领域身份依赖所属数据源，`source_id` 置空会让它们从影视库等页面消失。
+- 删除数据源时，用户数据类数据源下若有内容，**拒绝非级联删除**（`SourceDeleteBlocked` → 409）。
 
-
-#### collection_records (数据源抓取记录)
-
-独立于 Pipeline，记录每次数据源采集结果。
-
-```sql
-CREATE TABLE collection_records (
-    id              TEXT PRIMARY KEY,
-    source_id       TEXT NOT NULL,
-    status          TEXT DEFAULT 'running',     -- running/completed/failed
-    items_found     INTEGER DEFAULT 0,
-    items_new       INTEGER DEFAULT 0,
-    error_message   TEXT,
-    started_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
-    completed_at    DATETIME,
-    FOREIGN KEY (source_id) REFERENCES source_configs(id) ON DELETE CASCADE
-);
-```
-
-#### content_items (内容项)
-
-```sql
-CREATE TABLE content_items (
-    id              TEXT PRIMARY KEY,           -- UUID
-    source_id       TEXT,                       -- 外键 -> source_configs (SET NULL on delete)
-    title           TEXT NOT NULL,              -- 内容标题
-    external_id     TEXT NOT NULL,              -- 外部唯一标识（信息流条目为 URL hash；影片为 tmdb:movie:311 这类）
-    kind            TEXT NOT NULL DEFAULT 'article', -- ContentKind：内容的领域身份，写入时确定（见术语表 §3.5）
-    url             TEXT,                       -- 原始链接
-    author          TEXT,                       -- 作者
-    raw_data        JSONB,                      -- 原始数据 (JSON)
-    processed_content TEXT,                     -- 清洗后全文
-    analysis_result JSONB,                      -- LLM 分析结果 (JSON)
-    status          TEXT DEFAULT 'pending',     -- ContentStatus 枚举 (pending/processing/ready/analyzed/failed)
-    title_hash      BIGINT,                     -- SimHash 64 位去重指纹
-    duplicate_of_id TEXT,                       -- 标记重复项 (指向原始 content_id)
-    published_at    DATETIME,                   -- 原始发布时间
-    collected_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
-    is_favorited    BOOLEAN DEFAULT FALSE,      -- 是否收藏
-    favorited_at    DATETIME,                   -- 收藏时间
-    user_note       TEXT,                       -- 用户笔记
-    chat_history    JSONB,                      -- AI 对话历史 (JSON: [{role, content}, ...])
-    view_count      INTEGER DEFAULT 0,           -- 已读标记次数（滚动自动已读/批量已读/打开详情都会置 >0）
-    last_viewed_at  DATETIME,                     -- 最后一次已读写入时间
-    opened_at       DATETIME,                     -- 首次真正打开详情的时间（仅 POST /content/{id}/view 写入；仪表盘阅读统计以此为准）
-    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (source_id) REFERENCES source_configs(id) ON DELETE SET NULL,
-    FOREIGN KEY (duplicate_of_id) REFERENCES content_items(id) ON DELETE SET NULL,
-    UNIQUE (source_id, external_id)            -- 去重约束
-);
-
-CREATE INDEX idx_content_status ON content_items(status);
-CREATE INDEX idx_content_source ON content_items(source_id);
-CREATE INDEX idx_content_collected ON content_items(collected_at);
-CREATE INDEX idx_content_external ON content_items(external_id);
-```
-
-#### media_items (媒体项)
-
-ContentItem 一对多 MediaItem，由 `localize_media` 步骤创建。
-
-```sql
-CREATE TABLE media_items (
-    id              TEXT PRIMARY KEY,           -- UUID
-    content_id      TEXT NOT NULL,              -- 外键 -> content_items
-    media_type      TEXT NOT NULL,              -- MediaType: image/video/audio
-    original_url    TEXT NOT NULL,              -- 远程 URL
-    local_path      TEXT,                       -- 下载后的本地路径
-    filename        TEXT,                       -- 本地文件名
-    status          TEXT DEFAULT 'pending',     -- pending/downloaded/failed
-    metadata_json   TEXT,                       -- JSON: 类型特定元数据 (thumbnail_path, duration 等)
-    playback_position INTEGER DEFAULT 0,       -- 播放进度（秒）
-    last_played_at  DATETIME,                  -- 最后播放时间
-    is_favorited    BOOLEAN DEFAULT FALSE,      -- 是否收藏
-    favorited_at    DATETIME,                  -- 收藏时间
-    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (content_id) REFERENCES content_items(id) ON DELETE CASCADE
-);
-
-CREATE INDEX ix_media_item_content_id ON media_items(content_id);
-```
-
-#### pipeline_executions (流水线执行记录)
-
-```sql
-CREATE TABLE pipeline_executions (
-    id              TEXT PRIMARY KEY,
-    content_id      TEXT NOT NULL,               -- 外键 -> content_items
-    source_id       TEXT,                       -- 外键 -> source_configs
-    template_id     TEXT,                       -- 外键 -> pipeline_templates
-    template_name   TEXT,                       -- 冗余存储, 方便展示
-    status          TEXT DEFAULT 'pending',
-    current_step    INTEGER DEFAULT 0,
-    total_steps     INTEGER DEFAULT 0,
-    trigger_source  TEXT DEFAULT 'manual',
-    error_message   TEXT,
-    started_at      DATETIME,
-    completed_at    DATETIME,
-    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (content_id) REFERENCES content_items(id),
-    FOREIGN KEY (source_id) REFERENCES source_configs(id),
-    FOREIGN KEY (template_id) REFERENCES pipeline_templates(id)
-);
-```
-
-#### pipeline_steps (步骤执行记录)
-
-```sql
-CREATE TABLE pipeline_steps (
-    id              TEXT PRIMARY KEY,
-    pipeline_id     TEXT NOT NULL,
-    step_index      INTEGER NOT NULL,
-    step_type       TEXT NOT NULL,              -- 原子操作类型 (StepType 枚举)
-    step_config     JSONB,                      -- 操作配置 (JSON, 从模板复制)
-    status          TEXT DEFAULT 'pending',
-    is_critical     BOOLEAN DEFAULT FALSE,
-    input_data      JSONB,                      -- 输入 (JSON)
-    output_data     JSONB,                      -- 输出 (JSON)
-    error_message   TEXT,
-    retry_count     INTEGER DEFAULT 0,
-    started_at      DATETIME,
-    completed_at    DATETIME,
-    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (pipeline_id) REFERENCES pipeline_executions(id) ON DELETE CASCADE
-);
-```
-
-#### pipeline_templates (流水线模板)
-
-```sql
-CREATE TABLE pipeline_templates (
-    id              TEXT PRIMARY KEY,
-    name            TEXT NOT NULL UNIQUE,
-    description     TEXT,
-    steps_config    JSONB NOT NULL,             -- 步骤定义列表 (JSON)
-    is_builtin      BOOLEAN DEFAULT FALSE,     -- 是否内置模板
-    is_active       BOOLEAN DEFAULT TRUE,
-    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-```
+**通用内容提交**：`POST /api/content/submit`（文本，恒为 `kind=note`）、`POST /api/content/upload`（文件，`kind=file`，目标源必须是 `file.upload`）。
 
 `steps_config` JSON 结构 — 模板包含所有步骤（含 extract_content、localize_media），Orchestrator 不再自动注入:
 ```json
@@ -330,147 +144,386 @@ CREATE TABLE pipeline_templates (
 ]
 ```
 
-#### prompt_templates (提示词模板)
+<!-- BEGIN GENERATED: schema -->
 
-```sql
-CREATE TABLE prompt_templates (
-    id              TEXT PRIMARY KEY,           -- UUID
-    name            TEXT NOT NULL,              -- 模板名称
-    template_type   TEXT DEFAULT 'news_analysis', -- TemplateType 枚举
-    system_prompt   TEXT,                       -- 系统提示词
-    user_prompt     TEXT NOT NULL,              -- 用户提示词 (支持变量插值)
-    output_format   TEXT,                       -- 期望输出格式描述
-    is_default      BOOLEAN DEFAULT FALSE,      -- 是否为默认模板
-    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-```
+#### book_annotations
 
-#### system_settings (系统设置)
+电子书标注。
 
-```sql
-CREATE TABLE system_settings (
-    key             TEXT PRIMARY KEY,           -- 配置键
-    value           TEXT,                       -- 配置值；api_key/token/secret 等敏感键使用 Fernet 加密存储
-    description     TEXT,                       -- 说明
-    updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-```
+| 列 | 类型 | 可空 | 默认 | 约束 |
+|---|---|---|---|---|
+| `id` | VARCHAR | 否 | （ORM 端） | PK |
+| `content_id` | VARCHAR | 否 |  | FK → content_items.id（ON DELETE CASCADE） |
+| `external_id` | VARCHAR | 是 |  |  |
+| `cfi_range` | TEXT | 是 |  |  |
+| `section_index` | INTEGER | 是 |  |  |
+| `location` | VARCHAR | 是 |  |  |
+| `type` | VARCHAR | 是 | `highlight`（ORM 端） |  |
+| `color` | VARCHAR | 是 | `yellow`（ORM 端） |  |
+| `selected_text` | TEXT | 是 |  |  |
+| `note` | TEXT | 是 |  |  |
+| `created_at` | DATETIME | 是 | （ORM 端） |  |
+| `updated_at` | DATETIME | 是 | （ORM 端） |  |
 
-#### platform_credentials (平台凭证)
+- 索引 `ix_annotation_content`: (content_id)
+- 索引 `ix_annotation_external_id`: (external_id)
+- 唯一索引 `uq_annotation_content_external`: (content_id, external_id) WHERE external_id IS NOT NULL
 
-集中管理 Cookie/Token 等平台认证信息，多个数据源可引用同一凭证。
+#### book_bookmarks
 
-```sql
-CREATE TABLE platform_credentials (
-    id              TEXT PRIMARY KEY,           -- UUID
-    platform        TEXT NOT NULL,              -- 平台标识: bilibili/twitter/...
-    credential_type TEXT DEFAULT 'cookie',      -- cookie/oauth_token/api_key
-    credential_data TEXT NOT NULL,              -- 凭证内容 (加密存储)
-    display_name    TEXT NOT NULL,              -- 显示名称
-    status          TEXT DEFAULT 'active',      -- active/expired/error
-    expires_at      DATETIME,                   -- 过期时间
-    extra_info      TEXT,                       -- JSON: 附加信息 (uid, username 等)
-    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
-);
+电子书书签。
 
-CREATE INDEX ix_credential_platform ON platform_credentials(platform);
-```
+| 列 | 类型 | 可空 | 默认 | 约束 |
+|---|---|---|---|---|
+| `id` | VARCHAR | 否 | （ORM 端） | PK |
+| `content_id` | VARCHAR | 否 |  | FK → content_items.id（ON DELETE CASCADE） |
+| `cfi` | TEXT | 否 |  |  |
+| `title` | VARCHAR | 是 |  |  |
+| `section_title` | VARCHAR | 是 |  |  |
+| `created_at` | DATETIME | 是 | （ORM 端） |  |
 
-#### finance_data_points (金融数据点)
+- 索引 `ix_bookmark_content`: (content_id)
 
-专用列式存储金融数值数据，替代 ContentItem 的 raw_data JSON 存储。按数据类型使用不同列：宏观用 value，股票用 OHLCV，基金用 NAV。
+#### collection_records
 
-```sql
-CREATE TABLE finance_data_points (
-    id              TEXT PRIMARY KEY,           -- UUID
-    source_id       TEXT NOT NULL,              -- 外键 -> source_configs
-    category        TEXT NOT NULL DEFAULT 'unknown', -- 数据分类: macro/stock/fund
-    date_key        TEXT NOT NULL,              -- 原始日期格式: "2024-01-15", "2024-01", "2024Q3"
-    published_at    DATETIME,                   -- 解析后标准时间 (用于排序和范围查询)
-    -- 宏观指标
-    value           FLOAT,                      -- 单值指标 (CPI, GDP 等)
-    -- OHLCV (股票/ETF)
-    open            FLOAT,
-    high            FLOAT,
-    low             FLOAT,
-    close           FLOAT,
-    volume          FLOAT,
-    -- 基金净值
-    unit_nav        FLOAT,                      -- 单位净值
-    cumulative_nav  FLOAT,                      -- 累计净值
-    -- 分析
-    alert_json      JSONB,                      -- 告警信息 (JSON)
-    analysis_result JSONB,                      -- LLM 分析结果
-    collected_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
-    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (source_id) REFERENCES source_configs(id)
-);
+采集型数据源的运行记录，同时是智能调度算法的输入。
 
-CREATE UNIQUE INDEX uq_finance_source_date ON finance_data_points(source_id, date_key);
-CREATE INDEX ix_finance_source_date ON finance_data_points(source_id, date_key);
-```
+| 列 | 类型 | 可空 | 默认 | 约束 |
+|---|---|---|---|---|
+| `id` | VARCHAR | 否 | （ORM 端） | PK |
+| `source_id` | VARCHAR | 否 |  | FK → source_configs.id（ON DELETE CASCADE） |
+| `status` | VARCHAR | 是 | `running`（ORM 端） |  |
+| `items_found` | INTEGER | 是 | `0`（ORM 端） |  |
+| `items_new` | INTEGER | 是 | `0`（ORM 端） |  |
+| `error_message` | TEXT | 是 |  |  |
+| `started_at` | DATETIME | 是 | （ORM 端） |  |
+| `completed_at` | DATETIME | 是 |  |  |
 
-#### reading_progress (电子书阅读进度)
+- 索引 `ix_colrec_source_id`: (source_id)
+- 索引 `ix_colrec_source_started`: (source_id, started_at)
+- 索引 `ix_colrec_source_status_started`: (source_id, status, started_at)
 
-```sql
-CREATE TABLE reading_progress (
-    id              TEXT PRIMARY KEY,
-    content_id      TEXT NOT NULL,              -- 外键 -> content_items
-    progress        FLOAT DEFAULT 0,            -- 阅读进度 (0.0-1.0)
-    updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (content_id) REFERENCES content_items(id) ON DELETE CASCADE
-);
-```
+#### content_items
 
-#### book_annotations (书籍标注)
+内容项。信息流条目与资料库条目共用此表，领域身份看 `kind`（ContentKind）。
 
-```sql
-CREATE TABLE book_annotations (
-    id              TEXT PRIMARY KEY,
-    content_id      TEXT NOT NULL,              -- 外键 -> content_items (书籍)
-    chapter         TEXT,                       -- 章节
-    text            TEXT NOT NULL,              -- 标注文本
-    note            TEXT,                       -- 用户笔记
-    color           TEXT,                       -- 标注颜色
-    location        TEXT,                       -- 位置信息
-    external_id     TEXT,                       -- 外部唯一标识
-    annotated_at    DATETIME,                   -- 标注时间
-    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (content_id) REFERENCES content_items(id) ON DELETE CASCADE
-);
-```
+| 列 | 类型 | 可空 | 默认 | 约束 |
+|---|---|---|---|---|
+| `id` | VARCHAR | 否 | （ORM 端） | PK |
+| `source_id` | VARCHAR | 是 |  | FK → source_configs.id（ON DELETE SET NULL） |
+| `title` | VARCHAR | 否 |  |  |
+| `external_id` | VARCHAR | 否 |  |  |
+| `kind` | VARCHAR | 否 | `article`（库级） |  |
+| `url` | VARCHAR | 是 |  |  |
+| `author` | VARCHAR | 是 |  |  |
+| `raw_data` | JSONB | 是 |  |  |
+| `processed_content` | TEXT | 是 |  |  |
+| `analysis_result` | JSONB | 是 |  |  |
+| `status` | VARCHAR | 是 | `pending`（ORM 端） |  |
+| `published_at` | DATETIME | 是 |  |  |
+| `collected_at` | DATETIME | 是 | （ORM 端） |  |
+| `is_favorited` | BOOLEAN | 是 | `False`（ORM 端） |  |
+| `favorited_at` | DATETIME | 是 |  |  |
+| `user_note` | TEXT | 是 |  |  |
+| `chat_history` | JSONB | 是 |  |  |
+| `view_count` | INTEGER | 是 | `0`（ORM 端） |  |
+| `last_viewed_at` | DATETIME | 是 |  |  |
+| `opened_at` | DATETIME | 是 |  |  |
+| `title_hash` | BIGINT | 是 |  |  |
+| `duplicate_of_id` | VARCHAR | 是 |  | FK → content_items.id（ON DELETE SET NULL） |
+| `created_at` | DATETIME | 是 | （ORM 端） |  |
+| `updated_at` | DATETIME | 是 | （ORM 端） |  |
 
-#### book_bookmarks (书签)
+- 唯一约束 `uq_source_external`: (source_id, external_id)
+- 索引 `ix_content_analysis_gin`: (analysis_result)
+- 索引 `ix_content_collected_at`: (collected_at)
+- 索引 `ix_content_duplicate_of`: (duplicate_of_id)
+- 索引 `ix_content_is_favorited`: (is_favorited)
+- 索引 `ix_content_items_opened_at`: (opened_at)
+- 索引 `ix_content_kind`: (kind)
+- 索引 `ix_content_source_id`: (source_id)
+- 索引 `ix_content_source_status_collected`: (source_id, status, collected_at)
+- 索引 `ix_content_status`: (status)
+- 索引 `ix_content_title_hash`: (title_hash)
+- 索引 `ix_content_url`: (url)
+- 唯一索引 `uq_content_film_external`: (external_id) WHERE kind = 'film'
 
-```sql
-CREATE TABLE book_bookmarks (
-    id              TEXT PRIMARY KEY,
-    content_id      TEXT NOT NULL,              -- 外键 -> content_items
-    title           TEXT,
-    url             TEXT NOT NULL,
-    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (content_id) REFERENCES content_items(id) ON DELETE CASCADE
-);
-```
+#### finance_data_points
 
-#### sync_task_progress (同步任务进度)
+金融时序数据点。AkShare 采集器直接写这里，不产出 ContentItem。
 
-```sql
-CREATE TABLE sync_task_progress (
-    id              TEXT PRIMARY KEY,
-    source_type     TEXT NOT NULL,              -- 同步类型 (sync.wechat_read 等)
-    status          TEXT DEFAULT 'pending',     -- pending/running/completed/failed
-    progress        FLOAT DEFAULT 0,            -- 进度 (0.0-1.0)
-    message         TEXT,                       -- 当前状态描述
-    items_total     INTEGER DEFAULT 0,
-    items_processed INTEGER DEFAULT 0,
-    started_at      DATETIME,
-    completed_at    DATETIME,
-    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-```
+| 列 | 类型 | 可空 | 默认 | 约束 |
+|---|---|---|---|---|
+| `id` | VARCHAR | 否 | （ORM 端） | PK |
+| `source_id` | VARCHAR | 否 |  | FK → source_configs.id（ON DELETE CASCADE） |
+| `category` | VARCHAR | 否 | `unknown`（ORM 端） |  |
+| `date_key` | VARCHAR | 否 |  |  |
+| `published_at` | DATETIME | 是 |  |  |
+| `value` | FLOAT | 是 |  |  |
+| `open` | FLOAT | 是 |  |  |
+| `high` | FLOAT | 是 |  |  |
+| `low` | FLOAT | 是 |  |  |
+| `close` | FLOAT | 是 |  |  |
+| `volume` | FLOAT | 是 |  |  |
+| `unit_nav` | FLOAT | 是 |  |  |
+| `cumulative_nav` | FLOAT | 是 |  |  |
+| `alert_json` | JSONB | 是 |  |  |
+| `analysis_result` | JSONB | 是 |  |  |
+| `collected_at` | DATETIME | 是 | （ORM 端） |  |
+| `created_at` | DATETIME | 是 | （ORM 端） |  |
+
+- 唯一约束 `uq_finance_source_date`: (source_id, date_key)
+- 索引 `ix_finance_source_date`: (source_id, date_key)
+
+#### media_items
+
+内容关联的媒体项（一对多）。
+
+| 列 | 类型 | 可空 | 默认 | 约束 |
+|---|---|---|---|---|
+| `id` | VARCHAR | 否 | （ORM 端） | PK |
+| `content_id` | VARCHAR | 否 |  | FK → content_items.id（ON DELETE CASCADE） |
+| `media_type` | VARCHAR | 否 |  |  |
+| `original_url` | VARCHAR | 否 |  |  |
+| `local_path` | VARCHAR | 是 |  |  |
+| `filename` | VARCHAR | 是 |  |  |
+| `status` | VARCHAR | 是 | `pending`（ORM 端） |  |
+| `metadata_json` | JSONB | 是 |  |  |
+| `playback_position` | INTEGER | 是 | `0`（ORM 端） |  |
+| `last_played_at` | DATETIME | 是 |  |  |
+| `is_favorited` | BOOLEAN | 否 | `false`（库级） |  |
+| `favorited_at` | DATETIME | 是 |  |  |
+| `created_at` | DATETIME | 是 | （ORM 端） |  |
+
+- 索引 `ix_media_item_content_id`: (content_id)
+- 索引 `ix_media_media_type`: (media_type)
+- 索引 `ix_media_status`: (status)
+
+#### pipeline_executions
+
+流水线执行记录。
+
+| 列 | 类型 | 可空 | 默认 | 约束 |
+|---|---|---|---|---|
+| `id` | VARCHAR | 否 | （ORM 端） | PK |
+| `content_id` | VARCHAR | 否 |  | FK → content_items.id（ON DELETE CASCADE） |
+| `source_id` | VARCHAR | 是 |  | FK → source_configs.id（ON DELETE SET NULL） |
+| `template_id` | VARCHAR | 是 |  | FK → pipeline_templates.id（ON DELETE SET NULL） |
+| `template_name` | VARCHAR | 是 |  |  |
+| `status` | VARCHAR | 是 | `pending`（ORM 端） |  |
+| `current_step` | INTEGER | 是 | `0`（ORM 端） |  |
+| `total_steps` | INTEGER | 是 | `0`（ORM 端） |  |
+| `trigger_source` | VARCHAR | 是 | `manual`（ORM 端） |  |
+| `error_message` | TEXT | 是 |  |  |
+| `started_at` | DATETIME | 是 |  |  |
+| `completed_at` | DATETIME | 是 |  |  |
+| `created_at` | DATETIME | 是 | （ORM 端） |  |
+
+- 索引 `ix_pexec_content_id`: (content_id)
+- 索引 `ix_pexec_created_at`: (created_at)
+- 索引 `ix_pexec_source_id`: (source_id)
+- 索引 `ix_pexec_status`: (status)
+
+#### pipeline_steps
+
+流水线步骤执行记录。
+
+| 列 | 类型 | 可空 | 默认 | 约束 |
+|---|---|---|---|---|
+| `id` | VARCHAR | 否 | （ORM 端） | PK |
+| `pipeline_id` | VARCHAR | 否 |  | FK → pipeline_executions.id（ON DELETE CASCADE） |
+| `step_index` | INTEGER | 否 |  |  |
+| `step_type` | VARCHAR | 否 |  |  |
+| `step_config` | JSONB | 是 |  |  |
+| `is_critical` | BOOLEAN | 是 | `False`（ORM 端） |  |
+| `status` | VARCHAR | 是 | `pending`（ORM 端） |  |
+| `input_data` | JSONB | 是 |  |  |
+| `output_data` | JSONB | 是 |  |  |
+| `error_message` | TEXT | 是 |  |  |
+| `retry_count` | INTEGER | 是 | `0`（ORM 端） |  |
+| `started_at` | DATETIME | 是 |  |  |
+| `completed_at` | DATETIME | 是 |  |  |
+| `created_at` | DATETIME | 是 | （ORM 端） |  |
+
+- 索引 `ix_pstep_pipeline_id`: (pipeline_id)
+- 索引 `ix_pstep_status`: (status)
+
+#### pipeline_templates
+
+流水线模板：显式定义全部步骤。
+
+| 列 | 类型 | 可空 | 默认 | 约束 |
+|---|---|---|---|---|
+| `id` | VARCHAR | 否 | （ORM 端） | PK |
+| `name` | VARCHAR | 否 |  |  |
+| `description` | TEXT | 是 |  |  |
+| `steps_config` | JSONB | 否 |  |  |
+| `is_builtin` | BOOLEAN | 是 | `False`（ORM 端） |  |
+| `is_active` | BOOLEAN | 是 | `True`（ORM 端） |  |
+| `created_at` | DATETIME | 是 | （ORM 端） |  |
+| `updated_at` | DATETIME | 是 | （ORM 端） |  |
+
+- 唯一约束 `None`: (name)
+
+#### platform_credentials
+
+平台凭证（`credential_data` Fernet 加密）。
+
+| 列 | 类型 | 可空 | 默认 | 约束 |
+|---|---|---|---|---|
+| `id` | VARCHAR | 否 | （ORM 端） | PK |
+| `platform` | VARCHAR | 否 |  |  |
+| `credential_type` | VARCHAR | 是 | `cookie`（ORM 端） |  |
+| `credential_data` | TEXT | 否 |  |  |
+| `display_name` | VARCHAR | 否 |  |  |
+| `status` | VARCHAR | 是 | `active`（ORM 端） |  |
+| `expires_at` | DATETIME | 是 |  |  |
+| `extra_info` | JSONB | 是 |  |  |
+| `created_at` | DATETIME | 是 | （ORM 端） |  |
+| `updated_at` | DATETIME | 是 | （ORM 端） |  |
+
+- 索引 `ix_credential_platform`: (platform)
+
+#### prompt_templates
+
+提示词模板。
+
+| 列 | 类型 | 可空 | 默认 | 约束 |
+|---|---|---|---|---|
+| `id` | VARCHAR | 否 | （ORM 端） | PK |
+| `name` | VARCHAR | 否 |  |  |
+| `template_type` | VARCHAR | 是 | `news_analysis`（ORM 端） |  |
+| `system_prompt` | TEXT | 是 |  |  |
+| `user_prompt` | TEXT | 否 |  |  |
+| `output_format` | TEXT | 是 |  |  |
+| `is_default` | BOOLEAN | 是 | `False`（ORM 端） |  |
+| `created_at` | DATETIME | 是 | （ORM 端） |  |
+| `updated_at` | DATETIME | 是 | （ORM 端） |  |
+
+#### reading_progress
+
+电子书阅读进度（与书 1:1）。
+
+| 列 | 类型 | 可空 | 默认 | 约束 |
+|---|---|---|---|---|
+| `id` | VARCHAR | 否 | （ORM 端） | PK |
+| `content_id` | VARCHAR | 否 |  | FK → content_items.id（ON DELETE CASCADE） |
+| `cfi` | TEXT | 是 |  |  |
+| `progress` | FLOAT | 是 | `0`（ORM 端） |  |
+| `section_index` | INTEGER | 是 | `0`（ORM 端） |  |
+| `section_title` | VARCHAR | 是 |  |  |
+| `updated_at` | DATETIME | 是 | （ORM 端） |  |
+| `created_at` | DATETIME | 是 | （ORM 端） |  |
+
+- 唯一索引 `uq_reading_progress_content`: (content_id)
+
+#### source_configs
+
+数据源配置。只描述「从哪来」；某种源类型能做什么由源类型注册表 `app/models/source_types.py` 决定。
+
+| 列 | 类型 | 可空 | 默认 | 约束 |
+|---|---|---|---|---|
+| `id` | VARCHAR | 否 | （ORM 端） | PK |
+| `name` | VARCHAR | 否 |  |  |
+| `source_type` | VARCHAR | 否 |  |  |
+| `url` | VARCHAR | 是 |  |  |
+| `description` | TEXT | 是 |  |  |
+| `schedule_enabled` | BOOLEAN | 是 | `True`（ORM 端） |  |
+| `schedule_mode` | VARCHAR | 否 | `auto`（库级） |  |
+| `schedule_interval_override` | INTEGER | 是 |  |  |
+| `calculated_interval` | INTEGER | 是 |  |  |
+| `next_collection_at` | DATETIME | 是 |  |  |
+| `periodicity_data` | JSONB | 是 |  |  |
+| `periodicity_updated_at` | DATETIME | 是 |  |  |
+| `hotspot_level` | VARCHAR | 是 |  |  |
+| `hotspot_detected_at` | DATETIME | 是 |  |  |
+| `pipeline_template_id` | VARCHAR | 是 |  | FK → pipeline_templates.id（ON DELETE SET NULL） |
+| `config_json` | JSONB | 是 |  |  |
+| `credential_id` | VARCHAR | 是 |  | FK → platform_credentials.id（ON DELETE SET NULL） |
+| `auto_cleanup_enabled` | BOOLEAN | 是 | `False`（ORM 端） |  |
+| `retention_days` | INTEGER | 是 |  |  |
+| `last_collected_at` | DATETIME | 是 |  |  |
+| `consecutive_failures` | INTEGER | 是 | `0`（ORM 端） |  |
+| `is_active` | BOOLEAN | 是 | `True`（ORM 端） |  |
+| `created_at` | DATETIME | 是 | （ORM 端） |  |
+| `updated_at` | DATETIME | 是 | （ORM 端） |  |
+
+- 索引 `ix_source_credential_id`: (credential_id)
+- 索引 `ix_source_next_collection`: (is_active, schedule_enabled, next_collection_at)
+
+#### sync_task_progress
+
+同步的运行记录与进度通道：内置同步（手动 / 自动）与外部推送都写，`options_json._trigger` 区分。
+
+| 列 | 类型 | 可空 | 默认 | 约束 |
+|---|---|---|---|---|
+| `id` | VARCHAR | 否 | （ORM 端） | PK |
+| `source_id` | VARCHAR | 否 |  | FK → source_configs.id（ON DELETE CASCADE） |
+| `status` | VARCHAR | 是 | `pending`（ORM 端） |  |
+| `phase` | VARCHAR | 是 |  |  |
+| `message` | VARCHAR | 是 |  |  |
+| `current` | INTEGER | 是 | `0`（ORM 端） |  |
+| `total` | INTEGER | 是 | `0`（ORM 端） |  |
+| `result_data` | JSONB | 是 |  |  |
+| `error_message` | TEXT | 是 |  |  |
+| `options_json` | JSONB | 是 |  |  |
+| `started_at` | DATETIME | 是 |  |  |
+| `completed_at` | DATETIME | 是 |  |  |
+| `created_at` | DATETIME | 是 | （ORM 端） |  |
+| `updated_at` | DATETIME | 是 | （ORM 端） |  |
+
+- 索引 `ix_sync_progress_created`: (created_at)
+- 索引 `ix_sync_progress_source_status`: (source_id, status)
+
+#### system_settings
+
+键值配置。含 `content.filters` 等 JSON 业务对象。
+
+| 列 | 类型 | 可空 | 默认 | 约束 |
+|---|---|---|---|---|
+| `key` | VARCHAR | 否 |  | PK |
+| `value` | TEXT | 是 |  |  |
+| `description` | TEXT | 是 |  |  |
+| `updated_at` | DATETIME | 是 | （ORM 端） |  |
+
+#### watch_logs
+
+影视库：一部影片的多次观看记录（日期 + 精度 / 评分 / 感想）。
+
+| 列 | 类型 | 可空 | 默认 | 约束 |
+|---|---|---|---|---|
+| `id` | VARCHAR | 否 | （ORM 端） | PK |
+| `record_id` | VARCHAR | 否 |  | FK → watch_records.id（ON DELETE CASCADE） |
+| `watched_at` | DATE | 是 |  |  |
+| `watched_precision` | VARCHAR | 是 |  |  |
+| `my_rating` | SMALLINT | 是 |  |  |
+| `note` | TEXT | 是 |  |  |
+| `created_at` | DATETIME | 是 | （ORM 端） |  |
+| `updated_at` | DATETIME | 是 | （ORM 端） |  |
+
+- 索引 `ix_watch_logs_record`: (record_id)
+
+#### watch_records
+
+影视库：用户对一部影片的标记（与影片 1:1）。`my_rating` / `watched_at` 是最近一次观看记录的缓存。
+
+| 列 | 类型 | 可空 | 默认 | 约束 |
+|---|---|---|---|---|
+| `id` | VARCHAR | 否 | （ORM 端） | PK |
+| `content_id` | VARCHAR | 否 |  | FK → content_items.id（ON DELETE CASCADE） |
+| `status` | VARCHAR | 否 | `unmarked`（ORM 端） |  |
+| `my_rating` | SMALLINT | 是 |  |  |
+| `watched_at` | DATE | 是 |  |  |
+| `watched_precision` | VARCHAR | 是 |  |  |
+| `tags` | ARRAY | 否 | （ORM 端） |  |
+| `status_source` | VARCHAR | 否 | `manual`（ORM 端） |  |
+| `created_at` | DATETIME | 是 | （ORM 端） |  |
+| `updated_at` | DATETIME | 是 | （ORM 端） |  |
+
+- 索引 `ix_watch_records_status`: (status)
+- 唯一索引 `uq_watch_records_content`: (content_id)
+
+<!-- END GENERATED: schema -->
 
 ---
 
@@ -581,35 +634,31 @@ context = {
 
 ## 4. 抓取引擎设计
 
-### 4.0 两种数据接入模式
+### 4.0 数据怎么进来：四种执行器
 
-系统支持两种互补的数据接入模式，适用于不同类型的数据源：
+每种数据源类型在源类型注册表（`backend/app/models/source_types.py`）里登记一种执行器（`runner`），它决定这个数据源能被谁驱动、运行记录写在哪。
 
-| 维度 | Collect（采集）| Fountain（同步）|
-|------|--------------|----------------|
-| 数据位置 | 公网可访问 | 用户本地文件 / 平台私有数据 |
-| 认证要求 | 无 / 服务端 API Key | 用户登录态（cookies/token） |
-| 数据性质 | 公开内容 | 个人私有数据 |
-| 时机控制 | 服务端定时调度 | 用户在 Fountain 客户端手动触发 |
-| 实现方式 | `BaseCollector` 子类 + `COLLECTOR_MAP` | Rust 同步器 + HTTP Sync API |
-| SourceCategory | `network` | `user` |
+| 执行器 | 语义 | 触发 | 运行记录 | 产出 | 典型类型 |
+|---|---|---|---|---|---|
+| `collector` 采集 | 增量追加 | 智能调度器每分钟选源；「采集」按钮 | `collection_records`（同时是调度算法的输入） | PENDING → 可选流水线 | `rss.*` `podcast.apple` `web.scraper` `account.generic` `api.akshare`；`file.upload` 只能手动 |
+| `syncer` 内置同步 | 全量对账（upsert + 标记已消失） | 同步管理页 / 领域页按钮；注册表 `auto_sync_minutes` 开启的自动同步 | `sync_task_progress`（带 SSE 进度） | 直接 READY，不进流水线 | `sync.emby`（每 30 分钟）`sync.bilibili` `sync.wechat_read` |
+| `push` 外部推送 | 同上，但抓取在用户机器上 | 本机脚本（`scripts/*-sync.py`）/ Fountain 客户端调推送 API | `sync_task_progress`（`_trigger=push`） | 直接 READY | `sync.apple_books` `sync.kindle` `sync.*_bookmarks` |
+| `none` 无执行器 | 纯归属容器 | — | — | 由领域接口直接写入 | `user.film` `user.note` |
 
-**决策规则**（新增数据源时参考）：
-- 公网可访问且无需用户登录 → **Collect**
-- 需要用户 cookies/token 且无法服务端长期保存 → **Fountain**
-- 数据在用户本地（文件、系统数据库）→ **Fountain**
-- 用户直接创建内容（笔记）→ 直接 POST API（`user.note` 类型，不经 Collector）
+- **入口处强制**：调度器、采集任务、采集端点只接受 `collector`，其余返回 400——不写采集记录、不动调度状态。（审计前采集任务会对同步类数据源照常执行并写下「成功 0 条」的假记录。）
+- **选哪种**：公网可访问、无需用户登录 → 采集；需要登录态但凭证可以加密存在服务端 → 内置同步；数据在用户本地（文件、系统数据库）→ 外部推送；用户直接创建 → 领域接口。
+- B 站、微信读书同时接受外部推送（注册表 `accepts_push`），两条通路共用同一份 upsert。
+- 同步任务的发起与回收在 `services/sync/runner.py`：`start_sync`（手动 / 自动共用）、`run_push_sync`、`expire_stale_progress`（进度行 15 分钟无更新即判定 worker 已死并回收，否则该数据源会永久 409）。
 
 ### 4.1 Collector 接口
 
 ```python
-from abc import ABC, abstractmethod
-
 class BaseCollector(ABC):
     @abstractmethod
-    async def collect(self, source: SourceConfig) -> list[RawContentItem]:
-        """采集原始内容列表 (由定时器调用, 不是流水线步骤)"""
-        """富化单条内容 (全文提取等)"""
+    async def collect(self, source: SourceConfig, db: Session) -> list[ContentItem]:
+        """从数据源抓取新条目并写库，返回成功插入的新 ContentItem。
+        去重在 DB 层由 (source_id, external_id) 唯一约束 + SAVEPOINT 处理。
+        新建 ContentItem 必须显式设置 kind。"""
 ```
 
 ### 4.2 Collector 实现矩阵
@@ -620,16 +669,16 @@ class BaseCollector(ABC):
 | `ScraperCollector` | `web.scraper` | L1/L2/L3 三级策略 | 通用网页抓取 |
 | `AkShareCollector` | `api.akshare` | AkShare API | 金融数据 |
 | `PodcastCollector` | `podcast.apple` | 播客 RSS 解析 | Apple Podcasts |
-| `FileUploadCollector` | `file.upload` | 读取上传文件 | 文本/图片/文档 |
+| `FileUploadCollector` | `file.upload` | 扫描数据源目录 | 只能手动触发，不进调度 |
 | `GenericAccountCollector` | `account.generic` | 平台特定 API | 其他需认证的平台 |
 
 注意:
 - 没有 BilibiliVideoCollector / YouTubeVideoCollector。视频下载由流水线中的 `localize_media` 步骤 (yt-dlp) 处理, 不是 Collector 的职责。
-- `sync.*` 类型无 Collector 实现，不参与**采集**调度：这一点由源类型注册表（`app/models/source_types.py`，`runner` 字段）在调度器、采集任务、采集端点三处强制，不再只靠建源时的默认值。对它们调用采集端点返回 400；内置同步型可由注册表的 `auto_sync_minutes` 开启定时自动同步（目前仅 Emby）。数据通过两种方式推送：
-  - **internal 模式**: 微信读书、B站等可通过 `/api/sync/run/{source_type}` 在服务端 Worker 内置 Fetcher 直接触发
-  - **script 模式**: Apple Books 等需要本地数据的走外部脚本推送
+- `sync.*` / `user.*` 类型没有 Collector，见 §4.0。`COLLECTOR_MAP` 在导入时与源类型注册表对账，不一致则启动失败。
+- `FileUploadCollector` 扫描的是 `data/uploads/<source_id>/` 目录；`POST /api/content/upload` 写入的是 `data/uploads/<content_id>/`，两者互不相干。
+- `AkShareCollector` 写 `finance_data_points`，不产出 ContentItem。
 
-### 4.3 三级抓取策略实现
+### 4.3 全文抓取分级（L1 HTTP → L2 Crawl4AI → L3 Browserless）
 
 ```python
 class ContentEnricher:
@@ -800,10 +849,9 @@ GET  /api/dashboard/stats              → { sources_count, contents_today/yeste
 GET  /api/dashboard/collection-trend   → 采集趋势数据（count 剔除重复项；含采集成功率）
 GET  /api/dashboard/daily-stats        → 每日统计（items_found 为源端发现总数，items_new 为实际新增）
 GET  /api/dashboard/source-health      → { window_days, summary{healthy,warning,error,disabled,sync}, sources[] }。只对启用且需采集的源分 healthy/warning/error 三级（consecutive_failures + 近 7 天失败率），每源附 reasons[]、窗口内采集/失败/新增数、last_collected_at、last_item_at；disabled/sync 仅计数
-GET  /api/dashboard/recent-content     → 最近采集的内容
 GET  /api/dashboard/content-status-distribution → 内容状态分布
 GET  /api/dashboard/storage-stats      → 存储统计
-GET  /api/dashboard/today-summary      → 今日概要
+GET  /api/dashboard/dedup-stats        → 去重统计（重复条数、重复组数、今日新增重复、按数据源的重复率）
 GET  /api/dashboard/recent-activity    → 最近活动
 GET  /api/dashboard/user-behavior-stats → 用户行为统计。概览含 read_*（已处理，view_count>0）与 opened_*（已打开，opened_at）两套口径；热力图/趋势/偏好按 opened_at 计
 ```
@@ -825,8 +873,10 @@ GET    /api/sources/{id}/history       → PaginatedResponse[CollectionRecord]
 
 #### OPML (导入导出)
 ```
-POST   /api/opml/import               → { imported: int } (OPML导入)
-GET    /api/opml/export                → OPML file
+POST   /api/sources/import            → { imported: int } (OPML 导入；与 /api/sources 同前缀，注册顺序须在 /{source_id} 之前)
+GET    /api/sources/export            → OPML file
+GET    /api/sources/export/full       → 数据源配置全量导出 (JSON)
+POST   /api/sources/import/full       → 全量导入（按源类型注册表校验类型，非采集型强制不进调度）
 ```
 
 #### Content
@@ -983,7 +1033,7 @@ POST   /api/films                      → 手工添加（tmdb_id+kind 或 title
 POST   /api/films/records/batch        → 批量标记（content_id | tmdb_id | title+year 定位）
 GET    /api/films/{id}                 → 详情（元数据 + emby 事实 + record）
 PUT    /api/films/{id}/record          → 更新用户标记
-PUT    /api/films/{id}/note            → 更新长评 (user_note)
+POST   /api/films/{id}/logs            → 新增一次观看记录（日期 + 精度 / 评分 / 感想）；PUT / DELETE /api/films/{id}/logs/{log_id}
 DELETE /api/films/{id}                 → 删除资料库记录（不触碰 Emby）
 POST   /api/films/enrich-missing?limit= → 批量补全元数据（TMDb 详情；需 tmdb_api_key），返回 remaining
 POST   /api/films/{id}/enrich          → 单条补全
@@ -1004,10 +1054,13 @@ POST   /api/sync/link-credential        → 关联凭证到同步源
 
 #### Ebook (书架管理)
 ```
-GET    /api/ebook/books                 → 书籍列表
-GET    /api/ebook/books/{id}            → 书籍详情 (含标注)
-PUT    /api/ebook/books/{id}            → 更新书籍元数据
-GET    /api/ebook/annotations           → 标注列表
+GET    /api/ebook/list                  → 书籍列表
+GET    /api/ebook/filters               → 筛选项
+GET    /api/ebook/{id}                  → 书籍详情；DELETE 删除
+GET    /api/ebook/{id}/cover            → 封面
+PUT    /api/ebook/{id}/metadata         → 更新元数据；GET .../metadata/search、POST .../metadata/apply 联网补全
+GET    /api/ebook/annotations           → 全部标注；GET /api/ebook/annotations/recent 最近标注
+GET    /api/ebook/{id}/annotations      → 某本书的标注；POST 新增；PUT / DELETE .../{ann_id}
 ```
 
 ---
@@ -1025,25 +1078,32 @@ GET    /api/ebook/annotations           → 标注列表
 async def check_and_collect_sources(timestamp):
     """查询到期的源，defer 采集任务到 worker 并发执行"""
 
-# 日报 - 每天 22:00
-@proc_app.periodic(cron="0 22 * * *")
-@proc_app.task(queue="scheduled", queueing_lock="daily_report")
+# 注意：cron 表达式一律是 UTC。下面括号里是对应的北京时间。
+
+# 内置同步型数据源的自动同步 - 每 10 分钟检查，按注册表 auto_sync_minutes 到期发起（目前只有 Emby，30 分钟）
+@proc_app.periodic(cron="*/10 * * * *")
+@proc_app.task(queue="scheduled", queueing_lock="auto_sync_sources")
+async def auto_sync_sources(timestamp): ...
+
+# 日报 - 14:00 UTC (22:00 CST)
+@proc_app.periodic(cron="0 14 * * *")
 async def trigger_daily_report(timestamp): ...
 
-# 周报 - 每周一 09:00
-@proc_app.periodic(cron="0 9 * * 1")
-@proc_app.task(queue="scheduled", queueing_lock="weekly_report")
+# 周报 - 周一 01:00 UTC (周一 09:00 CST)
+@proc_app.periodic(cron="0 1 * * 1")
 async def trigger_weekly_report(timestamp): ...
 
-# 周期性分析 - 每天 04:00 (分析源的更新模式)
-@proc_app.periodic(cron="0 4 * * *")
-@proc_app.task(queue="scheduled", queueing_lock="analyze_periodicity")
+# 周期性分析 - 20:00 UTC (次日 04:00 CST)，只分析可调度的采集型数据源
+@proc_app.periodic(cron="0 20 * * *")
 async def analyze_source_periodicity(timestamp): ...
 
-# 清理调度器 - 每小时检查，按 system_settings 配置的时间动态执行
+# 清理调度器 - 每小时检查，按 system_settings 配置的时间动态执行内容清理 / 记录清理
 @proc_app.periodic(cron="0 * * * *")
-@proc_app.task(queue="scheduled", queueing_lock="cleanup_scheduler")
 async def cleanup_scheduler(timestamp): ...
+
+# 任务队列自身的清理 - 19:20 UTC (03:20 CST)：删 7 天前结束的作业，回收心跳丢失超 1 小时的僵死作业
+@proc_app.periodic(cron="20 19 * * *")
+async def cleanup_job_queue(timestamp): ...
 ```
 
 ### 7.2 智能调度系统

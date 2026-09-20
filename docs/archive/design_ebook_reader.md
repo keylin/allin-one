@@ -1,3 +1,6 @@
+> ⚠️ **已归档（2026-09-20）—— 内容已过期，不要据此开发。**
+> 本文描述的站内 EPUB 阅读器（foliate）及 `/api/ebook/upload`、`/file`、`/progress`、`/bookmarks` 等端点已在 commit b922a52 移除，现行电子书能力只有同步入库与标注管理。`reading_progress` 的 cfi / section 列、`book_bookmarks` 表仍在库里但已无写入方。
+
 # 技术方案: EPUB/MOBI 电子书阅读器
 
 > 版本: v1.0 | 日期: 2026-02-21

@@ -2,7 +2,7 @@
 
 import uuid
 
-from sqlalchemy import Column, String, DateTime, Text, Integer, Float, ForeignKey, Index, UniqueConstraint
+from sqlalchemy import Column, String, DateTime, Text, Integer, Float, ForeignKey, Index, UniqueConstraint, text
 from sqlalchemy.orm import relationship
 
 from app.core.database import Base
@@ -43,7 +43,7 @@ class BookAnnotation(Base):
     id = Column(String, primary_key=True, default=_uuid)
     content_id = Column(String, ForeignKey("content_items.id", ondelete="CASCADE"), nullable=False)
 
-    external_id = Column(String, nullable=True, index=True)  # 外部标注 ID（如 Apple Books UUID）
+    external_id = Column(String, nullable=True)  # 外部标注 ID（如 Apple Books UUID）；索引见 __table_args__
 
     # 定位
     cfi_range = Column(Text, nullable=True)            # CFI 范围（本地标注必填，外部同步可为空）
@@ -63,7 +63,10 @@ class BookAnnotation(Base):
 
     __table_args__ = (
         Index("ix_annotation_content", "content_id"),
-        UniqueConstraint("content_id", "external_id", name="uq_annotation_external"),
+        # 与库对齐（迁移 0014 建的就是这两个；此前模型写成了全量 UniqueConstraint + 自动命名索引）
+        Index("ix_annotation_external_id", "external_id"),
+        Index("uq_annotation_content_external", "content_id", "external_id", unique=True,
+              postgresql_where=text("external_id IS NOT NULL")),
     )
 
 
