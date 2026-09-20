@@ -198,3 +198,9 @@ class LLMAnalyzer:
         else:
             return {"content": result_text, "format": output_format}
 ```
+
+### ScraperCollector 的去重键（2026-09-20）
+
+`external_id = md5(规范化后的绝对链接)`，没有链接才退回 `md5(源地址|标题)`。规范化 = 补全为绝对地址 + 去掉 `#fragment`。**不要把列表序号掺进去重键**：榜单类页面（如 V2EX 热帖）的排名和 `#replyN` 时刻在变，掺了序号或原始链接，同一条内容每次采集都会被当成新的。L1 抓取带一个固定、自洽的桌面浏览器 UA。
+
+> 背景：RSSHub 给每个出站请求套一组随机生成的浏览器指纹，V2EX 的 Cloudflare 对整个域名返回 403（`/v2ex/*` 全部 503）；关掉随机指纹（`NO_RANDOM_UA`）或固定 UA 又会让 `/reuters/*` 失败——两者在 RSSHub 这一层不可兼得，且开关是全局的。所以「v2ex热帖」改用 `web.scraper` 直接抓 `https://www.v2ex.com/?tab=hot`，`item_selector` 用 `:not(:has(a.node[href="/go/promotions"]))` 排掉推广节点。**改 RSSHub 的全局配置前，必须把所有走 RSSHub 的数据源逐个测一遍。**

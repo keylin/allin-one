@@ -3,6 +3,7 @@
 import hashlib
 import logging
 from datetime import datetime
+from urllib.parse import urldefrag
 
 import httpx
 from bs4 import BeautifulSoup
@@ -16,6 +17,12 @@ from app.services.collectors.base import BaseCollector
 from app.services.collectors.utils import coerce_config
 
 logger = logging.getLogger(__name__)
+
+# 不少站点对没有 UA 的请求直接拒绝；用一个普通、自洽的桌面浏览器 UA
+_BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+}
 
 
 class ScraperCollector(BaseCollector):
@@ -56,9 +63,17 @@ class ScraperCollector(BaseCollector):
                 if not title:
                     continue
 
-                # 生成 external_id
+                # 规范化链接：补全为绝对地址、去掉 #fragment
+                # （如 V2EX 的 /t/123#reply147，回复数一变 fragment 就变，不能进去重键）
+                abs_link = ""
+                if link:
+                    abs_link = link if link.startswith("http") else self._resolve_url(source.url, link)
+                    abs_link = urldefrag(abs_link)[0]
+
+                # external_id 只由「这条内容是谁」决定：有链接用链接，没有才退回标题。
+                # 不能掺列表里的序号——榜单类页面的排名时刻在变，掺了序号同一条会被反复当成新内容。
                 external_id = hashlib.md5(
-                    f"{link or source.url}/{idx}/{title}".encode()
+                    (abs_link or f"{source.url}|{title}").encode()
                 ).hexdigest()
 
                 content_item = ContentItem(
@@ -66,7 +81,7 @@ class ScraperCollector(BaseCollector):
                     source_id=source.id,
                     title=title[:500],
                     external_id=external_id,
-                    url=link if link and link.startswith("http") else self._resolve_url(source.url, link),
+                    url=abs_link or source.url,
                     author=author,
                     status=ContentStatus.PENDING.value,
                     published_at=None,  # 网页抓取通常无时间戳
@@ -94,7 +109,7 @@ class ScraperCollector(BaseCollector):
         # L1: 普通 HTTP 请求
         if not use_browserless:
             try:
-                async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+                async with httpx.AsyncClient(timeout=30, follow_redirects=True, headers=_BROWSER_HEADERS) as client:
                     resp = await client.get(url)
                     resp.raise_for_status()
                     return resp.text
