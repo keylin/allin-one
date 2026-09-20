@@ -38,6 +38,16 @@ _HEARTBEAT_TASKS = {
     "app.tasks.scheduled_tasks.auto_sync_sources",
 }
 
+# 已从代码里下线、但队列里可能还留着历史失败的任务。不能再算「仍在失败」——
+# 否则停用一个坏任务反而让总评连报 7 天 error。这里不去问 proc_app.tasks：导入
+# app.tasks.procrastinate_app 会执行 setup_logging("worker")，让 API / MCP 进程去写 worker.log。
+# 停用 / 恢复定时任务时同步改这里（scheduled_tasks.py 里被注释的定义处有对应说明）；
+# 条目在下线满 7 天、历史作业被 cleanup_job_queue 清掉之后即可删除。
+_RETIRED_TASKS = {
+    "app.tasks.scheduled_tasks.trigger_daily_report",    # 2026-09-20 停用
+    "app.tasks.scheduled_tasks.trigger_weekly_report",   # 2026-09-20 停用
+}
+
 
 def _iso(dt: datetime | None) -> str | None:
     return dt.isoformat() if dt else None
@@ -310,7 +320,10 @@ def background_jobs(db: Session, since: datetime) -> dict:
         last_failed_at = _naive_utc(r.last_failed_at)
         last_ok_naive = _naive_utc(last_ok_at)
         # 窗口内一次都没成功过、或最近一次结果是失败 → 仍在失败
-        still_failing = last_ok_naive is None or (last_failed_at is not None and last_failed_at > last_ok_naive)
+        retired = r.task_name in _RETIRED_TASKS
+        still_failing = not retired and (
+            last_ok_naive is None or (last_failed_at is not None and last_failed_at > last_ok_naive)
+        )
         failed.append({
             "task": r.task_name.rsplit(".", 1)[-1],
             "task_name": r.task_name,
@@ -319,6 +332,7 @@ def background_jobs(db: Session, since: datetime) -> dict:
             "last_failed_at": _iso(last_failed_at),
             "last_succeeded_at": _iso(last_ok_naive),
             "still_failing": still_failing,
+            "retired": retired,
             "heartbeat": r.task_name in _HEARTBEAT_TASKS,
         })
     failed.sort(key=lambda x: (not x["still_failing"], -x["failed"]))
@@ -416,7 +430,7 @@ def system_health(db: Session, since: datetime) -> dict:
 
     if any(s["health"] == "error" for s in problem_sources) or failing_jobs or jobs["stuck"] or problem_syncs:
         overall = "error"
-    elif problem_sources or jobs["failed"]:
+    elif problem_sources or any(not j["retired"] for j in jobs["failed"]):
         overall = "warning"
     else:
         overall = "healthy"

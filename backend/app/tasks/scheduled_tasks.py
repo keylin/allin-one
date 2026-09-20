@@ -260,6 +260,7 @@ async def auto_sync_sources(timestamp):
 # 「没配 LLM Key 就跳过 AI 总结、照常出报告」，但 get_llm_config() 在没 Key 时直接 raise，
 # 任务第一步就失败（日报 20 次、周报 3 次）。恢复前先修这条降级路径，再取消下面的注释；
 # 注意恢复后会开始每天写 REPORTS_DIR 并按通知设置推送。生成逻辑仍在 report_tasks.py。
+# 恢复时同时把这两个任务名从 services/system_health.py 的 _RETIRED_TASKS 里去掉。
 #
 # @proc_app.periodic(cron="0 14 * * *")  # 14:00 UTC = 22:00 CST
 # @proc_app.task(queue="scheduled", queueing_lock="daily_report")

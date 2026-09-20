@@ -816,7 +816,8 @@ def get_system_health(time_range: str = "7d") -> str:
       is stalled, lacks a credential, or whose auto-sync has fallen behind.
     - background_jobs.failed: periodic tasks (daily report, cleanup, scheduler heartbeat...) that
       failed within time_range. still_failing=true means it has not succeeded since — these are
-      failures no source-level record would ever show. The queue keeps no exception text; the
+      failures no source-level record would ever show. retired=true means the task no longer
+      exists in code (leftover history, ignored by overall). The queue keeps no exception text; the
       reason is in the worker container logs.
     - background_jobs.stuck: jobs in "doing" for over an hour.
 
