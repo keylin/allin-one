@@ -83,6 +83,18 @@ def get_sync_status(db: Session = Depends(get_db)):
     ).all()
     source_map = {s.source_type: s for s in sync_sources}
 
+    # 「最后同步」取 sync_task_progress 里最近一次成功的同步，而不是 source.last_collected_at：
+    # 后者由定时采集器写入，从未同步过的源也会有值，曾让人误判同步已经跑过（2026-09-20）
+    last_sync_map = dict(
+        db.query(
+            SyncTaskProgress.source_id,
+            func.max(func.coalesce(SyncTaskProgress.completed_at, SyncTaskProgress.created_at)),
+        )
+        .filter(SyncTaskProgress.status == "completed")
+        .group_by(SyncTaskProgress.source_id)
+        .all()
+    )
+
     plugins = []
     for plugin in SYNC_PLUGINS:
         source = source_map.get(plugin["source_type"])
@@ -125,7 +137,12 @@ def get_sync_status(db: Session = Depends(get_db)):
             )
             stats["in_emby"] = in_emby
 
-        last_sync = source.last_collected_at
+        # script 模式（外部脚本写入，不产生进度记录）只能退回 last_collected_at
+        last_sync = (
+            source.last_collected_at
+            if plugin["sync_mode"] == "script"
+            else last_sync_map.get(source.id)
+        )
 
         # 凭证信息
         credential_id = None

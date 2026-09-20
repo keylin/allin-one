@@ -2,6 +2,7 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { listFilms, getFilmStats, enrichMissing, updateWatchRecord, statusMeta, WATCH_STATUS_OPTIONS } from '@/api/films'
+import { triggerSync, streamSyncProgress } from '@/api/sync'
 import { useToast } from '@/composables/useToast'
 import FilmDetailDrawer from '@/components/film-detail-drawer.vue'
 import FilmAddModal from '@/components/film-add-modal.vue'
@@ -240,6 +241,60 @@ function onDocClick(e) {
 // 自动聚焦指令（短评输入框）
 const vFocus = { mounted: (el) => el.focus() }
 
+// ---- Emby 同步 ----
+const syncing = ref(false)
+const syncProgress = ref('')
+let syncController = null
+
+const syncHint = computed(() => {
+  if (!stats.value?.emby_configured) return 'Emby 未配置，去同步管理绑定凭证'
+  return '从 Emby 拉取库存与观看状态'
+})
+
+function runEmbySync() {
+  if (syncing.value) return
+  if (!stats.value?.emby_configured) {
+    showToast(syncHint.value, { type: 'info', duration: 6000 })
+    return
+  }
+  syncing.value = true
+  syncProgress.value = '正在排队...'
+  triggerSync('sync.emby')
+    .then((res) => {
+      if (res.code !== 0) {
+        showError(res.message || '触发同步失败')
+        syncing.value = false
+        return
+      }
+      syncController = streamSyncProgress(
+        res.data.progress_id,
+        (event) => { syncProgress.value = event.message || '同步中...' },
+        (event) => {
+          syncing.value = false
+          syncProgress.value = ''
+          if (event?.status === 'failed') {
+            showError(event.error_message || '同步失败')
+            return
+          }
+          const r = event?.result_data || {}
+          success(`同步完成：新增 ${r.new_films ?? 0}，更新 ${r.updated_films ?? 0}`)
+          reload()
+          fetchStats()
+        },
+        (msg) => {
+          syncing.value = false
+          syncProgress.value = ''
+          showError(msg || '同步失败')
+        },
+      )
+    })
+    .catch(() => {
+      syncing.value = false
+      syncProgress.value = ''
+      showError('触发同步失败')
+    })
+}
+
 // ---- 补全元数据 ----
 const enriching = ref(false)
 const enrichProgress = ref('')
@@ -295,6 +350,7 @@ onMounted(() => {
 onUnmounted(() => {
   document.removeEventListener('click', onDocClick)
   if (observer) observer.disconnect()
+  syncController?.abort()
 })
 </script>
 
@@ -328,11 +384,17 @@ onUnmounted(() => {
           <option value="title">标题</option>
         </select>
 
-        <router-link
-          to="/sync"
-          class="hidden sm:inline-flex items-center px-2.5 py-1.5 text-xs text-slate-500 hover:text-slate-700 bg-slate-50 hover:bg-slate-100 rounded-lg transition-all"
-          title="去同步管理触发 Emby 同步"
-        >同步</router-link>
+        <button
+          class="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs rounded-lg transition-all disabled:cursor-not-allowed"
+          :class="stats?.emby_configured ? 'text-emerald-600 bg-emerald-50 hover:bg-emerald-100' : 'text-slate-400 bg-slate-50'"
+          :disabled="syncing"
+          :title="syncHint"
+          @click="runEmbySync"
+        >
+          <svg v-if="syncing" class="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>
+          <template v-if="syncing">{{ syncProgress || '同步中...' }}</template>
+          <template v-else><span class="hidden sm:inline">同步 Emby</span><span class="sm:hidden">同步</span></template>
+        </button>
         <button
           class="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs rounded-lg transition-all disabled:cursor-not-allowed"
           :class="(stats?.unenriched ?? 0) > 0 ? 'text-indigo-600 bg-indigo-50 hover:bg-indigo-100' : 'text-slate-400 bg-slate-50'"

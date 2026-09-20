@@ -987,7 +987,7 @@ GET    /api/films/{id}/poster          → 海报代理（Emby → TMDb），免
 
 #### Sync (统一同步管理)
 ```
-GET    /api/sync/status                 → 所有同步源状态
+GET    /api/sync/status                 → 所有同步源状态（`last_sync_at` = 最近一次成功同步，取自 `sync_task_progress`；script 模式无进度记录，退回 `source.last_collected_at`）
 POST   /api/sync/run/{source_type}      → 触发内置同步 (internal 模式)
 GET    /api/sync/progress/{progress_id} → SSE 实时进度推送
 POST   /api/sync/link-credential        → 关联凭证到同步源

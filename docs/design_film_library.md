@@ -180,7 +180,7 @@ GET {base}/emby/Shows/{series_id}/Episodes?UserId={user_id}&Fields=UserData   �
 
 ### 3.3 手动触发
 
-SyncView 现有"运行"按钮 → `POST /api/sync/run/sync.emby`。不注册 periodic 任务。
+SyncView 的"运行"按钮与 FilmsView 的「同步 Emby」按钮 → `POST /api/sync/run/sync.emby`。不注册 periodic 任务。
 
 ---
 
@@ -222,7 +222,7 @@ GET    /api/films/stats               按状态/类型/年代计数（页面头�
 
 - 列表：海报网格，卡片显示标题/年份/我的状态角标/Emby 角标；筛选栏：状态、类型、年代、是否在 Emby、我的评分；搜索框；排序（最近同步/年份/我的评分）。
 - 抽屉三段：**元数据**（只读）/ **Emby 事实**（只读：在库、播放次数、进度、最后播放）/ **我的标记**（可编辑，改完即保存）。
-- 顶部按钮：「手工添加」（TMDb 搜索弹窗）、「同步 Emby」（跳转 SyncView 或直接调 run 接口 + SSE 进度）。
+- 顶部按钮：「手工添加」（TMDb 搜索弹窗）、「同步 Emby」（2026-09-20 起在 FilmsView 内直接 `POST /api/sync/run/sync.emby` + SSE 进度，完成后刷新列表与统计；此前只是跳转 SyncView 的链接，且在窄屏隐藏）。
 - 复用 VideoView 的分页/筛选/URL query 同步模式。
 
 ---
