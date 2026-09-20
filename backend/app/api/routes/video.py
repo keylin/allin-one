@@ -17,6 +17,7 @@ from app.core.database import get_db
 from app.core.config import settings
 from app.models.pipeline import PipelineExecution, PipelineStep, PipelineTemplate, TriggerSource, StepStatus
 from app.models.content import ContentItem, ContentStatus, MediaItem, SourceConfig
+from app.models.content import ContentKind
 from pydantic import BaseModel
 from app.schemas import VideoDownloadRequest, error_response
 
@@ -56,6 +57,7 @@ async def download_video(body: VideoDownloadRequest, db: Session = Depends(get_d
     # 创建 ContentItem
     import hashlib
     content = ContentItem(
+        kind=ContentKind.VIDEO.value,
         source_id=source_id,
         title=f"视频下载: {url[:80]}",
         external_id=hashlib.md5(url.encode()).hexdigest(),

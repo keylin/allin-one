@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.core.time import utcnow
 from app.models.content import ContentItem, ContentStatus, MediaItem, SourceConfig
+from app.models.content import ContentKind
 from app.models.ebook import ReadingProgress, BookAnnotation
 from app.services.media_detection import detect_media_for_content
 
@@ -36,6 +37,7 @@ def upsert_videos(db: Session, source: SourceConfig, videos: list[dict]) -> dict
         is_new = content is None
         if is_new:
             content = ContentItem(
+                kind=ContentKind.VIDEO.value,
                 id=uuid.uuid4().hex,
                 source_id=source.id,
                 external_id=external_id,
@@ -146,6 +148,7 @@ def upsert_ebooks(db: Session, source: SourceConfig, books: list[dict]) -> dict:
         is_new_book = content is None
         if is_new_book:
             content = ContentItem(
+                kind=ContentKind.BOOK.value,
                 id=uuid.uuid4().hex,
                 source_id=source.id,
                 external_id=external_id,
@@ -294,6 +297,7 @@ def upsert_bookmarks(db: Session, source: SourceConfig, bookmarks: list[dict]) -
         is_new = content is None
         if is_new:
             content = ContentItem(
+                kind=ContentKind.BOOKMARK.value,
                 id=uuid.uuid4().hex,
                 source_id=source.id,
                 external_id=uuid.uuid5(uuid.NAMESPACE_URL, url).hex,

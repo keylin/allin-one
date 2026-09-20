@@ -29,6 +29,7 @@ class ContentResponse(BaseModel):
     source_name: Optional[str] = None
     title: str
     external_id: str
+    kind: str = "article"   # ContentKind：内容的领域身份
     url: Optional[str] = None
     author: Optional[str] = None
     status: str = "pending"

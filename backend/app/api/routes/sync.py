@@ -125,12 +125,11 @@ def get_sync_status(db: Session = Depends(get_db)):
 
         # film 类：统计仍在 Emby 库内的条目数（含手工添加后被 Emby 同步命中的记录）
         if plugin["category"] == "film":
-            from app.services.film_library import FILM_SOURCE_TYPES
+            from app.services.film_library import IS_FILM
             in_emby = (
                 db.query(func.count(ContentItem.id))
-                .join(SourceConfig, ContentItem.source_id == SourceConfig.id)
                 .filter(
-                    SourceConfig.source_type.in_(FILM_SOURCE_TYPES),
+                    IS_FILM,
                     ContentItem.raw_data["emby"]["in_library"].astext == "true",
                 )
                 .scalar() or 0

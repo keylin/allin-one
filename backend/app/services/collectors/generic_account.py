@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.content import SourceConfig, ContentItem, ContentStatus
+from app.models.content import ContentKind
 from app.services.collectors.base import BaseCollector, report_found
 from app.services.collectors.utils import coerce_config
 
@@ -92,6 +93,7 @@ class GenericAccountCollector(BaseCollector):
                 published_at = self._parse_time(entry[time_field], time_format)
 
             item = ContentItem(
+                kind=ContentKind.ARTICLE.value,
                 source_id=source.id,
                 title=title[:500],
                 external_id=external_id,

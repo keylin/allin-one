@@ -3,7 +3,7 @@
 # Allin-One 家庭服务器本机部署脚本
 #
 # 在家庭服务器（源码仓库与生产目录同机）上执行：
-#   源码目录（本脚本所在处） --rsync--> 生产目录 --docker build--> 镜像 --up -d--> 容器
+#   源码目录（本脚本所在处） --rsync--> 生产目录 --docker build--> 镜像 --迁移--> --up -d--> 容器
 #
 # 用法:
 #   ./deploy-home-server.sh              # 同步 + 构建 + 重启 + 迁移 + 健康检查
@@ -135,12 +135,16 @@ wait_healthy() {
     return 1
 }
 
+# 迁移在切换容器「之前」用新镜像跑：迁移应对旧代码向后兼容（加列/加表/加索引），
+# 这样新代码启动时库结构已就绪，不会出现「新代码查询尚不存在的列」的窗口；
+# 迁移失败则中止部署，线上仍是旧容器。
 run_migrations() {
-    info "执行数据库迁移..."
-    if $DC exec -T allin-one alembic upgrade head; then
+    info "执行数据库迁移（新镜像、一次性容器）..."
+    if (cd "$DEPLOY_DIR" && $DC run --rm --no-deps -T allin-one alembic upgrade head); then
         ok "迁移完成"
     else
-        warn "迁移失败，请手工检查: $DC exec allin-one alembic upgrade head"
+        err "迁移失败，已中止部署（线上仍为旧版本）。手工排查: $DC run --rm --no-deps allin-one alembic upgrade head"
+        exit 1
     fi
 }
 
@@ -183,8 +187,9 @@ case "${1:-}" in
         sync_source
         pick_registry
         build_image
+        run_migrations
         restart_services
-        wait_healthy && run_migrations
+        wait_healthy
         docker image prune -f >/dev/null 2>&1 || true
         verify_deploy
         show_status

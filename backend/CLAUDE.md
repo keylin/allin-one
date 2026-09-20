@@ -116,7 +116,7 @@ class SourceResponse(BaseModel):     # 响应模型
 ## 枚举定义
 
 枚举值以代码为准，不要凭记忆：
-- `app/models/content.py` — SourceType, MediaType (仅用于 MediaItem: image/video/audio/ebook), ContentStatus (含 ready)
+- `app/models/content.py` — SourceType, MediaType (仅用于 MediaItem: image/video/audio/ebook), ContentStatus (含 ready), **ContentKind**（内容的领域身份：article/audio/video/book/film/bookmark/note/file。「这是什么内容」只看 `content_items.kind`，不要再从 source_type / media_type / raw_data 反推；新增 ContentItem 写入路径必须显式设置 kind。信息流口径的查询统一带 `FEED_SCOPE`）
 - `app/models/pipeline.py` — StepType (含 localize_media), PipelineStatus, StepStatus, TriggerSource
 - `app/models/prompt_template.py` — TemplateType
 

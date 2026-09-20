@@ -20,6 +20,7 @@ from app.core.database import get_db
 from app.core.time import utcnow
 from app.core.timezone_utils import get_local_day_boundaries
 from app.models.content import SourceConfig, ContentItem, MediaItem, ContentStatus, SourceCategory, get_source_category
+from app.models.content import ContentKind, FEED_SCOPE
 from app.models.pipeline import PipelineExecution, PipelineStep, PipelineTemplate, TriggerSource
 from app.schemas import (
     ContentResponse, ContentDetailResponse, ContentNoteUpdate, ContentBatchDelete,
@@ -151,7 +152,7 @@ def list_content(
     db: Session = Depends(get_db),
 ):
     """分页查询内容列表"""
-    query = db.query(ContentItem)
+    query = db.query(ContentItem).filter(FEED_SCOPE)   # 影视等资料库领域有专属页面，不进通用列表
 
     if source_id:
         ids = [s.strip() for s in source_id.split(",") if s.strip()]
@@ -386,8 +387,11 @@ def list_content(
 
 @router.post("/delete-all")
 def delete_all_content(db: Session = Depends(get_db)):
-    """删除全部内容（级联删除关联流水线和媒体）"""
-    total = db.query(func.count(ContentItem.id)).scalar()
+    """删除全部信息流内容（级联删除关联流水线和媒体）
+
+    只作用于信息流口径 (FEED_SCOPE)：影视库等资料库领域连同观看记录不在此列。
+    """
+    total = db.query(func.count(ContentItem.id)).filter(FEED_SCOPE).scalar()
     if total == 0:
         return {"code": 0, "data": {"deleted": 0}, "message": "没有内容可删除"}
 
@@ -406,7 +410,7 @@ def delete_all_content(db: Session = Depends(get_db)):
 
     # 删除所有媒体和内容
     db.query(MediaItem).delete(synchronize_session=False)
-    deleted = db.query(ContentItem).delete(synchronize_session=False)
+    deleted = db.query(ContentItem).filter(FEED_SCOPE).delete(synchronize_session=False)
     db.commit()
 
     # 清理磁盘文件：删除整个 media 目录后重建
@@ -535,6 +539,7 @@ def mark_all_read(body: MarkAllReadRequest, db: Session = Depends(get_db)):
     query = db.query(ContentItem).filter(
         (ContentItem.view_count == 0) | (ContentItem.view_count.is_(None)),
         ContentItem.duplicate_of_id.is_(None),
+        FEED_SCOPE,
     )
 
     if body.source_id:
@@ -604,7 +609,7 @@ def content_stats(db: Session = Depends(get_db)):
 
     status_rows = (
         db.query(ContentItem.status, func.count(ContentItem.id))
-        .filter(ContentItem.duplicate_of_id.is_(None))
+        .filter(ContentItem.duplicate_of_id.is_(None), FEED_SCOPE)
         .group_by(ContentItem.status).all()
     )
     status_counts = {r[0]: r[1] for r in status_rows}
@@ -614,6 +619,7 @@ def content_stats(db: Session = Depends(get_db)):
         db.query(func.count(ContentItem.id))
         .filter(
             ContentItem.duplicate_of_id.is_(None),
+            FEED_SCOPE,
             ContentItem.collected_at >= today_start,
             ContentItem.collected_at < today_end,
         )
@@ -625,6 +631,7 @@ def content_stats(db: Session = Depends(get_db)):
         db.query(func.count(ContentItem.id))
         .filter(
             ContentItem.duplicate_of_id.is_(None),
+            FEED_SCOPE,
             (ContentItem.view_count == 0) | (ContentItem.view_count.is_(None)),
         )
         .scalar()
@@ -633,6 +640,7 @@ def content_stats(db: Session = Depends(get_db)):
         db.query(func.count(ContentItem.id))
         .filter(
             ContentItem.duplicate_of_id.is_(None),
+            FEED_SCOPE,
             ContentItem.view_count > 0,
         )
         .scalar()
@@ -643,6 +651,7 @@ def content_stats(db: Session = Depends(get_db)):
         db.query(func.count(ContentItem.id))
         .filter(
             ContentItem.duplicate_of_id.is_(None),
+            FEED_SCOPE,
             ContentItem.is_favorited == True,
         )
         .scalar()
@@ -701,6 +710,7 @@ async def submit_content(body: ContentSubmit, db: Session = Depends(get_db)):
     }
 
     content = ContentItem(
+        kind=ContentKind.NOTE.value,   # 用户提交的就是笔记，不随目标数据源类型变化
         source_id=source.id,
         title=body.title,
         external_id=external_id,
@@ -796,6 +806,7 @@ async def upload_content(
     }
 
     content = ContentItem(
+        kind=ContentKind.FILE.value,
         id=content_id,
         source_id=source.id,
         title=title or filename,

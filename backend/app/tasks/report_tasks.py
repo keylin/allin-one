@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 async def generate_daily_report():
     """每日摘要报告 — 汇总过去 24h 的内容与分析结果"""
     from app.core.database import SessionLocal
-    from app.models.content import ContentItem, SourceConfig
+    from app.models.content import ContentItem, SourceConfig, FEED_SCOPE
 
     now = utcnow()
     since = now - timedelta(hours=24)
@@ -24,6 +24,7 @@ async def generate_daily_report():
     with SessionLocal() as db:
         items = db.query(ContentItem).filter(
             ContentItem.collected_at >= since,
+            FEED_SCOPE,
         ).order_by(ContentItem.collected_at.desc()).all()
 
         if not items:
@@ -90,7 +91,7 @@ async def generate_daily_report():
 async def generate_weekly_report():
     """每周摘要报告"""
     from app.core.database import SessionLocal
-    from app.models.content import ContentItem, SourceConfig
+    from app.models.content import ContentItem, SourceConfig, FEED_SCOPE
 
     now = utcnow()
     since = now - timedelta(days=7)
@@ -98,6 +99,7 @@ async def generate_weekly_report():
     with SessionLocal() as db:
         items = db.query(ContentItem).filter(
             ContentItem.collected_at >= since,
+            FEED_SCOPE,
         ).order_by(ContentItem.collected_at.desc()).all()
 
         if not items:

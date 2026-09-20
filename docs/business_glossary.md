@@ -119,6 +119,27 @@ MediaType 现在仅用于 `MediaItem`（媒体项），不再是 ContentItem 或
 | `analyzed` | 已分析 |
 | `failed` | 失败 |
 
+
+### 3.5 ContentKind (内容的领域身份)
+
+`content_items.kind`，写入时确定、之后不变。**「这是什么内容」只看这一列**——不要从 `source_type`、`media_items.media_type` 或 `raw_data` 里的键反推（2026-09 审计前有 6 种并存的判定方式）。
+
+| 值 | 含义 | 主线 |
+|---|---|---|
+| `article` | 信息流条目（RSS / 网页抓取 / 账号采集），默认值 | 信息流 |
+| `audio` | 播客单集 | 信息流 |
+| `video` | 视频（平台同步 / 手动下载） | 资料库 |
+| `book` | 电子书 | 资料库 |
+| `film` | 影视（电影 / 剧集） | 资料库 |
+| `bookmark` | 浏览器书签 | 资料库 |
+| `note` | 用户笔记 | 资料库 |
+| `file` | 用户上传 / 目录扫描的文件 | 资料库 |
+
+- **两条主线**：信息流是时效性内容，会过期、按保留期清理；资料库是用户的长期资产，永不自动清理。
+- **信息流口径** `FEED_SCOPE`：通用内容列表、未读数、全部已读、仪表盘、日报周报、MCP `list_content` 都带这个过滤，排除有专属页面的资料库领域（目前是 `film`）。
+- 影片跨 `sync.emby` / `user.film` 两个数据源，全局唯一性由部分唯一索引 `uq_content_film_external`（`external_id WHERE kind='film'`）保证。
+- 与 `MediaType` 的区别：MediaType 描述一个媒体项是什么文件；ContentKind 描述一条内容属于哪个领域。一篇带视频的 RSS 文章仍是 `article`。
+
 ### 3.5 PipelineStatus (流水线状态)
 
 | 枚举值 | 描述 |

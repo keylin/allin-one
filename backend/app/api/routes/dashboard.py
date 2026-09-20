@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import sqlalchemy
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func, cast, Date, Integer as SAInteger, literal_column, case, bindparam, String
+from sqlalchemy import and_, func, cast, Date, Integer as SAInteger, literal_column, case, bindparam, String
 
 from app.core.database import get_db
 from app.core.time import utcnow
@@ -13,14 +13,15 @@ from app.core.timezone_utils import (
     get_local_day_boundaries, get_container_timezone_name,
     get_local_today, get_local_date_offset, get_local_date_range,
 )
-from app.models.content import SourceConfig, ContentItem, CollectionRecord
+from app.models.content import SourceConfig, ContentItem, CollectionRecord, FEED_SCOPE
 from app.models.ebook import BookAnnotation
 from app.models.pipeline import PipelineExecution, PipelineStatus
 
 router = APIRouter()
 
 # 不参与"内容量"口径的重复项过滤：与去重统计、信息流未读数保持一致
-_NO_DUP = ContentItem.duplicate_of_id.is_(None)
+# 仪表盘统计口径 = 信息流内容（不含影视等资料库领域）且非重复项
+_NO_DUP = and_(ContentItem.duplicate_of_id.is_(None), FEED_SCOPE)
 
 # 失败流水线卡片只看最近 N 小时，避免历史失败永久挂在首页
 _PIPELINE_FAILED_WINDOW_HOURS = 24
@@ -368,6 +369,7 @@ def get_content_status_distribution(db: Session = Depends(get_db)):
     # 按 status 分组计数
     status_counts = dict(
         db.query(ContentItem.status, func.count(ContentItem.id))
+        .filter(FEED_SCOPE)
         .group_by(ContentItem.status)
         .all()
     )
@@ -461,7 +463,7 @@ async def get_storage_stats(db: Session = Depends(get_db)):
 def get_dedup_stats(db: Session = Depends(get_db)):
     """获取内容去重统计"""
     # 全局统计
-    total_items = db.query(func.count(ContentItem.id)).scalar()
+    total_items = db.query(func.count(ContentItem.id)).filter(FEED_SCOPE).scalar()
     duplicate_count = (
         db.query(func.count(ContentItem.id))
         .filter(ContentItem.duplicate_of_id.isnot(None))

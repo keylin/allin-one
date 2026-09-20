@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.content import SourceConfig, ContentItem, ContentStatus, MediaItem
+from app.models.content import ContentKind
 from app.services.collectors.base import BaseCollector, report_found
 from app.services.collectors.utils import resolve_rss_feed_url
 from app.services.media_detection import detect_media_for_content
@@ -53,6 +54,7 @@ class RSSCollector(BaseCollector):
             external_id = self._extract_external_id(entry)
             raw_dict = self._entry_to_dict(entry)
             item = ContentItem(
+                kind=ContentKind.ARTICLE.value,
                 source_id=source.id,
                 title=entry.get("title", "Untitled")[:500],
                 external_id=external_id,

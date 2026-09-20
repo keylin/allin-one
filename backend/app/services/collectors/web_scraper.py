@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.content import SourceConfig, ContentItem, ContentStatus
+from app.models.content import ContentKind
 from app.services.collectors.base import BaseCollector
 from app.services.collectors.utils import coerce_config
 
@@ -61,6 +62,7 @@ class ScraperCollector(BaseCollector):
                 ).hexdigest()
 
                 content_item = ContentItem(
+                    kind=ContentKind.ARTICLE.value,
                     source_id=source.id,
                     title=title[:500],
                     external_id=external_id,

@@ -32,6 +32,7 @@ from sqlalchemy.orm import joinedload, sessionmaker
 from app.core.config import settings
 from app.core.time import utcnow
 from app.models.content import (
+    FEED_SCOPE,
     ContentItem,
     ContentStatus,
     SourceCategory,
@@ -215,6 +216,7 @@ def list_content(
                 db.query(ContentItem)
                 .options(joinedload(ContentItem.source))
                 .outerjoin(SourceConfig, ContentItem.source_id == SourceConfig.id)
+                .filter(FEED_SCOPE)   # 影视库走 list_films，不进信息流口径
             )
 
             # Date filtering
@@ -818,7 +820,7 @@ def list_films(
     from sqlalchemy import or_
     from sqlalchemy.orm import selectinload
     from app.models.film import WatchRecord, WATCH_STATUSES
-    from app.services.film_library import FILM_SOURCE_TYPES, KINDS, serialize_film
+    from app.services.film_library import IS_FILM, KINDS, serialize_film
 
     limit = max(1, min(limit, 500))
     offset = max(0, offset)
@@ -826,10 +828,9 @@ def list_films(
         with get_db() as db:
             query = (
                 db.query(ContentItem, WatchRecord)
-                .join(SourceConfig, ContentItem.source_id == SourceConfig.id)
                 .outerjoin(WatchRecord, WatchRecord.content_id == ContentItem.id)
                 .options(selectinload(WatchRecord.logs))
-                .filter(SourceConfig.source_type.in_(FILM_SOURCE_TYPES))
+                .filter(IS_FILM)
             )
             if status:
                 wanted = [x.strip() for x in status.split(",") if x.strip() in WATCH_STATUSES]
@@ -999,7 +1000,7 @@ def get_favorites_summary(
                 since = utcnow() - timedelta(days=days)
 
             # 基础过滤条件（所有子查询复用）
-            base_filters = [ContentItem.is_favorited == True]  # noqa: E712
+            base_filters = [ContentItem.is_favorited == True, FEED_SCOPE]  # noqa: E712
             if since is not None:
                 base_filters.append(ContentItem.favorited_at >= since)
 

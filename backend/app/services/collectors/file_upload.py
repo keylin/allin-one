@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.content import SourceConfig, ContentItem, ContentStatus
+from app.models.content import ContentKind
 from app.services.collectors.base import BaseCollector
 from app.services.collectors.utils import coerce_config
 
@@ -80,6 +81,7 @@ class FileUploadCollector(BaseCollector):
                 }
 
             item = ContentItem(
+                kind=ContentKind.FILE.value,
                 source_id=source.id,
                 title=file_path.name[:500],
                 external_id=external_id,

@@ -203,7 +203,8 @@ CREATE TABLE content_items (
     id              TEXT PRIMARY KEY,           -- UUID
     source_id       TEXT,                       -- 外键 -> source_configs (SET NULL on delete)
     title           TEXT NOT NULL,              -- 内容标题
-    external_id     TEXT NOT NULL,              -- 外部唯一标识 (URL hash)
+    external_id     TEXT NOT NULL,              -- 外部唯一标识（信息流条目为 URL hash；影片为 tmdb:movie:311 这类）
+    kind            TEXT NOT NULL DEFAULT 'article', -- ContentKind：内容的领域身份，写入时确定（见术语表 §3.5）
     url             TEXT,                       -- 原始链接
     author          TEXT,                       -- 作者
     raw_data        JSONB,                      -- 原始数据 (JSON)

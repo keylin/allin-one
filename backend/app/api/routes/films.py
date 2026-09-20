@@ -26,7 +26,7 @@ from app.schemas.film import (
     WatchRecordUpdate,
 )
 from app.services.film_library import (
-    FILM_SOURCE_TYPES,
+    IS_FILM,
     KINDS,
     TMDB_IMAGE_BASE,
     apply_log_update,
@@ -64,10 +64,9 @@ def _escape_like(s: str) -> str:
 def _base_query(db: Session):
     return (
         db.query(ContentItem, WatchRecord)
-        .join(SourceConfig, ContentItem.source_id == SourceConfig.id)
         .outerjoin(WatchRecord, WatchRecord.content_id == ContentItem.id)
         .options(selectinload(WatchRecord.logs))   # 序列化要取最近一次观看，避免逐行查
-        .filter(SourceConfig.source_type.in_(FILM_SOURCE_TYPES))
+        .filter(IS_FILM)
     )
 
 

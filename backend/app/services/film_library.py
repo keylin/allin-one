@@ -22,13 +22,17 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.time import utcnow
 from app.models.content import ContentItem, ContentStatus, SourceConfig, SourceType
+from app.models.content import ContentKind
 from app.models.credential import PlatformCredential
 from app.models.film import WatchLog, WatchRecord, WATCH_STATUSES
 from app.models.system_setting import SystemSetting
 
 logger = logging.getLogger(__name__)
 
+# 影片可以落在这两种数据源下（仅用于建源与归属；「是不是影片」一律看 kind，见 IS_FILM）
 FILM_SOURCE_TYPES = (SourceType.SYNC_EMBY.value, SourceType.USER_FILM.value)
+# 影片身份判定：不依赖所属数据源，删源/换源都不影响
+IS_FILM = ContentItem.kind == ContentKind.FILM.value
 KINDS = ("movie", "series")
 
 TMDB_API_BASE = "https://api.themoviedb.org/3"
@@ -296,8 +300,7 @@ def find_unenriched(db: Session, limit: int = 50) -> list[ContentItem]:
     tmdb_configured = bool(get_tmdb_api_key(db))
     rows = (
         db.query(ContentItem)
-        .join(SourceConfig, ContentItem.source_id == SourceConfig.id)
-        .filter(SourceConfig.source_type.in_(FILM_SOURCE_TYPES))
+        .filter(IS_FILM)
         .order_by(ContentItem.created_at.asc())
         .all()
     )
@@ -402,8 +405,7 @@ def _find_film(db: Session, external_id: str, emby_item_ids: list[str] | None = 
     """按 external_id（不限来源）查找影片；找不到再按 raw_data.emby.item_ids 找（Emby 条目后补 TMDb ID 的情形）"""
     base = (
         db.query(ContentItem)
-        .join(SourceConfig, ContentItem.source_id == SourceConfig.id)
-        .filter(SourceConfig.source_type.in_(FILM_SOURCE_TYPES))
+        .filter(IS_FILM)
     )
     content = base.filter(ContentItem.external_id == external_id).first()
     if content or not emby_item_ids:
@@ -445,6 +447,7 @@ def upsert_films(db: Session, source: SourceConfig, films: list[dict]) -> dict:
         is_new = content is None
         if is_new:
             content = ContentItem(
+                kind=ContentKind.FILM.value,
                 id=uuid.uuid4().hex,
                 source_id=source.id,
                 external_id=external_id,
@@ -544,8 +547,7 @@ def mark_missing_from_emby(db: Session, seen_content_ids: list[str]) -> int:
     """本次同步未出现、但 raw_data.emby.in_library=true 的记录 → in_library=false（记录保留）"""
     query = (
         db.query(ContentItem)
-        .join(SourceConfig, ContentItem.source_id == SourceConfig.id)
-        .filter(SourceConfig.source_type.in_(FILM_SOURCE_TYPES))
+        .filter(IS_FILM)
         .filter(ContentItem.raw_data["emby"]["in_library"].astext == "true")
     )
     if seen_content_ids:
@@ -609,8 +611,7 @@ def resolve_or_create_film(
         # 先按片名+年份在库内找（不区分来源）
         q = (
             db.query(ContentItem)
-            .join(SourceConfig, ContentItem.source_id == SourceConfig.id)
-            .filter(SourceConfig.source_type.in_(FILM_SOURCE_TYPES))
+            .filter(IS_FILM)
             .filter(ContentItem.title.ilike(title.strip()))
         )
         if year:

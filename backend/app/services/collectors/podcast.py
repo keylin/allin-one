@@ -18,6 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.content import SourceConfig, ContentItem, ContentStatus, MediaItem
+from app.models.content import ContentKind
 from app.services.collectors.base import BaseCollector, report_found
 from app.services.collectors.utils import coerce_config
 from app.services.media_detection import detect_media_for_content
@@ -69,6 +70,7 @@ class PodcastCollector(BaseCollector):
             external_id = self._extract_external_id(entry)
             raw_dict = self._entry_to_dict(entry, podcast_meta)
             item = ContentItem(
+                kind=ContentKind.AUDIO.value,
                 source_id=source.id,
                 title=entry.get("title", "Untitled")[:500],
                 external_id=external_id,
