@@ -401,6 +401,37 @@ _META_FIELDS = (
 )
 
 
+# Emby 的 ProductionLocations 给英文全称，TMDb 给 ISO 3166-1 两位码；库内统一存两位码，
+# 否则同一国家出现两种写法（US / United States of America），按国家筛选与统计都会裂开。
+_COUNTRY_NAME_TO_ISO = {
+    "united states of america": "US", "united states": "US", "usa": "US",
+    "united kingdom": "GB", "uk": "GB", "china": "CN", "hong kong": "HK", "taiwan": "TW",
+    "macao": "MO", "japan": "JP", "south korea": "KR", "korea": "KR", "north korea": "KP",
+    "india": "IN", "thailand": "TH", "singapore": "SG", "malaysia": "MY", "vietnam": "VN",
+    "indonesia": "ID", "philippines": "PH", "iran": "IR", "israel": "IL", "turkey": "TR",
+    "france": "FR", "germany": "DE", "italy": "IT", "spain": "ES", "portugal": "PT",
+    "netherlands": "NL", "belgium": "BE", "switzerland": "CH", "austria": "AT", "ireland": "IE",
+    "sweden": "SE", "norway": "NO", "denmark": "DK", "finland": "FI", "iceland": "IS",
+    "poland": "PL", "czech republic": "CZ", "hungary": "HU", "greece": "GR", "romania": "RO",
+    "russia": "RU", "soviet union": "SU", "ukraine": "UA",
+    "canada": "CA", "mexico": "MX", "brazil": "BR", "argentina": "AR", "chile": "CL",
+    "australia": "AU", "new zealand": "NZ", "south africa": "ZA",
+}
+
+
+def normalize_countries(values: list[str] | None) -> list[str]:
+    """国家统一为 ISO 两位码（去重保序）；认不出的全称原样保留，不丢数据"""
+    out: list[str] = []
+    for v in values or []:
+        v = (v or "").strip()
+        if not v:
+            continue
+        code = v.upper() if len(v) == 2 else _COUNTRY_NAME_TO_ISO.get(v.lower(), v)
+        if code not in out:
+            out.append(code)
+    return out
+
+
 def _find_film(db: Session, external_id: str, emby_item_ids: list[str] | None = None) -> ContentItem | None:
     """按 external_id（不限来源）查找影片；找不到再按 raw_data.emby.item_ids 找（Emby 条目后补 TMDb ID 的情形）"""
     base = (
@@ -476,6 +507,8 @@ def upsert_films(db: Session, source: SourceConfig, films: list[dict]) -> dict:
         raw = dict(old_raw)
         for key in _META_FIELDS:
             value = film.get(key)
+            if key == "countries":
+                value = normalize_countries(value)
             if value is not None and value != [] and value != "":
                 raw[key] = value
         if film.get("provider_ids"):
