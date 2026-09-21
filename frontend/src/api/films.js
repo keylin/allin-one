@@ -86,3 +86,15 @@ export const WATCH_STATUS_OPTIONS = [
 export function statusMeta(status) {
   return WATCH_STATUS_OPTIONS.find(o => o.value === status) || WATCH_STATUS_OPTIONS[0]
 }
+
+// 库内国家统一存 ISO 3166-1 两位码，展示时转中文；港澳台用短名，认不出的原样显示
+const REGION_OVERRIDES = { HK: '中国香港', MO: '中国澳门', TW: '中国台湾', SU: '苏联' }
+let regionNames = null
+try { regionNames = new Intl.DisplayNames(['zh-CN'], { type: 'region' }) } catch { /* 老浏览器：退回显示代码 */ }
+
+export function countryLabel(code) {
+  if (!code) return ''
+  if (REGION_OVERRIDES[code]) return REGION_OVERRIDES[code]
+  if (!regionNames || !/^[A-Z]{2}$/.test(code)) return code
+  try { return regionNames.of(code) || code } catch { return code }
+}

@@ -1,7 +1,7 @@
 <script setup>
 import { ref, watch, computed } from 'vue'
 import DetailDrawer from '@/components/detail-drawer.vue'
-import { getFilm, getFilmStats, updateWatchRecord, addWatchLog, updateWatchLog, deleteWatchLog, deleteFilm, enrichFilm, setDoubanLink, clearDoubanLink, updateFilmMeta, relinkFilm, searchTmdb, WATCH_STATUS_OPTIONS, statusMeta } from '@/api/films'
+import { getFilm, getFilmStats, updateWatchRecord, addWatchLog, updateWatchLog, deleteWatchLog, deleteFilm, enrichFilm, setDoubanLink, clearDoubanLink, updateFilmMeta, relinkFilm, searchTmdb, WATCH_STATUS_OPTIONS, statusMeta, countryLabel } from '@/api/films'
 import { formatTimeShort } from '@/utils/time'
 import { useToast } from '@/composables/useToast'
 import { useDoubleTapClose } from '@/composables/useDoubleTapClose'
@@ -412,7 +412,7 @@ function fmt(iso) {
             <span class="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">{{ film.kind === 'series' ? '剧集' : '电影' }}</span>
             <span v-if="film.runtime_min" class="tabular-nums">{{ film.runtime_min }} 分钟</span>
             <span v-if="film.community_rating" class="tabular-nums">TMDb {{ Number(film.community_rating).toFixed(1) }}</span>
-            <span v-if="film.countries?.length">{{ film.countries.join(' / ') }}</span>
+            <span v-if="film.countries?.length">{{ film.countries.map(countryLabel).join(' / ') }}</span>
           </div>
           <p v-if="film.directors?.length" class="mt-2 text-sm text-slate-600"><span class="text-slate-400">导演</span> {{ film.directors.join(' / ') }}</p>
           <p v-else-if="film.metadata_state !== 'full' && !tmdbConfigured" class="mt-2 text-[11px] text-amber-600/90 leading-relaxed">
