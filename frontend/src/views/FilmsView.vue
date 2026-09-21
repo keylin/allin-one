@@ -24,7 +24,9 @@ const sentinelRef = ref(null)
 let observer = null
 
 const searchQuery = ref(route.query.q || '')
-const filterStatus = ref(route.query.status || '')
+// 移动端主要用来打标：默认只看「未标记」；桌面端默认全部。URL 里 status=all 表示显式选了「全部」
+const defaultStatus = window.matchMedia('(max-width: 639px)').matches ? 'unmarked' : ''
+const filterStatus = ref(route.query.status === 'all' ? '' : (route.query.status ?? defaultStatus))
 const filterKind = ref(route.query.kind || '')
 const filterGenre = ref(route.query.genre || '')
 const filterEmby = ref(route.query.in_emby || '')
@@ -46,6 +48,20 @@ let searchTimer = null
 function isSettled(film) {
   return ['watched', 'dropped'].includes(film.record?.status)
 }
+
+// 移动端 chips：打标优先，未标记排最前
+const MOBILE_STATUS_CHIPS = ['unmarked', 'backlog', 'want', 'watching', 'watched', 'dropped'].map(v => WATCH_STATUS_OPTIONS.find(o => o.value === v))
+const SORT_OPTIONS = [
+  { value: 'updated_at', label: '最近更新' },
+  { value: 'created_at', label: '最近添加' },
+  { value: 'year', label: '年份' },
+  { value: 'my_rating', label: '我的评分' },
+  { value: 'community_rating', label: '公共评分' },
+  { value: 'last_played', label: '最近播放' },
+  { value: 'title', label: '标题' },
+]
+// 「更多」里的低频筛选命中数（状态/类型已有 chips，不计入）
+const moreFilterCount = computed(() => [filterGenre.value, filterEmby.value, filterDecade.value].filter(Boolean).length)
 
 const QUICK_STATUSES = WATCH_STATUS_OPTIONS.filter(o => ['backlog', 'want', 'watched', 'dropped'].includes(o.value))
 
@@ -123,7 +139,7 @@ watch(sentinelRef, (el) => {
 function syncQuery() {
   const query = {}
   if (searchQuery.value.trim()) query.q = searchQuery.value.trim()
-  if (filterStatus.value) query.status = filterStatus.value
+  if (filterStatus.value !== defaultStatus) query.status = filterStatus.value || 'all'
   if (filterKind.value) query.kind = filterKind.value
   if (filterGenre.value) query.genre = filterGenre.value
   if (filterEmby.value) query.in_emby = filterEmby.value
@@ -325,7 +341,99 @@ onUnmounted(() => {
   <div class="flex flex-col h-full">
     <!-- Header -->
     <div class="px-4 pt-3 pb-2.5 space-y-2 sticky top-0 bg-white/95 backdrop-blur-sm z-10 border-b border-slate-100 shrink-0">
-      <div class="flex items-center gap-2">
+      <!-- 移动端：搜索一行 + 状态 chips + 类型/排序 chips，全部一键直达；低频项收进「更多」 -->
+      <div class="sm:hidden space-y-2">
+        <div class="flex items-center gap-2">
+          <div class="relative flex-1 min-w-0">
+            <svg class="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" /></svg>
+            <input
+              v-model="searchQuery"
+              placeholder="搜索片名 / 原名 / 导演..."
+              class="w-full bg-slate-50 rounded-lg pl-8 pr-3 py-2 text-sm text-slate-700 placeholder-slate-400 border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-300 focus:bg-white transition-all"
+            />
+          </div>
+          <button
+            class="shrink-0 px-2.5 py-2 text-xs rounded-lg border transition-all"
+            :class="showFilters || moreFilterCount ? 'border-indigo-300 text-indigo-600 bg-indigo-50' : 'border-slate-200 text-slate-500'"
+            @click="showFilters = !showFilters"
+          >更多<span v-if="moreFilterCount"> {{ moreFilterCount }}</span></button>
+          <button
+            class="shrink-0 inline-flex items-center gap-1 px-2.5 py-2 text-xs font-medium text-white bg-indigo-500 active:bg-indigo-600 rounded-lg"
+            @click="addVisible = true"
+          >
+            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14" /></svg>
+            添加
+          </button>
+        </div>
+
+        <!-- 状态 -->
+        <div class="flex items-center gap-1.5 overflow-x-auto -mx-4 px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <button
+            v-for="opt in MOBILE_STATUS_CHIPS"
+            :key="opt.value"
+            class="shrink-0 px-2.5 py-1.5 text-xs rounded-full transition-all whitespace-nowrap"
+            :class="filterStatus === opt.value ? opt.color : 'bg-slate-50 text-slate-500 active:bg-slate-100'"
+            @click="filterStatus = opt.value"
+          >{{ opt.label }} <span class="opacity-60 tabular-nums">{{ statusCount(opt.value) }}</span></button>
+          <button
+            class="shrink-0 px-2.5 py-1.5 text-xs rounded-full transition-all whitespace-nowrap"
+            :class="!filterStatus ? 'bg-slate-800 text-white' : 'bg-slate-50 text-slate-500 active:bg-slate-100'"
+            @click="filterStatus = ''"
+          >全部 <span class="opacity-60 tabular-nums">{{ stats?.total ?? '' }}</span></button>
+        </div>
+
+        <!-- 类型 + 排序 -->
+        <div class="flex items-center gap-1.5 overflow-x-auto -mx-4 px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <button
+            v-for="k in [{ value: 'movie', label: '电影' }, { value: 'series', label: '剧集' }]"
+            :key="k.value"
+            class="shrink-0 px-2.5 py-1 text-[11px] rounded-full border transition-all whitespace-nowrap"
+            :class="filterKind === k.value ? 'border-indigo-300 text-indigo-600 bg-indigo-50' : 'border-slate-200 text-slate-500 active:bg-slate-100'"
+            @click="filterKind = filterKind === k.value ? '' : k.value"
+          >{{ k.label }}</button>
+          <span class="shrink-0 w-px h-4 bg-slate-200 mx-0.5" />
+          <button
+            v-for="opt in SORT_OPTIONS"
+            :key="opt.value"
+            class="shrink-0 px-2.5 py-1 text-[11px] rounded-full border transition-all whitespace-nowrap"
+            :class="sortBy === opt.value ? 'border-slate-700 text-white bg-slate-700' : 'border-slate-200 text-slate-500 active:bg-slate-100'"
+            @click="sortBy = opt.value"
+          >{{ opt.label }}</button>
+        </div>
+
+        <!-- 更多：低频筛选 + 库维护 -->
+        <div v-if="showFilters" class="flex items-center gap-2 flex-wrap pt-0.5">
+          <select v-model="filterGenre" class="text-xs text-slate-600 bg-white border border-slate-200 rounded-lg px-2 py-1.5 outline-none max-w-[140px]">
+            <option value="">全部类型</option>
+            <option v-for="g in (stats?.genres || [])" :key="g" :value="g">{{ g }}</option>
+          </select>
+          <select v-model="filterDecade" class="text-xs text-slate-600 bg-white border border-slate-200 rounded-lg px-2 py-1.5 outline-none">
+            <option value="">全部年代</option>
+            <option v-for="d in decades" :key="d" :value="String(d)">{{ d }}s</option>
+          </select>
+          <select v-model="filterEmby" class="text-xs text-slate-600 bg-white border border-slate-200 rounded-lg px-2 py-1.5 outline-none">
+            <option value="">Emby 不限</option>
+            <option value="yes">在 Emby 库内</option>
+            <option value="no">不在 Emby</option>
+          </select>
+          <button v-if="moreFilterCount" class="text-[11px] text-slate-400" @click="filterGenre = ''; filterDecade = ''; filterEmby = ''">清除</button>
+          <div class="basis-full h-0" />
+          <button
+            class="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs rounded-lg disabled:cursor-not-allowed"
+            :class="stats?.emby_configured ? 'text-emerald-600 bg-emerald-50' : 'text-slate-400 bg-slate-50'"
+            :disabled="syncing"
+            @click="runEmbySync"
+          >{{ syncing ? (syncProgress || '同步中...') : '同步 Emby' }}</button>
+          <button
+            class="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs rounded-lg disabled:cursor-not-allowed"
+            :class="(stats?.unenriched ?? 0) > 0 ? 'text-indigo-600 bg-indigo-50' : 'text-slate-400 bg-slate-50'"
+            :disabled="enriching"
+            @click="runEnrich"
+          >{{ enriching ? (enrichProgress || '补全中...') : '补全元数据' }}<span v-if="!enriching && (stats?.unenriched ?? 0) > 0" class="ml-0.5 tabular-nums">({{ stats.unenriched }})</span></button>
+        </div>
+      </div>
+
+      <div class="hidden sm:flex items-center gap-2">
         <span class="text-xs text-slate-400 tabular-nums shrink-0">{{ totalCount }} 部</span>
         <span
           v-if="stats"
@@ -343,12 +451,7 @@ onUnmounted(() => {
           v-model="sortBy"
           class="text-xs text-slate-600 bg-white border border-slate-200 rounded-lg px-2 py-1.5 focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 outline-none cursor-pointer transition-all"
         >
-          <option value="updated_at">最近更新</option>
-          <option value="year">年份</option>
-          <option value="my_rating">我的评分</option>
-          <option value="community_rating">公共评分</option>
-          <option value="last_played">最近播放</option>
-          <option value="title">标题</option>
+          <option v-for="opt in SORT_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
         </select>
 
         <button
@@ -383,7 +486,7 @@ onUnmounted(() => {
       </div>
 
       <!-- search + status chips -->
-      <div class="flex items-center gap-2">
+      <div class="hidden sm:flex items-center gap-2">
         <div class="relative flex-1 sm:flex-none sm:w-56">
           <svg class="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400 pointer-events-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" /></svg>
           <input
@@ -406,19 +509,10 @@ onUnmounted(() => {
             @click="filterStatus = filterStatus === opt.value ? '' : opt.value"
           >{{ opt.label }} <span class="opacity-60 tabular-nums">{{ statusCount(opt.value) }}</span></button>
         </div>
-        <button
-          class="sm:hidden shrink-0 px-2.5 py-1.5 text-xs rounded-lg border transition-all"
-          :class="activeFilterCount ? 'border-indigo-300 text-indigo-600 bg-indigo-50' : 'border-slate-200 text-slate-500'"
-          @click="showFilters = !showFilters"
-        >筛选<span v-if="activeFilterCount"> {{ activeFilterCount }}</span></button>
       </div>
 
       <!-- filters -->
-      <div class="flex items-center gap-2 flex-wrap" :class="showFilters ? '' : 'hidden sm:flex'">
-        <select v-model="filterStatus" class="sm:hidden text-xs text-slate-600 bg-white border border-slate-200 rounded-lg px-2 py-1.5 outline-none">
-          <option value="">全部状态</option>
-          <option v-for="opt in WATCH_STATUS_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }} ({{ statusCount(opt.value) }})</option>
-        </select>
+      <div class="hidden sm:flex items-center gap-2 flex-wrap">
         <select v-model="filterKind" class="text-xs text-slate-600 bg-white border border-slate-200 rounded-lg px-2 py-1.5 outline-none cursor-pointer">
           <option value="">全部</option>
           <option value="movie">电影</option>
