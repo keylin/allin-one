@@ -111,9 +111,13 @@ async function fetchStats() {
   } catch { /* ignore */ }
 }
 
-function reload() {
+function reloadList() {
   page.value = 1
   fetchFilms(false)
+}
+
+function reload() {
+  reloadList()
   fetchStats()
 }
 
@@ -150,9 +154,9 @@ function syncQuery() {
 
 watch(searchQuery, () => {
   clearTimeout(searchTimer)
-  searchTimer = setTimeout(() => { syncQuery(); reload() }, 300)
+  searchTimer = setTimeout(() => { syncQuery(); reloadList() }, 300)
 })
-watch([filterStatus, filterKind, filterGenre, filterEmby, filterDecade, sortBy], () => { syncQuery(); reload() })
+watch([filterStatus, filterKind, filterGenre, filterEmby, filterDecade, sortBy], () => { syncQuery(); reloadList() })
 
 function clearFilters() {
   filterStatus.value = ''
@@ -372,7 +376,7 @@ onUnmounted(() => {
             v-for="opt in MOBILE_STATUS_CHIPS"
             :key="opt.value"
             class="shrink-0 px-2.5 py-1.5 text-xs rounded-full transition-all whitespace-nowrap"
-            :class="filterStatus === opt.value ? opt.color : 'bg-slate-50 text-slate-500 active:bg-slate-100'"
+            :class="filterStatus === opt.value ? opt.active : 'bg-slate-50 text-slate-500 active:bg-slate-100'"
             @click="filterStatus = opt.value"
           >{{ opt.label }} <span class="opacity-60 tabular-nums">{{ statusCount(opt.value) }}</span></button>
           <button
@@ -554,7 +558,7 @@ onUnmounted(() => {
         </div>
 
         <template v-else>
-          <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 gap-2.5 sm:gap-4">
+          <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 gap-2.5 sm:gap-4 transition-opacity duration-100" :class="loading ? 'opacity-40 pointer-events-none' : ''">
             <div
               v-for="film in films"
               :key="film.content_id"
