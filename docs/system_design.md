@@ -1314,17 +1314,36 @@ EOF
 - `allin-one` / `rsshub` / `browserless`: `TZ=Asia/Shanghai`（日志时间戳、仪表盘本地日边界计算使用北京时间）
 - `postgres`: `TZ=UTC`（数据库服务器时区必须为 UTC）
 
-### 9.3 数据备份
+### 9.3 数据备份（home-server，2026-09-23 起）
 
-PostgreSQL 数据库通过 `pg_dump` 实现备份:
+真相单元只有两个（`docs/design_data_model.md` §3.1）：Postgres 与 `data/`。两者进**同一个 restic 快照**，任一快照即完整状态。
+
+| 项 | 值 |
+|---|---|
+| 脚本 | `scripts/backup-home-server.sh`（`backup` / `check` / `snapshots` / `restore-db`） |
+| 调度 | systemd `allin-one-backup.timer`，每日 03:30（本地时区），`Persistent=true` 漏跑补跑 |
+| 内容 | `pg_dump -Fc`（容器内执行，`pg_restore --list` 校验可解析）+ `/opt/allin-one/data`（排除 `logs/`）+ `.env` + `docker-compose.home-server.yml` |
+| 仓库 | `/mnt/sda2/backup/restic-allin-one`（1TB 数据盘，与根盘不同物理盘；路由器镜像也在此盘） |
+| 密码 | `/opt/allin-one/.restic-password`（0600，机器本地，不进仓库）。**丢了密码备份即不可读，另存一份到密码管理器** |
+| 保留 | daily 30 / weekly 8 / monthly 12，每次 `forget --prune`；周日 `restic check` |
+| 心跳 | 成功后写 `/var/backups/allin-one/last-success`（UTC ISO），供健康检查判断 |
+| 覆盖 | `/opt/allin-one/.backup.env` 可覆盖仓库路径、密码文件、保留策略等 |
 
 ```bash
-# 手动备份
-docker compose exec postgres pg_dump -U allinone allinone > data/backups/backup_$(date +%Y%m%d).sql
+# 手动跑一次 / 看快照 / 完整性
+scripts/backup-home-server.sh backup
+scripts/backup-home-server.sh snapshots
+scripts/backup-home-server.sh check
 
-# 恢复
-docker compose exec -T postgres psql -U allinone allinone < data/backups/backup_20260221.sql
+# 取出某快照的 dump（不动生产库），再决定怎么恢复
+scripts/backup-home-server.sh restore-db latest /tmp/restore
+docker exec -i allin-postgres pg_restore -U allinone -d allinone --clean --if-exists < /tmp/restore/var/backups/allin-one/allinone.dump
+
+# 整机恢复：恢复 data/ 与 .env 后起容器，再 pg_restore
+restic -r /mnt/sda2/backup/restic-allin-one restore latest --target / --include /opt/allin-one
 ```
+
+首次备份 2026-09-23：85.9 MiB，快照 `1f953312`；已在临时 postgres:17 容器里 `pg_restore` 验证：content_items 11,484、watch_records 1,177、alembic 0028，与生产一致。
 
 ---
 
