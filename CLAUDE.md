@@ -53,7 +53,7 @@ docker compose up -d --build
 ./deploy-home-server.sh status   # 容器状态
 ```
 
-生产目录 `/opt/allin-one` 是仓库的 rsync 镜像，不是 git checkout；其中 `docker-compose.home-server.yml`、`.env`、`.restic-password`、`.backup.env` 是机器本地文件，不在仓库、不会被同步覆盖。**发版一律跑 `deploy-home-server.sh`，不要手工 rsync / docker build**。备份由 systemd `allin-one-backup.timer` 每日 03:30 跑 `scripts/backup-home-server.sh`（pg_dump + data/ → restic，见 `docs/system_design.md` §9.3）。
+生产目录 `/opt/allin-one` 是仓库的 rsync 镜像，不是 git checkout；其中 `docker-compose.home-server.yml`、`.env`、`.restic-password`、`.backup.env` 是机器本地文件，不在仓库、不会被同步覆盖。**发版一律跑 `deploy-home-server.sh`，不要手工 rsync / docker build**。备份脚本 `scripts/backup-home-server.sh`（pg_dump + data/ → restic，见 `docs/system_design.md` §9.3）**手动运行**；systemd timer 已装但按用户决定停用。
 
 ## 代码规范
 

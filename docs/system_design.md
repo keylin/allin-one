@@ -1321,7 +1321,7 @@ EOF
 | 项 | 值 |
 |---|---|
 | 脚本 | `scripts/backup-home-server.sh`（`backup` / `check` / `snapshots` / `restore-db`） |
-| 调度 | systemd `allin-one-backup.timer`，每日 03:30（本地时区），`Persistent=true` 漏跑补跑 |
+| 调度 | **暂不自动**（用户 2026-09-23 决定）。systemd 单元 `allin-one-backup.{service,timer}` 已装但 disabled；需要时 `systemctl enable --now allin-one-backup.timer` 即每日 03:30 |
 | 内容 | `pg_dump -Fc`（容器内执行，`pg_restore --list` 校验可解析）+ `/opt/allin-one/data`（排除 `logs/`）+ `.env` + `docker-compose.home-server.yml` |
 | 仓库 | `/mnt/sda2/backup/restic-allin-one`（1TB 数据盘，与根盘不同物理盘；路由器镜像也在此盘） |
 | 密码 | `/opt/allin-one/.restic-password`（0600，机器本地，不进仓库）。**丢了密码备份即不可读，另存一份到密码管理器** |
