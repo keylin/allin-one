@@ -117,7 +117,7 @@ vim scripts/utils/cleanup_data.py
 - 内容过滤器（无表无字段，三层分离）: **定义层** `system_settings` 的 `content.filters`（`{version, filters[]}`，每个过滤器 = `{id,name,emoji,pinned,order,conditions}`，conditions 覆盖 source_ids / media_type / status / unread / favorited / date_range / tag / q 全部维度）；**状态层** `stores/contentFilter.js` 是数据消费状态的唯一所有者，持有「定义 + 当前激活 + 临时覆盖(overrides)」，其 `params` computed 是列表请求参数的唯一来源；**消费端** FeedView 只渲染 pinned 过滤器的快捷方式并读 store，不自行拼装筛选参数，**配置端** 设置 → 内容过滤器 负责增删改。两端只经 store 与 settings 通信。
   - 筛选条（chip 区）只渲染 `overrides`，绝不渲染过滤器自身的条件——否则选中一个含 55 个来源的过滤器会把它们全铺成标签，这是历史上返工两次的形态。过滤器自身条件由快捷方式高亮表达。
   - 分类是消费视角不是源的属性，**不要给 `source_configs` 加 purpose 之类的字段**；同一个源在不同过滤器里可归不同组。
-  - 外部消费方（the-one 的 `scripts/intel-query.py`）读同一个 key，按名字取「浏览」过滤器的 source_ids，用「全部源 - 浏览类」的排除法算情报源，保证新源默认进情报侧不被静默漏掉；旧 `feed.source_groups` 自动迁移且保留可回退
+  - 外部消费方（the-one 的 `scripts/intel-query.py`）读同一个 key，**按名字正列取「情报」过滤器的 source_ids**（2026-09-10 起；早先的「全部源 − 浏览类」排除法已废弃——过滤器允许重叠，排除法会把同时在浏览里的源踢出研判池），只取 source_ids、忽略过滤器的 unread / date_range 等消费条件；未被覆盖的新源在 stderr 提示；`--all-sources` 为逃生阀；旧 `feed.source_groups` 仍可回退
 - MCP 金融数据源: 蚂蚁 financial-data API 为主源（`FINANCIAL_DATA_*` 环境变量，key 走基础设施密钥模式，不经 system_settings+Fernet），akshare/雪球为降级路径；`FINANCIAL_DATA_ENABLED=false` 或留空 API key 即一键全量回退，详见 `docs/system_design.md` §10.6
 
 ## 文档导航
