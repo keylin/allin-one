@@ -122,6 +122,7 @@ vim scripts/utils/cleanup_data.py
 
 ## 文档导航
 
+- `docs/10-立项.md` `20-架构.md` `30-模型.md` `40-流程.md` `50-用例.md` — **现状全景**：只写系统今天是什么样（定位与场景、领域与分层、现有表与存储、链路与操作、用法与验证），不写判断逻辑；每章头部有核实日期，改了架构 / 模型 / 流程后同步更新
 - `docs/product_spec.md` — 产品方案 PRD
 - `docs/system_design.md` — 系统架构与 API 规范
 - `docs/business_glossary.md` — 业务术语与枚举定义
