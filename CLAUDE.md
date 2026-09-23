@@ -126,7 +126,7 @@ vim scripts/utils/cleanup_data.py
 - `docs/system_design.md` — 系统架构与 API 规范
 - `docs/business_glossary.md` — 业务术语与枚举定义
 - `docs/audit_2026-09_architecture.md` — 2026-09 架构审计：现状、根因、目标模型、分阶段对齐记录
-- `docs/design_data_model.md` — 个人内容系统的数据模型与存储模型（五概念、两真相单元、六张业务表、kinds 注册表；2026-09-23 定稿待实施）
+- `docs/design_data_model.md` — 个人内容系统的数据模型与存储模型（五概念、两真相单元、六张业务表、kinds 注册表）。决策与待定项在 the-one `project/allin-one/`
 - `backend/CLAUDE.md` — 后端开发规范
 - `backend/app/services/CLAUDE.md` — Pipeline/Collector 开发规范
 - `frontend/CLAUDE.md` — 前端开发规范
