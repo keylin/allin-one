@@ -48,7 +48,7 @@ cd backend && alembic upgrade head
 # 部署（本地开发容器）
 docker compose up -d --build
 
-# 部署到家庭服务器生产环境（在服务器本机执行：rsync → /opt/allin-one → 构建 → up -d → 迁移 → 健康检查）
+# 部署到家庭服务器生产环境（在服务器本机执行：rsync → /opt/allin-one → 构建 → 用新镜像跑迁移 → up -d → 健康检查）
 ./deploy-home-server.sh          # 全流程；镜像源拉不动时自动切换候选源
 ./deploy-home-server.sh status   # 容器状态
 ```
