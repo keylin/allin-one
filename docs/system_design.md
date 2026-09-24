@@ -1343,7 +1343,7 @@ docker exec -i allin-postgres pg_restore -U allinone -d allinone --clean --if-ex
 restic -r /mnt/sda2/backup/restic-allin-one restore latest --target / --include /opt/allin-one
 ```
 
-首次备份 2026-09-23：85.9 MiB，快照 `1f953312`；已在临时 postgres:17 容器里 `pg_restore` 验证：content_items 11,484、watch_records 1,177、alembic 0028，与生产一致。
+首次备份 2026-09-23：85.6 MiB，快照 `1f953312`；已在临时 postgres:17 容器里 `pg_restore` 验证：content_items 11,484、watch_records 1,177、alembic 0028，与生产一致。
 
 ---
 
