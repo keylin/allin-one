@@ -55,6 +55,8 @@ sync_source() {
     changed=$(rsync -ai --delete \
         --exclude '.git' \
         --exclude '.env' \
+        --exclude '.restic-password' \
+        --exclude '.backup.env' \
         --exclude 'data' \
         --exclude 'certs' \
         --exclude 'restore' \
