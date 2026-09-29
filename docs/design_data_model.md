@@ -1,6 +1,6 @@
 # 技术方案: 个人内容系统的数据模型与存储模型
 
-> 版本: v1.2 | 日期: 2026-09-29 | 状态: v1.0（2026-09-23）经数字阿凡达 / 数据主权复核修订，决策见 the-one `_spec/决策记录.md` D12–D31；待实施（实施顺序见 §9）
+> 版本: v1.3 | 日期: 2026-09-29 | 状态: v1.0（2026-09-23）经数字阿凡达 / 数据主权复核修订，决策见 the-one `_spec/决策记录.md` D12–D35；待实施（实施顺序见 §9）
 
 ---
 
@@ -23,8 +23,8 @@ allin-one 扩成全面的个人内容管理系统：图书馆、影视、文库�
 ```
 source   来源      东西从哪来
 item     东西      一条离散内容，kind 决定领域
-  asset  资源      东西的文件，从属于东西，不独立存在
-state    状态      人对东西的当前态度，每东西至多一行；是事件的投影
+  asset  资源      东西的文件，从属于东西；有来源，落地与否是状态
+state    状态      我对东西的当前表态与最新观测，每东西至多一行
 event    事件      发生在东西上的事，每东西多行；唯一真相
 point    点        发生在序列上的值；序列没有"东西"，只有时间轴
 ```
@@ -40,7 +40,16 @@ point    点        发生在序列上的值；序列没有"东西"，只有时�
 
 任何新对象先过这两条。既不是东西、也不是状态 / 事件、也不是点的，不进 allin-one（例如凭证、判断、画像）。**消费东西的行为一律记为事件；`data_points` 只放没有主语的序列**（心率、体重、价格、位置）（D19）。
 
-**事件是唯一真相，状态是投影**（D14）：每次表态追加一条事件，同一事务更新 `item_states`；`item_states` 可从事件全量重建。唯一例外是**游标**：`progress`、`extra.position` 高频更新，直接改写、不记事件，是 `item_states` 中的真相字段；有意义的节点另记 `finished` 事件（D15）。
+**kind 表示"它在我生活中是什么"，不表示载体**（D33）：创作者的一次发布（文章、播客单集、在线视频）都是 `post`，介绍在 `body`，媒体是资源，主媒体 `role=enclosure`；展示方式由资源决定（有音频主媒体显示音频播放器，依此类推），不由 kind 决定。
+
+**状态分两类**（D14、D34）：
+
+| 类 | 字段 | 规则 |
+|---|---|---|
+| **表态** | `status`、`rating`、`favorited_at`、`lead_at`、`note`、`tags` | 事件的投影：每次表态追加一条事件，同一事务更新 `item_states`；可从事件全量重建 |
+| **观测** | `progress`、`extra.position` | 最新观测值，直接记录；有意义的节点另记 `finished` 事件 |
+
+**事件只追加**（D34）：修改 = 追加 `amend`（指向原事件，`meta` 带新值），撤销 = 追加 `retract`；投影取更正后的值，编辑历史一并保留。
 
 **`origin`：证据来源**，不是行为人（行为人始终是我或我的分身）（D17、D18）：
 
@@ -50,7 +59,7 @@ point    点        发生在序列上的值；序列没有"东西"，只有时�
 | `avatar:<skill>` | the-one（阿凡达的认知一半），如 `avatar:digest` |
 | `sync:<源>` | 外部系统报告的事实，如 `sync:emby`、`sync:douban` |
 
-**文本内联，文件外置**：资源是东西的文件载体（文章插图、书的封面与 epub、播客音频、上传件本体）。日记、备忘、书签没有资源，正文内联在东西里。
+**文本内联，文件外置**：资源是东西的文件载体（文章插图、书的封面与 epub、发布的主媒体、上传件本体）。日记、备忘、书签没有资源，正文内联在东西里。
 
 **引用与 id**：id 全局唯一、不含语义；引用统一为 `<类型>:<id>`（`content:`、`source:`；`entity:` 为保留前缀，实体表推迟）（D13）。
 
@@ -72,13 +81,15 @@ point    点        发生在序列上的值；序列没有"东西"，只有时�
 | 手动与分身的事件（`origin` 为 `manual` / `avatar:*`） | 真相：本身即原始记录 |
 | 采集原件（`captures` + blob） | 真相 |
 | 同步事件（`origin=sync:*`）、有原件的源在条目 `raw_data` 中的源块 | 原件的派生，可重新解析 |
-| 无原件的采集条目的 `raw_data`、`body`、资源 | 真相 |
-| 游标（`item_states.progress`、`extra.position`） | 真相 |
-| `item_states` 其余字段 | 事件的投影 |
+| 无原件的采集条目的 `raw_data`、`body`；已落地的资源本体 | 真相 |
+| 观测字段（`item_states.progress`、`extra.position`） | 真相：最新观测值 |
+| 表态字段（`item_states` 其余字段） | 事件的投影 |
 | `analysis_result` | 派生品，须记产出者 `{model, model_version, prompt_version, produced_at}`，多个产出者的结果并存、不互相覆盖；可以不重跑，但不是真相（D24） |
 | 检索向量、导出的 markdown、缩略图、统计缓存 | 派生品 |
 
 派生品须能从真相重建并有重建命令，不进备份范围（`analysis_result` 与原件派生物存在库里，随 dump 备份，但不作真相）。
+
+**资源的落地状态**（D34）：资源 = 东西的一个文件，有来源（`source_url`，上传件为空）；落没落地是状态：`referenced`（只有来源）→ `landed`（本体落地后才有 `sha256` + `data` / `path`）。所有资源都收编。离线保证由策略字段决定：`retention=forever` 的 kind，资源必须全部 `landed`；`retention=period` 的 kind 允许 `referenced`。晋升即把全部资源落地。
 
 ### 3.2 为什么小资源进 Postgres
 
@@ -106,7 +117,7 @@ delete(key)
 
 - 以内容 sha256 命名，不可变，只增不改。
 - 行在文件不在 → 校验任务检出并标记；文件在行不在 → 回收任务清理。
-- 删东西时按引用计数回收（同一文件可被多个东西引用）。
+- 删除与压缩时按引用计数回收（同一文件可被多个东西引用）。
 
 ### 3.5 采集原件
 
@@ -127,13 +138,14 @@ source_configs   来源：不变
 content_items    东西：id kind title url author published_at collected_at external_id
                        raw_data body analysis_result pipeline_status
                        title_hash capture_id ...
-assets           资源：id content_id role filename mime size sha256 meta
-                       data(bytea) 或 path —— 二者必居其一
+assets           资源：id content_id role source_url filename mime size meta
+                       sha256 + data(bytea) 或 path —— 落地后二者居其一，referenced 时皆空
 item_states      状态：content_id(PK)
-                       投影：status rating favorited_at lead_at note tags marked_at extra
-                       游标：progress extra.position
+                       表态（投影）：status rating favorited_at lead_at note tags marked_at
+                       观测：progress extra.position
+                       extra
 item_events      事件：id content_id type at precision text note location external_id
-                       origin capture_id meta(jsonb) created_at updated_at
+                       origin capture_id meta(jsonb) created_at
 item_links       关系：from_id to_id rel origin created_at meta
 captures         原件：id source_id captured_at sha256 mime size
 data_points      点：  id series source_id ts value meta(jsonb)
@@ -142,8 +154,8 @@ data_points      点：  id series source_id ts value meta(jsonb)
 | 表 | 来自 | 变化 |
 |---|---|---|
 | `content_items` | 现有 | 只管"它是什么"：`processed_content` 改名 `body`，`status` 改名 `pipeline_status`；移出 `is_favorited` / `favorited_at` / `is_lead` / `lead_at` / `user_note`（→ 状态）、`judgment`（→ `judged` 事件）、`opened_at` / `view_count` / `last_viewed_at`（→ 事件与状态）、`duplicate_of_id`（→ `item_links`）；删除 `chat_history`；加 `capture_id` |
-| `assets` | `media_items` | 去掉 `playback_position` / `last_played_at` / `is_favorited`；加 `sha256` / `data` / `meta`；`role` 取值 `cover` / `poster` / `inline` / `file`；海报从 `data/posters/` 收编进来 |
-| `item_states` | `watch_records` + `reading_progress` + `content_items` 上的态度列 | 合并；除游标外全部由事件投影 |
+| `assets` | `media_items` | 去掉 `playback_position` / `last_played_at` / `is_favorited`；加 `source_url` / `sha256` / `data` / `meta`；状态 `referenced` / `landed`；`role` 取值 `cover` / `poster` / `inline` / `enclosure` / `file`；海报从 `data/posters/` 收编进来 |
+| `item_states` | `watch_records` + `reading_progress` + `content_items` 上的态度列 | 合并；表态字段由事件投影，观测字段为最新观测值 |
 | `item_events` | `watch_logs` + `book_annotations` + `book_bookmarks` + 研判 | 合并；`book_bookmarks` 是阅读器拆除后的残留，数据为空，随合并删除 |
 | `item_links` | 新 | 首批 `rel` 只有 `derived_from`、`duplicate_of` |
 | `captures` | 新 | 载荷在 blobs |
@@ -151,15 +163,16 @@ data_points      点：  id series source_id ts value meta(jsonb)
 | `series_registry` | 新 | 代码注册，不建表：`series` / `unit` / `domain` / `aggregation` |
 | `kinds` 注册表 | 新 | 代码注册，不建表：见 §5 |
 
-`media_items` 现状：348 行，其中仅 61 行有本地文件；其余只是正文里已有的远程链接又抄了一遍。收编成 `assets` 时只保留有本体的行，远程链接留在正文。
+`media_items` 全部收编成 `assets`（D34）：有本地文件的为 `landed`，只有远程链接的为 `referenced`（含播客与视频的主媒体，`role=enclosure`）。
 
 ### 4.1 事件与投影
 
 - **表态事件**统一为 `set:<字段>`，新值在 `meta.value`，`null` 表示清除：`set:status` / `set:rating` / `set:favorite` / `set:lead` / `set:note` / `set:tags`。投影逻辑通用，加表态字段不加代码。
 - **发生的事**（与表态并存）：`watched`、`played`、`highlight`、`note`、`judged`、`opened`、`finished`。
+- **更正**：`amend`（指向原事件，`meta` 带新值）、`retract`（撤销原事件）。
 - **投影优先级**：每字段取最新的 `manual` 或 `avatar:*` 事件；两者皆无才取最新的 `sync:*`（"同步不覆盖手动"对所有表态字段统一生效）。
 - 收藏可来自 `manual`、`avatar:*` 或 `sync:<平台>`（平台上的收藏也是我的表态），投影优先级同上；**只有手动收藏触发晋升**。线索只能由 `manual` / `avatar:*` 设置（D22）。`item_states.rating` 只投影手动评分；外部评分、单次观看评分只在事件里。
-- **"只追加"约束机器**：系统不覆盖、不删除事件；`manual` 事件用户可改可删（记 `updated_at`），改后重算投影；同步事件以 `(content_id, origin, external_id)` 幂等更新。
+- **只追加**：任何人都不覆盖、不删除事件；修改与撤销以 `amend` / `retract` 表达，投影取更正后的值。同步事件以 `(content_id, origin, external_id)` 幂等写入：同键不重复追加，同一外部记录再次同步到的新值以 `amend` 追加。
 
 ### 4.2 从现有表到目标的映射
 
@@ -170,14 +183,17 @@ data_points      点：  id series source_id ts value meta(jsonb)
 | `watch_records.tags` | `set:tags`，投影为 `item_states.tags` 数组 |
 | `watch_records.my_rating` / `watched_at` / `watched_precision` | 删除（最近一次观看的缓存），读时取最新 `watched` 事件。影视无整体评分，`item_states.rating` 为空 |
 | `watch_logs` | `watched` 事件：`at` / `precision` / `note`，评分进 `meta.rating`，`origin=manual` |
-| `reading_progress.progress` | 游标 `item_states.progress` |
-| `reading_progress.cfi` / `section_index` / `section_title` | 游标 `extra.position` |
+| `reading_progress.progress` | 观测字段 `item_states.progress` |
+| `reading_progress.cfi` / `section_index` / `section_title` | 观测字段 `extra.position` |
 | `book_annotations` | `highlight` / `note` 事件：`selected_text` → `text`，`note` / `location` / `external_id` 同名；`color` / `cfi_range` / `section_index` 进 `meta` |
-| `media_items.original_url` / `metadata_json` | `assets.meta.source_url` / `assets.meta` |
-| `media_items.playback_position` / `last_played_at` | 所属东西的游标 |
-| `media_items.is_favorited`（71 条，全在文章上） | 提升为独立 `file` 条目 + `derived_from` 指回原文 |
+| `media_items.original_url` / `metadata_json` | `assets.source_url` / `assets.meta` |
+| `media_items` 有本地文件 / 只有远程链接 | `landed` / `referenced` |
+| `media_items.playback_position` / `last_played_at` | 所属东西的观测字段 |
+| `media_items.is_favorited`：68 张图片 | 提升为独立 `file` 条目 + `derived_from` 指回原文 |
+| `media_items.is_favorited`：3 个音频（所属文章的主媒体） | 资源不带表态：给所属 `post` 追加 `set:favorite` 并晋升为 `doc`，音频随之落地（D35） |
 | `content_items.is_favorited` / `favorited_at` | `set:favorite` |
-| `content_items.last_viewed_at` | 文章 `set:status=read` |
+| `content_items.kind`：`article`（11,146）/ `audio`（178） | `post`（D33） |
+| `content_items.last_viewed_at` | `post` 的 `set:status=read` |
 | `content_items.opened_at` | `opened` 事件；`view_count` 删除（由 `opened` 计数） |
 | `content_items.duplicate_of_id` | `item_links(duplicate_of)` |
 | `content_items.user_note` / `chat_history` | 删除（实测为空） |
@@ -205,11 +221,11 @@ data_points      点：  id series source_id ts value meta(jsonb)
 |---|---|
 | `label` | 显示名 |
 | `pipeline` | 进不进 LLM 流水线 |
-| `retention` | `period`（按保留期清理）/ `forever`（永不自动清理） |
+| `retention` | `period`（按保留期删除或压缩，资源允许 `referenced`）/ `forever`（永不自动清理，资源必须全部 `landed`） |
 | `in_feed` | 是否进信息流口径（替代现在的 `FEED_HIDDEN_KINDS`） |
 | `state_vocab` | `set:status` 的合法取值，如 film: `unmarked backlog want watching watched dropped` |
 | `record_types` | 该领域允许的事件类型及各自的 `meta` 结构（如 `judged`: verdict / tracking_line / ref） |
-| `promote_to` | stream 领域收藏后的晋升目标：`article → doc`、`audio → file` |
+| `promote_to` | 手动收藏后的晋升目标：`post → doc` |
 | `search_fields` | 进全文检索的字段 |
 | `timeline` | "这一天"视图（界面名"穿越"）的渲染方式 |
 
@@ -219,7 +235,8 @@ data_points      点：  id series source_id ts value meta(jsonb)
 STREAM  = Policy(pipeline=True,  retention="period",  in_feed=True)
 LIBRARY = Policy(pipeline=False, retention="forever", in_feed=False)
 
-"note":  Kind(LIBRARY, in_feed=True, ...)    # 例外只写差异
+"post":  Kind(STREAM, promote_to="doc", ...)
+"note":  Kind(LIBRARY, in_feed=True, ...)    # 只写与预设的差异
 "brief": Kind(STREAM, pipeline=False, ...)
 ```
 
@@ -231,18 +248,17 @@ LIBRARY = Policy(pipeline=False, retention="forever", in_feed=False)
 
 ## 6. 领域 × 概念
 
-| 领域 | kind | 预设 | 进来的方式 | 状态（投影 / 游标） | 事件 | 资源 |
+| 领域 | kind | 预设 | 进来的方式 | 状态（表态 / 观测） | 事件 | 资源 |
 |---|---|---|---|---|---|---|
-| 文章 / 播客 | `article` `audio` | STREAM | 采集 | `read`、收藏；播放进度 | `opened`、`played` | 插图、音频 |
-| 在线视频 | `video` | STREAM，`promote_to=file` | B 站动态（公共内容，不存原件）；B 站历史（存原件，派生 `played`，`at` 取 `view_at`）；B 站收藏夹（存原件，派生 `set:favorite`，`origin=sync:bilibili`，不触发晋升） | 收藏；播放进度 | `played` | — |
-| 影视 | `film` | LIBRARY | Emby 同步、手工、豆瓣 | 观看状态、标签 | `watched`、`played`（单集为 `location`） | 海报 |
-| 图书馆 | `book` | LIBRARY | 微信读书、Apple Books、Kindle 推送 | 进度（游标） | `highlight`、`note`、`finished` | 封面、epub |
-| 文库 | `doc`（新） | LIBRARY | 导入、收藏晋升、网页剪藏 | 收藏 | — | 插图 |
+| 发布（文章 / 播客单集 / 在线视频） | `post` | STREAM，`promote_to=doc` | 采集（RSS、播客）；B 站动态（公共内容，不存原件）；B 站历史（存原件，派生 `played`，`at` 取 `view_at`）；B 站收藏夹（存原件，派生 `set:favorite`，`origin=sync:bilibili`，不触发晋升） | 表态：`read`、收藏；观测：播放进度 | `opened`、`played`、`judged` | 插图、主媒体（`enclosure`） |
+| 影视 | `film` | LIBRARY | Emby 同步、手工、豆瓣 | 表态：观看状态、标签 | `watched`、`played`（单集为 `location`） | 海报 |
+| 图书馆 | `book` | LIBRARY | 微信读书、Apple Books、Kindle 推送 | 观测：进度、位置 | `highlight`、`note`、`finished` | 封面、epub |
+| 文库 | `doc`（新） | LIBRARY | 导入、收藏晋升、网页剪藏 | 收藏 | — | 插图、主媒体（晋升带来） |
 | 日记 | `journal`（新） | LIBRARY | 站点录入、Apple Notes 导入 | — | — | 图片 |
 | 备忘 | `note` | LIBRARY + in_feed | 站点录入、IM 同步 | `inbox → processed`、线索 | — | — |
 | brief | `brief`（新） | STREAM，不进流水线 | the-one 投递（brief 与市场扫描，子类型在 `raw_data`） | — | — | — |
 | 书签 | `bookmark` | LIBRARY | Safari、Chrome、GitHub Star 推送 | — | — | — |
-| 媒体与文件 | `file` | LIBRARY | 上传、手动视频下载、收藏晋升 | 播放进度 | `played` | 本体 |
+| 文件（没有介绍、真正独立的文件） | `file` | LIBRARY | 上传、手动视频下载、收藏提升出的图片 | 观测：播放进度 | `played` | 本体 |
 | AI 会话 | `session`（新） | LIBRARY | capture 管线推送摘要 | — | — | — |
 | 身体、财务、时空、环境 | `data_points` | — | 时序采集器 | — | — | — |
 | 照片 | `photo`（远期） | LIBRARY | 独立系统，只接索引 | — | — | S3 后端 |
@@ -250,38 +266,45 @@ LIBRARY = Policy(pipeline=False, retention="forever", in_feed=False)
 - 日记以 `published_at` 为日期键，一天可多条，不建附表。AI 会话只存摘要与主题，不存全文。
 - 备忘：录入为 `inbox`；the-one 处理后追加 `set:status=processed`（`origin=avatar:digest`）；the-one 拉未处理备忘即按 `kind=note` + 投影 `status=inbox`。brief 是 the-one 认知产物的投递副本，原件在 the-one。
 - 表中 `doc`、`journal`、`session`、`photo` 为规划领域，按 §5 在有数据时才登记。
-- `video` 是创作者持续更新的在线视频单集，与播客 `audio` 对称；有 TMDb 身份的电影、剧集归 `film`（D22）。YouTube / B 站的 RSS 条目仍按源类型默认 kind 入库。
+- `post` 是创作者的一次发布（D33）：文章、播客单集、在线视频（含 YouTube / B 站的 RSS 条目）同属一类，区别只在资源；有 TMDb 身份的电影、剧集归 `film`。
 
 ### 收藏与晋升
 
 - **收藏**是所有 kind 通用的表态（`set:favorite`），挂在用户点的那个东西上；library 条目收藏只是表态。平台同步来的收藏（`origin=sync:*`）只是表态，不触发晋升（D22）。
-- **晋升**是 stream 领域**手动**收藏后的附带动作：按 `promote_to` **新建**目标条目 + `item_links(derived_from)` 指回原条目，不改原条目的 kind。须全文、资源落地、正文 img 改写三件事都成，缺一件即晋升失败进重试队列。
+- **晋升**是**手动**收藏 `post` 后的附带动作：**新建** `doc` 条目 + `item_links(derived_from)` 指回原条目，不改原条目的 kind。须全文、全部资源落地（含主媒体）、正文 img 改写三件事都成，缺一件即晋升失败进重试队列。视频主媒体照常落地，不另设大小限制（D35）。
 - 取消收藏不删除晋升出的条目；原 stream 条目保留，被 `derived_from` 引用即免于保留期清理。
 - 全文检索默认隐藏已晋升的原条目，只显示晋升后的条目。
 
-### 清理保护
+### 删除与压缩
+
+两种操作（D34）：
+
+| 操作 | 谁发起 | 做什么 |
+|---|---|---|
+| **删除** | 用户意图 | 级联删除条目的资源、状态、事件、链接；大文件按引用计数回收 |
+| **压缩** | 系统回收空间 | 删除已落地的资源本体与 `body`、`raw_data`；保留条目骨架（标题、链接、id）、资源行（状态回到 `referenced`，引用仍在）与全部事件 |
 
 | | `retention=period` | `retention=forever` |
 |---|---|---|
-| 清理 | 按保留期分层清理（D23），见下 | 永不自动清理；源有内容时拒绝非级联删除 |
+| 保留期清理 | 按下表 | 永不自动清理；源有内容时拒绝非级联删除 |
 
 `retention=period` 条目过保留期时：
 
 | 条目 | 处理 |
 |---|---|
-| 没有任何事件 | 整条删除 |
-| 有我的事件（已读、打开、播放等） | 只清 `body`、`raw_data`、资源，保留骨架（标题、链接、id）与全部事件 |
-| 收藏 / 线索 / 被 `derived_from` 引用 | 整条保留 |
+| 没有任何事件 | 删除 |
+| 有我的事件（已读、打开、播放等） | 压缩 |
+| 收藏 / 线索 / 被 `derived_from` 引用 | 保留 |
 
 ---
 
 ## 7. 备份友好在模型上的五条约束
 
 1. **真相单元不超过两个，且第二个不可变。** 一份 dump 加一个只增目录，任何时刻的两份合起来就是完整状态。
-2. **每个字段标明真相还是派生**（逐类定性见 §3.1）。真相：手动与分身的事件、采集原件、无原件条目的 `raw_data` / `body`、资源、游标、点；派生：同步事件、状态投影、`analysis_result`（记产出者）、检索向量、导出、缩略图、统计缓存。
+2. **每个字段标明真相还是派生**（逐类定性见 §3.1）。真相：手动与分身的事件、采集原件、无原件条目的 `raw_data` / `body`、已落地的资源本体、观测字段、点；派生：同步事件、状态投影、`analysis_result`（记产出者）、检索向量、导出、缩略图、统计缓存。
 3. **跨单元引用只用内容哈希。** `assets.path` 与采集原件指向的文件以 sha256 命名，两个方向的不一致都可检出。
 4. **id 稳定，不含语义。** 改标题、换来源、重新识别都不改 id；the-one 的 `content:<id>` 引用永不失效。
-5. **删除是级联的。** 删东西即删它的资源、状态、事件、关系；大文件按引用计数回收。例外：保留期清理对有事件的条目只清内容、保留骨架与事件（§6，D23），行为历史不随清理丢失。
+5. **删除级联，压缩保留事实。** 删除（用户意图）删掉东西的资源、状态、事件、关系；压缩（系统回收空间）只删已落地本体与大字段，保留骨架、资源行与事件（§6）。大文件都按引用计数回收；行为历史只随用户的删除消失。
 
 Markdown 可读性靠导出满足，不靠存储介质：library 领域的条目在写入时同步导出 `data/export/<kind>/<yyyy>/<id>.md` 加资源，是派生品，可全量重建。它让 the-one 离线可读、灾难恢复不依赖代码，且不违反 KERNEL 的"长期事实沉淀为 markdown"。
 
@@ -297,7 +320,7 @@ flowchart LR
   B -->|否| X["400 拒绝，不写记录"]
   B -->|是| CAP{"关于我的数据？<br/>（同步 / 导出 / 推送）"}
   CAP -->|是| CP["载荷存为采集原件<br/>哈希不变则跳过"] --> C
-  CAP -->|否| C["构造 item：kind 取源类型默认值<br/>external_id 去重<br/>资源经 Blob 接口落地"]
+  CAP -->|否| C["构造 item：kind 取源类型默认值<br/>external_id 去重<br/>资源登记（referenced）；需落地的经 Blob 接口落地"]
   C --> EV["派生事件（带 capture_id）<br/>同事务更新 item_states 投影"]
   C --> D{"kinds.pipeline"}
   D -->|是| E["pending → 流水线 → analyzed"]
@@ -325,7 +348,7 @@ Emby 每次同步的整份响应存为采集原件，载荷不变则不新建。
 |---|---|
 | `play_count` 增加或 `last_played_at` 变化 | `played` 事件，`at` 取 `last_played_at`；剧集新看的单集写入 `location`（如 `S01E03`） |
 | `played` 变为 true | `set:status=watched`（同步级，不覆盖手动） |
-| 进度、已看集数 | 游标 `item_states.progress` |
+| 进度、已看集数 | 观测字段 `item_states.progress` |
 | `is_favorite` | `set:favorite`（`origin=sync:emby`，不触发晋升，D22） |
 
 条目上的 `raw_data.emby` 是最新原件的投影。`played`（机器观察到的播放）永不自动生成 `watched`（本人声明看过一遍，可带评分与感想）。
@@ -390,13 +413,13 @@ sequenceDiagram
 
 | 步 | 内容 | 切换判据 |
 |---|---|---|
-| 1 重建切换 | §4 首批表与 §5 注册表；态度列移出、研判改事件、附表按 §4.2 迁移并生成初始事件；`captures`（先接 Emby）；`assets`（海报收编、被收藏媒体提升为 `file`）；`data_points` 泛化；Blob 接口；共享层（通用接口、导入接口 `POST /api/library/import`、检索服务）；分层清理；现有页面改接新接口；the-one `intel-query` / skill 与 Fountain 同步切换。**只做功能对等** | 迁移核对全部通过；现有功能可用：刷首页、看影视、标记、`/digest` 拉取、Emby 同步、Fountain 推送 |
+| 1 重建切换 | §4 首批表与 §5 注册表；态度列移出、研判改事件、附表按 §4.2 迁移并生成初始事件；`captures`（先接 Emby）；kind 合并为 `post`（`article` 11,146 + `audio` 178，D33）；`assets`（`media_items` 全部收编为 `referenced` / `landed`，海报收编，被收藏的 68 张图片提升为 `file`，3 个音频所属 `post` 晋升为 `doc`）；`data_points` 泛化；Blob 接口；共享层（通用接口、导入接口 `POST /api/library/import`、检索服务）；分层清理；现有页面改接新接口；the-one `intel-query` / skill 与 Fountain 同步切换。**只做功能对等** | 迁移核对全部通过；现有功能可用：刷首页、看影视、标记、`/digest` 拉取、Emby 同步、Fountain 推送 |
 | 2 闭环 | 备忘快速录入、线索、`judged` 回流 | 手机记一条备忘，当天 `/digest` 能读到；打一条线索，次日首页可见研判标记 |
 | 3 灌数据 | the-one `archive/`（1,192 篇）→ `doc`；`journal/` 2015–2025（约 1,150 篇）→ `journal`；`_assets` 与 finance 截图上传。核对通过前 the-one 不删文件 | 篇数一致、frontmatter 保留；导入后实测检索速度（§8.6） |
 | 4 穿越 | "这一天"视图，数据来自 `/timeline`（当天的 item、事件，按日聚合的点） | 任意一天的条目、事件、数据点完整可见 |
 | 5 同步源逐个接 | 图书重新同步（微信读书重新授权、Apple Books 脚本重跑；旧快照放弃，D26）、B 站历史、豆瓣、Kindle、IM 备忘、Apple Health 导出，每源一步 | 原件落地、事件正确派生；接 Kindle 或豆瓣时同时实施 `item_identifiers`（§4.3） |
 
-**第 1 步的迁移核对**（详见 the-one `_spec/决策记录.md` D31）：条数对账（影视状态 1,229、标签 106、观看记录 647、已读 6,501、打开 612、重复 231、文章收藏 26、被收藏媒体 71、海报 1,197）；每部影片投影与迁移前逐条一致；旧 id 全部保留、the-one 全部 `content:<id>` 可解析；资源 sha256 重算一致；旧表移入 `legacy` 模式只读保留，用户确认后再删。核对脚本在 `scripts/verify/rebuild/`，输出报告。
+**第 1 步的迁移核对**（详见 the-one `_spec/决策记录.md` D31）：条数对账（影视状态 1,229、标签 106、观看记录 647、已读 6,501、打开 612、重复 231、收藏的 `post` 29（原文章收藏 26 + 被收藏音频所属文章 3，三者均未被收藏、不重复）、被收藏图片 68 → `file`、海报 1,197）；每部影片投影与迁移前逐条一致；旧 id 全部保留、the-one 全部 `content:<id>` 可解析；资源 sha256 重算一致；旧表移入 `legacy` 模式只读保留，用户确认后再删。核对脚本在 `scripts/verify/rebuild/`，输出报告。
 
 §4.3 的推迟项不进实施顺序，按触发条件再建。页面结构见 the-one `_spec/goal/`。
 
@@ -406,7 +429,7 @@ sequenceDiagram
 
 ## 10. 待定项
 
-截至 v1.2，本文档涉及的待定项均已定案（the-one `_spec/决策记录.md` D12–D31）。新的待定项记录在决策记录，拍板后回填本文档对应章节。
+截至 v1.3，本文档涉及的待定项均已定案（the-one `_spec/决策记录.md` D12–D35）。新的待定项记录在决策记录，拍板后回填本文档对应章节。
 
 ---
 
@@ -414,8 +437,8 @@ sequenceDiagram
 
 - 不为领域单独建表、单独写检索、单独写导入格式。
 - 不建领域私有的人物附表（演职员、作者留在 `raw_data`，实体表推迟）。
-- 不把载体当领域展示（现 `/media` 页的视频 / 音频 / 图片三 tab）。
-- 不区分"缓存"与"自有副本"：落地的都是自有副本，都进备份单元。
+- 不把载体当领域：不按载体设 kind（D33），不按载体展示（现 `/media` 页的视频 / 音频 / 图片三 tab）。
+- 不区分"缓存"与"自有副本"：落地的都是自有副本，都进备份单元；未落地的资源是引用（`referenced`），不是缓存。
 - 不实现 `product_spec.md` §2.9"收藏 2.0"（林迪分数、AI 对质、间隔重现）：2026-03 的设想，六个月无使用拉动。
 - 不在 allin-one 存判断（画像、话题分析、研判手册、预测、复盘）。
 - 不内置推荐引擎：推荐在 the-one 用大模型实现（D18）。
