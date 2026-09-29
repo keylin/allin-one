@@ -122,12 +122,12 @@ vim scripts/utils/cleanup_data.py
 
 ## 文档导航
 
-- the-one `docs/base/`（`10-立项.md` `20-架构.md` `30-模型.md` `40-流程.md` `50-用例.md` `60-运维.md`，2026-09-28 从本仓库 `docs/` 迁出）— **现状全景**：只写系统今天是什么样（定位与场景、领域与分层、现有表与存储、链路与业务操作、用法与验证、环境 / 部署 / 运行 / 备份 / 监控 / 密钥 / 故障），不写判断逻辑；每章头部有核实日期，改了架构 / 模型 / 流程 / 部署后同步更新
+- the-one `_spec/base/`（`10-立项.md` `20-架构.md` `30-模型.md` `40-流程.md` `50-用例.md` `60-运维.md`，2026-09-28 从本仓库 `docs/` 迁出）— **现状全景**：只写系统今天是什么样（定位与场景、领域与分层、现有表与存储、链路与业务操作、用法与验证、环境 / 部署 / 运行 / 备份 / 监控 / 密钥 / 故障），不写判断逻辑；每章头部有核实日期，改了架构 / 模型 / 流程 / 部署后同步更新
 - `docs/product_spec.md` — 产品方案 PRD
 - `docs/system_design.md` — 系统架构与 API 规范
 - `docs/business_glossary.md` — 业务术语与枚举定义
 - `docs/audit_2026-09_architecture.md` — 2026-09 架构审计：现状、根因、目标模型、分阶段对齐记录
-- `docs/design_data_model.md` — 个人内容系统的数据模型与存储模型（五概念、两真相单元、六张业务表、kinds 注册表）。决策与待定项在 the-one `_spec/决策记录.md`（现状 / 目标规格在 `_spec/base`、`_spec/goal`）
+- `docs/design_data_model.md` — 个人内容系统的数据模型与存储模型（v1.1：事件为真相、状态为投影、采集原件、两真相单元、kinds 策略字段）。决策与待定项在 the-one `_spec/决策记录.md`（现状 / 目标规格在 `_spec/base`、`_spec/goal`）
 - `backend/CLAUDE.md` — 后端开发规范
 - `backend/app/services/CLAUDE.md` — Pipeline/Collector 开发规范
 - `frontend/CLAUDE.md` — 前端开发规范
